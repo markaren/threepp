@@ -204,7 +204,11 @@ std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::pat
 
 void MaterialCreator::createMaterial(const std::string& materialName) {
 
-    auto mat = materialsInfo.at(materialName);
+    // A name the .mtl does not define (a usemtl without a matching newmtl, or the
+    // "" an .obj's faces carry before any usemtl) gets a default material, as in
+    // three.js, whose createMaterial_ iterates the missing entry as empty.
+    const auto found = materialsInfo.find(materialName);
+    auto mat = found != materialsInfo.end() ? found->second : std::unordered_map<std::string, MatVariant>{};
     auto params = MeshPhongMaterial::create();
     params->name = materialName;
     params->side = side;
@@ -218,9 +222,12 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
         // so): the material keeps its colours, with no map in this slot.
         if (!map) return;
 
-        // Color/emissive maps stay sRGB (the default); data textures are Linear.
-        if (mapType == "normalMap" || mapType == "bumpMap" ||
-            mapType == "specularMap" || mapType == "alphaMap") {
+        // TextureLoader::load(path) tags NoColorSpace. The colour maps hold
+        // sRGB-encoded colour (three.js's MTLLoader sets SRGBColorSpace on map and
+        // emissiveMap); the others are data and are read as stored.
+        if (mapType == "map" || mapType == "emissiveMap") {
+            map->colorSpace = ColorSpace::sRGB;
+        } else {
             map->colorSpace = ColorSpace::Linear;
         }
 
@@ -304,7 +311,8 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
                 params->transparent = true;
             }
         }
-
-        materials[materialName] = params;
     }
+
+    // After the loop, so an entry with no properties is registered too.
+    materials[materialName] = params;
 }

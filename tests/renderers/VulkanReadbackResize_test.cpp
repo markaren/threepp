@@ -25,12 +25,8 @@ using namespace threepp;
 
 namespace {
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     std::size_t bytesOf(const WindowSize& s) {
         return static_cast<std::size_t>(s.width()) * static_cast<std::size_t>(s.height()) * 3;

@@ -89,26 +89,8 @@ namespace {
     constexpr double kSimTime = 10.0;
 
     // Raw-RGB PPM I/O — what readRGBPixels gives us, byte-exact both ways.
-    void writePPM(const fs::path& p, const std::vector<unsigned char>& rgb, int w, int h) {
-        fs::create_directories(p.parent_path());
-        std::ofstream f(p, std::ios::binary);
-        f << "P6\n" << w << " " << h << "\n255\n";
-        f.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
-    }
-    std::vector<unsigned char> readPPM(const fs::path& p, int& w, int& h) {
-        std::ifstream f(p, std::ios::binary);
-        if (!f) return {};
-        std::string magic;
-        f >> magic;
-        if (magic != "P6") return {};
-        int maxv = 0;
-        f >> w >> h >> maxv;
-        f.get();// consume the single whitespace before the binary block
-        std::vector<unsigned char> d(static_cast<size_t>(w) * h * 3);
-        f.read(reinterpret_cast<char*>(d.data()), static_cast<std::streamsize>(d.size()));
-        if (!f) return {};
-        return d;
-    }
+    using vktest::writePpm;
+    using vktest::readPpm;
 
     struct GoldenScene {
         std::string name;
@@ -720,15 +702,15 @@ int main(int argc, char** argv) {
         const fs::path ref = goldenDir / ((ownRef ? gs.name : gs.reference) + ".ppm");
         if (update) {
             if (ownRef) {
-                writePPM(ref, px, kW, kH);
+                writePpm(ref, px, kW, kH);
                 std::printf("[update] wrote %s (%dx%d)\n", ref.string().c_str(), kW, kH);
             } else {
                 std::printf("[update] %s compares to %s, nothing written\n", gs.name.c_str(), gs.reference.c_str());
             }
         } else {
-            if (!dump.empty()) writePPM(fs::path(dump) / (gs.name + ".ppm"), px, kW, kH);
+            if (!dump.empty()) writePpm(fs::path(dump) / (gs.name + ".ppm"), px, kW, kH);
             int rw = 0, rh = 0;
-            const std::vector<unsigned char> golden = readPPM(ref, rw, rh);
+            const std::vector<unsigned char> golden = readPpm(ref, rw, rh);
             if (golden.empty() || rw != kW || rh != kH || golden.size() != px.size()) {
                 std::printf("[%s] MISSING/!match reference %s - run --update\n",
                             gs.name.c_str(), ref.string().c_str());

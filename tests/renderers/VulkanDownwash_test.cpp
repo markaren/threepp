@@ -47,20 +47,9 @@ namespace {
     constexpr int kW = 320, kH = 240;
     constexpr std::uint32_t kGrassId = 7, kWaterId = 9;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
 
     float halfToFloat(std::uint16_t v) {
         const std::uint32_t sign = std::uint32_t(v >> 15) << 31;

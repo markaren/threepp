@@ -61,6 +61,7 @@
 // gate needs the per-phase numbers programmatically; FrameTimings only carries
 // the coarse cpu* totals, in which a per-particle regression would be invisible.
 #include "threepp/renderers/vulkan/VulkanCpuPhaseProf.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -81,22 +82,11 @@ namespace {
     // part of that phase's checkpoint), small enough that the phase-0 gate's
     // 240 measured frames still run in seconds.
     constexpr int kW = 640, kH = 400;
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
 
     // A deterministic slab of particles. Values matter only in that they are
     // finite and distinct — nothing shades them in phase 0 — but a fixed seed
@@ -205,12 +195,9 @@ namespace {
         } catch (const std::exception&) { return kSkipCode; }
         Canvas& canvas = *canvasPtr;
         VulkanRenderer& renderer = *rendererPtr;
-        renderer.setDlss(false);
-        renderer.setFsr(false);
-        renderer.setRenderScale(1.0f);
+        vktest::pinNativeOutput(renderer);
         // PINNED: auto-exposure adapts on wall-clock dt, which is the one
         // genuinely non-reproducible input in the frame (repo perf/capture rule).
-        renderer.setAutoExposure(false);
         // PINNED, and for the same reason: without setSimTime() the renderer's
         // frame clock is glfwGetTime(), and the TAA history blend weight is a
         // function of the measured frame INTERVAL —
@@ -390,18 +377,10 @@ int main(int argc, char** argv) {
     setEnv("THREEPP_CPU_PHASE_WINDOW", "100000000");
     setEnv("THREEPP_VULKAN_VALIDATION", "1");
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanParticleField_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto vk = vktest::openHeadlessVulkan("VulkanParticleField_test", kW, kH);
+    if (!vk) return kSkipCode;
+    Canvas& canvas = *vk.canvas;
+    VulkanRenderer& renderer = *vk.renderer;
 
     check(Registry::get().on, "CPU phase profiler is enabled");
 

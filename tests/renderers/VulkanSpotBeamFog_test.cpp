@@ -39,6 +39,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 #include "threepp/scenes/FogExp2.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -55,27 +56,16 @@ using namespace threepp;
 namespace {
 
     constexpr int kW = 640, kH = 400;
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
     // The air: rows above the horizon (which sits near row 190), clear of the
     // top edge. The sky reference: the left columns, which the beam (it rises
     // to the right) never reaches.
     constexpr int kAirY0 = 8, kAirY1 = 165;
     constexpr int kSkyX0 = 8, kSkyX1 = 120;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
 
     using LumaImage = std::vector<float>;// one value per pixel, top-left origin
 
@@ -88,17 +78,14 @@ namespace {
         return sign ? -v : v;
     }
 
-    float srgbToLinear(float c) {
-        c /= 255.f;
-        return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
-    }
+    using vktest::srgbByteToLinear;
 
     // Linear luminance of the displayed frame.
     LumaImage displayLinear(const std::vector<unsigned char>& rgb) {
         LumaImage out(std::size_t(kW) * kH);
         for (std::size_t i = 0; i < out.size(); ++i)
-            out[i] = 0.2126f * srgbToLinear(rgb[i * 3]) + 0.7152f * srgbToLinear(rgb[i * 3 + 1]) +
-                     0.0722f * srgbToLinear(rgb[i * 3 + 2]);
+            out[i] = static_cast<float>(0.2126f * srgbByteToLinear(rgb[i * 3]) + 0.7152f * srgbByteToLinear(rgb[i * 3 + 1]) +
+                                        0.0722f * srgbByteToLinear(rgb[i * 3 + 2]));
         return out;
     }
 
@@ -158,18 +145,10 @@ int main() {
     // allocation to be readable after the frame.
     setEnv("THREEPP_VK_NO_ALIAS", "1");
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanSpotBeamFog_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas           = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanSpotBeamFog_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas           = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
     const auto fb            = renderer.framebufferSize();
     if (fb.width() != kW || fb.height() != kH) {
         std::printf("[skip] the surface came back %dx%d, the test is laid out for %dx%d\n", fb.width(),
@@ -177,10 +156,7 @@ int main() {
         return kSkipCode;
     }
 
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setRenderScale(1.0f);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.toneMapping         = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;
     renderer.setFogAnisotropy(0.45f);

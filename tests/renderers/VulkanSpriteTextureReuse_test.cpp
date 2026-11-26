@@ -38,12 +38,8 @@ namespace {
 
     constexpr int kW = 128, kH = 96;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     Image solidImage(unsigned char r, unsigned char g, unsigned char b) {
         std::vector<unsigned char> px(4 * 4 * 4);

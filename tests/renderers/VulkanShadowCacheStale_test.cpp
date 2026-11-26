@@ -39,12 +39,8 @@ namespace {
     constexpr int kW = 240, kH = 180;
     constexpr int kStale = 8;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     std::vector<float> luma(const std::vector<unsigned char>& px) {
         std::vector<float> out(px.size() / 3);
@@ -97,10 +93,7 @@ int main() {
     if (!vk) return vktest::kSkipCode;
     VulkanRenderer& renderer = *vk.renderer;
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping         = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

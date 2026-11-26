@@ -20,6 +20,7 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -30,14 +31,10 @@ using namespace threepp;
 
 namespace {
 
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     // A lit box on a coloured background — enough that a working context
     // produces a non-uniform image.
@@ -59,16 +56,8 @@ int main() {
     constexpr int kW = 128, kH = 96;
 
     // ── 1. Vulkan first: this is what leaks GLFW_CLIENT_API=GLFW_NO_API ──────
-    std::unique_ptr<Canvas> vkCanvas;
-    std::unique_ptr<VulkanRenderer> vkRenderer;
-    try {
-        vkCanvas = std::make_unique<Canvas>(
-                Canvas::Parameters().title("CanvasApiOrder-vk").size(kW, kH).vsync(false).headless(true));
-        vkRenderer = std::make_unique<VulkanRenderer>(*vkCanvas);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
+    auto gpu = vktest::openHeadlessVulkan("CanvasApiOrder-vk", kW, kH);
+    if (!gpu) return kSkipCode;
     std::printf("  [ ok ] Vulkan renderer constructed\n");
 
     // The Vulkan renderer stays ALIVE across the GL construction below — that is

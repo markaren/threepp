@@ -131,7 +131,7 @@ license text.
 ## Resolved by vcpkg / the system (per feature)
 
 Linked, not redistributed in this repository: NVIDIA **PhysX** (BSD-3) and **V-HACD** (BSD-3)
-for the `physx` feature; **Assimp** (BSD-3) for `assimp`; **Vulkan-Headers** (Apache-2.0 OR
+for the `physx` feature; **Vulkan-Headers** (Apache-2.0 OR
 MIT), **Vulkan-Loader** (Apache-2.0) and **Vulkan Memory Allocator** (MIT) for `vulkan`;
 optionally **GLFW** via vcpkg (zlib/libpng) instead of the vendored copy; **CPython** (PSF
 license) when Python or editor scripting is enabled.

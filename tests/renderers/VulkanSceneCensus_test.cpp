@@ -107,10 +107,7 @@ int main() {
     VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setDenoise(false);
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

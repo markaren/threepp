@@ -37,6 +37,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include "capture_util.hpp"// examples/libs (shared via target include dir)
 
@@ -55,7 +56,7 @@ using namespace threepp;
 namespace {
 
     constexpr int kW = 640, kH = 400;
-    constexpr int kSkipCode = 42;// CTest SKIP_RETURN_CODE (no Vulkan/RT GPU)
+    using vktest::kSkipCode;
 
     int failures = 0;
 
@@ -64,12 +65,7 @@ namespace {
     std::string shotDir;
     void shot(const char* name, const std::vector<unsigned char>& rgb, int w, int h) {
         if (shotDir.empty() || rgb.size() != size_t(w) * h * 3) return;
-        const std::string path = shotDir + "/" + name + ".ppm";
-        if (FILE* f = std::fopen(path.c_str(), "wb")) {
-            std::fprintf(f, "P6\n%d %d\n255\n", w, h);
-            std::fwrite(rgb.data(), 1, rgb.size(), f);
-            std::fclose(f);
-        }
+        vktest::writePpm(shotDir + "/" + name + ".ppm", rgb, w, h);
     }
 
     void check(bool ok, const char* what) {
@@ -983,22 +979,10 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotDir = argv[++i];
     }
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters()
-                        .title("Vulkan - Multi-View")
-                        .size(kW, kH)
-                        .vsync(false)
-                        .headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("Vulkan - Multi-View", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
     renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;

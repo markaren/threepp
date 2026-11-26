@@ -54,12 +54,8 @@ namespace {
     constexpr int kSlots = 3;    // frames for every frame slot to have seen an edit
     constexpr int kSticky = 30;  // kMovedStickyFrames (VulkanCoreFrame.cpp)
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     void setCheckMode() {
 #ifdef _WIN32
@@ -96,10 +92,7 @@ int main() {
     Canvas& canvas = *gpu.canvas;
     VulkanRenderer& renderer = *gpu.renderer;
 
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setRenderScale(1.0f);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

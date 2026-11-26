@@ -47,38 +47,10 @@ namespace {
 
     constexpr int kW = 320, kH = 240;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
-
-    std::shared_ptr<Texture> constantEnv(float r, float g, float b) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, 1.f);
-        for (size_t i = 0; i < data.size(); i += 4) {
-            data[i]     = r;
-            data[i + 1] = g;
-            data[i + 2] = b;
-        }
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex        = Texture::create(img);
-        tex->format     = Format::RGBA;
-        tex->type       = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping    = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
+    using vktest::constantEnv;
 
     struct Rgb {
         double r = 0, g = 0, b = 0;
@@ -105,15 +77,12 @@ namespace {
         return m;
     }
 
-    double srgbToLinear(double c) {
-        c /= 255.0;
-        return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-    }
+    using vktest::srgbByteToLinear;
 
     // The deferred frame's sRGB bytes as linear floats, 3 per pixel.
     std::vector<float> toLinear(const std::vector<unsigned char>& rgb) {
         std::vector<float> out(rgb.size());
-        for (size_t i = 0; i < rgb.size(); ++i) out[i] = static_cast<float>(srgbToLinear(rgb[i]));
+        for (size_t i = 0; i < rgb.size(); ++i) out[i] = static_cast<float>(srgbByteToLinear(rgb[i]));
         return out;
     }
 
@@ -144,10 +113,7 @@ int main() {
     VulkanRenderer& renderer = *vk.renderer;
     const std::uint32_t errorsBefore = vulkan::validationErrorCount();
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setAutoLod(false);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping         = ToneMapping::None;
@@ -469,7 +435,7 @@ int main() {
         {
             const auto meanBytes = [](const std::vector<unsigned char>& b) {
                 double s = 0;
-                for (auto v : b) s += srgbToLinear(v);
+                for (auto v : b) s += srgbByteToLinear(v);
                 return b.empty() ? 0.0 : s / double(b.size());
             };
             const auto tracedBytes = [&] {

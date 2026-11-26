@@ -642,10 +642,9 @@ auto& clips = result->animations;
 
 Also available: `OBJLoader` + `MTLLoader`, `STLLoader`, `ColladaLoader`,
 `USDLoader` (`-DTHREEPP_WITH_USD=ON`), `SVGLoader`, `URDFLoader` (robot
-descriptions → a `Robot` with joints), `FontLoader` (typeface.json / TTF), and `AssimpLoader` as
-a catch-all if you link assimp yourself. FBX has no loader of its own: convert it to glTF with
-Blender and [scripts/fbx_to_gltf.py](../scripts/fbx_to_gltf.py), which keeps PBR (ORM) materials
-and leaves DDS textures block-compressed.
+descriptions → a `Robot` with joints) and `FontLoader` (typeface.json / TTF). FBX has no loader
+of its own: convert it to glTF with Blender and [scripts/fbx_to_gltf.py](../scripts/fbx_to_gltf.py),
+which keeps PBR (ORM) materials and leaves DDS textures block-compressed.
 
 ### URDF and xacro
 

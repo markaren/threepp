@@ -1,15 +1,18 @@
-# compile_vulkan_shader(<target> <shader_src> <var_name> <out_header_var>)
+# compile_vulkan_shader(<target> <shader_src> <var_name>
+#                       [VARIANT_SUFFIX <suffix>] [DEFINES <macro>...])
 #
 # Compile a GLSL shader to SPIR-V with glslangValidator (from VULKAN_SDK or
 # vcpkg's glslang port), optimize it with spirv-opt (same SDK / vcpkg's
 # spirv-tools port) and emit a C++ header with the SPIR-V embedded as a
 # `const uint32_t <var_name>[]` array (cmake/EmbedSpirv.cmake). The generated
 # header is placed under the project build dir at
-# threepp/renderers/vulkan/shaders/<basename>.spv.h and added to <target> as a
-# generated source dependency.
+# threepp/renderers/vulkan/shaders/<basename>[.<suffix>].spv.h and added to
+# <target> as a generated source, which is what orders it before the target's
+# C++.
 #
-# Out arg <out_header_var> receives the generated header's absolute path
-# so callers can pin it as a target dependency.
+# VARIANT_SUFFIX names a second compile of the same source (deferred_shade.comp
+# with and without ray query, say) so the outputs do not collide; DEFINES become
+# -D<macro> flags to glslangValidator.
 
 if (NOT GLSLANG_VALIDATOR)
     find_program(GLSLANG_VALIDATOR
@@ -125,12 +128,12 @@ set(_THREEPP_SPIRV_OPT_PASSES
     --eliminate-dead-code-aggressive
     --cfg-cleanup)
 
-function(compile_vulkan_shader target shader_src var_name out_header_var)
-    # Optional 5th positional arg: variant suffix used in the output filename
-    # so two compiles of the same source (e.g. raygen.rgen with/without SER)
-    # don't collide. Optional 6th+ args become `-D<MACRO>` flags to
-    # glslangValidator.
+function(compile_vulkan_shader target shader_src var_name)
     cmake_parse_arguments(ARG "" "VARIANT_SUFFIX" "DEFINES" ${ARGN})
+    if (ARG_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "compile_vulkan_shader(${shader_src}): unexpected arguments "
+                "'${ARG_UNPARSED_ARGUMENTS}' (the output-header argument was removed)")
+    endif ()
 
     get_filename_component(_name "${shader_src}" NAME)
     get_filename_component(_src_dir "${shader_src}" DIRECTORY)
@@ -205,6 +208,4 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
 
     target_sources(${target} PRIVATE "${_out_header}")
     target_include_directories(${target} PRIVATE "${CMAKE_BINARY_DIR}/generated")
-
-    set(${out_header_var} "${_out_header}" PARENT_SCOPE)
 endfunction()

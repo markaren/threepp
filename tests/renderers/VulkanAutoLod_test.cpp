@@ -42,19 +42,7 @@ namespace {
     constexpr int kFarFrames = 20;
     constexpr float kNearZ = 2.2f, kFarZ = 80.f;
 
-    std::shared_ptr<Texture> constantEnv(float le) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, le);
-        for (size_t i = 3; i < data.size(); i += 4) data[i] = 1.f;
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::constantEnv;
 
     std::array<double, 3> centrePatch(const std::vector<unsigned char>& px, int r) {
         std::array<double, 3> sum{};
@@ -83,10 +71,7 @@ int main() {
     VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setDenoise(true);
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

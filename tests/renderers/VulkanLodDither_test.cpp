@@ -61,34 +61,10 @@ namespace {
     constexpr float kShareTol = 0.02f;
     constexpr float kBlendTol = 0.04f;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
-
-    std::shared_ptr<Texture> constantEnv(float le) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, le);
-        for (size_t i = 3; i < data.size(); i += 4) data[i] = 1.f;
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
+    using vktest::constantEnv;
 
     // The visible entry id (ids .x) of every pixel.
     std::vector<std::uint32_t> readIds(VulkanRenderer& r) {
@@ -136,10 +112,7 @@ namespace {
         return s;
     }
 
-    double srgbToLinear(double c) {
-        c /= 255.0;
-        return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-    }
+    using vktest::srgbByteToLinear;
 
     // Mean linear (r, b) over the mask, and the per-pixel spread of r.
     // Mean red and blue over the mask in DISPLAY units (the 8-bit output / 255:
@@ -157,8 +130,8 @@ namespace {
             if (!mask[i]) continue;
             c.r += px[i * 3 + 0] / 255.0;
             c.b += px[i * 3 + 2] / 255.0;
-            c.rLin += srgbToLinear(px[i * 3 + 0]);
-            c.bLin += srgbToLinear(px[i * 3 + 2]);
+            c.rLin += srgbByteToLinear(px[i * 3 + 0]);
+            c.bLin += srgbByteToLinear(px[i * 3 + 2]);
             ++n;
         }
         if (n == 0) return c;
@@ -187,10 +160,7 @@ int main() {
     VulkanRenderer& renderer = *vk.renderer;
     const std::uint32_t errorsBefore = vulkan::validationErrorCount();
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

@@ -34,6 +34,7 @@
 #include "threepp/helpers/LidarSensor.hpp"
 #include "threepp/objects/SplatCloud.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -46,14 +47,10 @@ using namespace threepp;
 
 namespace {
 
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     // The sensor shell under test. near is deliberately larger than the
     // "housing" below and smaller than the "rotor", so the two objects sit on

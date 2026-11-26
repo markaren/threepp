@@ -61,23 +61,8 @@ namespace {
     constexpr int kFrames = 30;
     constexpr int kRounds = 96;
 
-    std::shared_ptr<Texture> constantEnv(float le) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, le);
-        for (size_t i = 3; i < data.size(); i += 4) data[i] = 1.f;
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
-
-    double srgbToLinear(double c) {
-        return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
-    }
+    using vktest::constantEnv;
+    using vktest::srgbToLinear;
 
     double patch(const std::vector<unsigned char>& px, int cx, int cy, int r) {
         double sum = 0;
@@ -101,10 +86,7 @@ int main() {
     VulkanRenderer& renderer = *gpu.renderer;
 
     renderer.setDenoise(true);
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

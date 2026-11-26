@@ -115,25 +115,8 @@ namespace {
 
     // Raw-RGB PPM, the byte-exact round trip VulkanGolden_test/VulkanSplat_test
     // both use — no codec, no flip, no channel ambiguity.
-    void writePPM(const fs::path& p, const std::vector<unsigned char>& rgb, int w, int h) {
-        if (!p.parent_path().empty()) fs::create_directories(p.parent_path());
-        std::ofstream f(p, std::ios::binary);
-        f << "P6\n" << w << " " << h << "\n255\n";
-        f.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
-    }
-    std::vector<unsigned char> readPPM(const fs::path& p, int& w, int& h) {
-        std::ifstream f(p, std::ios::binary);
-        if (!f) return {};
-        std::string magic;
-        f >> magic;
-        if (magic != "P6") return {};
-        int maxv = 0;
-        f >> w >> h >> maxv;
-        f.get();
-        std::vector<unsigned char> d(static_cast<size_t>(w) * h * 3);
-        f.read(reinterpret_cast<char*>(d.data()), static_cast<std::streamsize>(d.size()));
-        return f ? d : std::vector<unsigned char>{};
-    }
+    using vktest::writePpm;
+    using vktest::readPpm;
 
     // The cloud: ONE strong hue, unlike VulkanSplat_test's three-band cloud.
     // The bake collapses a cloud to a mean linear radiance per voxel, so a
@@ -297,7 +280,7 @@ int main(int argc, char** argv) {
         configureFlat(renderer);
         auto f = makeFlatScene();
         for (int i = 0; i < kFlatFrames; ++i) renderer.render(*f.scene, *f.camera);
-        writePPM(emitPath, renderer.readRGBPixels(), kW, kH);
+        writePpm(emitPath, renderer.readRGBPixels(), kW, kH);
         std::printf("[emit] %s  volumeBytes %llu\n", emitPath.c_str(),
                     static_cast<unsigned long long>(renderer.splatVolumeBytes()));
         return 0;
@@ -593,7 +576,7 @@ int main(int argc, char** argv) {
         shot("20_noreflector");
 
         int cw = 0, ch = 0;
-        const auto childPx = readPPM(out, cw, ch);
+        const auto childPx = readPpm(out, cw, ch);
         if (rc != 0 || childPx.empty() || cw != kW || ch != kH) {
             report(false, "the THREEPP_VK_SPLATVOL_OFF child rendered the "
                           "reflector-free scene (rc/size)");

@@ -49,38 +49,10 @@ namespace {
 
     constexpr int kW = 200, kH = 150;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
-
-    std::shared_ptr<Texture> constantEnv(float r, float g, float b) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, 1.f);
-        for (size_t i = 0; i < data.size(); i += 4) {
-            data[i]     = r;
-            data[i + 1] = g;
-            data[i + 2] = b;
-        }
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex        = Texture::create(img);
-        tex->format     = Format::RGBA;
-        tex->type       = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping    = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
+    using vktest::constantEnv;
 
     // A white 4x4 RGBA8 map: an untextured transparent MeshBasicMaterial is
     // drawn as a UI overlay and never traced; a textured one is.
@@ -192,10 +164,7 @@ int main() {
     }
     const std::uint32_t errorsBefore = vulkan::validationErrorCount();
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setAutoLod(false);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping         = ToneMapping::None;

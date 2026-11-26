@@ -38,6 +38,7 @@
 #include "threepp/objects/ParticleField.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -52,7 +53,8 @@ using namespace threepp;
 
 namespace {
 
-    constexpr int    kSkipCode      = 42;
+    using vktest::kSkipCode;
+
     constexpr double kDt            = 1.0 / 60.0;
     constexpr int    kStepsPerFrame = 6;// 0.1 s of solver time per rendered frame
 
@@ -63,13 +65,7 @@ namespace {
         if (!ok) ++failures;
     }
 
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, 1);
-#endif
-    }
+    using vktest::setEnv;
 
     using State = VulkanRenderer::GridSmokeState;
 
@@ -1155,17 +1151,9 @@ int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     setEnv("THREEPP_VULKAN_VALIDATION", "1");// before the instance exists
 
-    std::unique_ptr<Canvas>         canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanGridSmoke_test").size(96, 96).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanGridSmoke_test", 96, 96);
+    if (!gpu) return kSkipCode;
+    VulkanRenderer& renderer = *gpu.renderer;
     renderer.setDlss(false);
     renderer.setFsr(false);
     renderer.setAutoExposure(false);
@@ -1175,7 +1163,7 @@ int main(int argc, char** argv) {
     auto camera = PerspectiveCamera::create(60.f, 1.f, 0.1f, 100.f);
     camera->position.set(0.f, 1.5f, 7.f);
     camera->lookAt(Vector3(0.f, 1.2f, 0.f));
-    Rig rig{*canvasPtr, renderer, scene, *camera};
+    Rig rig{*gpu.canvas, renderer, scene, *camera};
 
     const std::uint32_t errorsBefore = vulkan::validationErrorCount();
 

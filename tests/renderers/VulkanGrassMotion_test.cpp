@@ -60,20 +60,9 @@ namespace {
     constexpr int kSegments = 4;         // rows of vertices per blade: kSegments + 1
     constexpr float kZero = 1e-3f;       // NDC; a pixel here is 2/480 = 0.0042
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
 
     // grass_wind.comp's gust, for a blade rooted at (rx, rz).
     float gust(float t, float rx, float rz) {

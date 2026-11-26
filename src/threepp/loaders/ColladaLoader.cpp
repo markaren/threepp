@@ -955,7 +955,8 @@ struct ColladaLoader::Impl {
                 const EffectData& effect = effects.at(effectId);
                 auto phong = buildMaterial(effect);
                 if (!effect.diffuseTextureId.empty() && images.contains(effect.diffuseTextureId)) {
-                    auto tex = texLoader.load(images.at(effect.diffuseTextureId));
+                    // A diffuse texture holds colour: sRGB, as the glTF and USD loaders tag theirs.
+                    auto tex = texLoader.load(images.at(effect.diffuseTextureId), ColorSpace::sRGB);
                     if (tex) {
                         tex->wrapS = effect.wrapS;
                         tex->wrapT = effect.wrapT;

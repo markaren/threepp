@@ -35,6 +35,7 @@
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
+#include "vulkan_test_util.hpp"
 #endif
 
 #include <algorithm>
@@ -51,7 +52,7 @@ using namespace threepp;
 namespace {
 
     constexpr int kW = 512, kH = 512;
-    constexpr int kSkipCode = 42;
+    using vktest::kSkipCode;
     constexpr float kVoxel = 0.05f;
 
     int failures = 0;
@@ -260,17 +261,9 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--sweep") == 0) sweep = true;
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanSplatSurface_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanSplatSurface_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    VulkanRenderer& renderer = *gpu.renderer;
     renderer.setRenderScale(1.f);
     renderer.setDlss(false);
     renderer.setFsr(false);

@@ -46,6 +46,7 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/ValidationReport.hpp"
 #include "threepp/textures/DataTexture.hpp"
+#include "vulkan_test_util.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -62,23 +63,12 @@ using namespace threepp;
 namespace {
 
     constexpr int kW = 960, kH = 540;
-    constexpr int kSkipCode   = 42;
+    using vktest::kSkipCode;
     constexpr float kSeamLevels = 3.f;// luma levels (0..255) below both neighbours
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
 
     using Pixels = std::vector<unsigned char>;
 
@@ -184,18 +174,10 @@ int main(int argc, char** argv) {
 
     setEnv("THREEPP_VULKAN_VALIDATION", "1");
 
-    std::unique_ptr<Canvas> canvasPtr;
-    std::unique_ptr<VulkanRenderer> rendererPtr;
-    try {
-        canvasPtr = std::make_unique<Canvas>(
-                Canvas::Parameters().title("VulkanDofSeam_test").size(kW, kH).vsync(false).headless(true));
-        rendererPtr = std::make_unique<VulkanRenderer>(*canvasPtr);
-    } catch (const std::exception& e) {
-        std::printf("[skip] Vulkan/RT GPU unavailable: %s\n", e.what());
-        return kSkipCode;
-    }
-    Canvas& canvas           = *canvasPtr;
-    VulkanRenderer& renderer = *rendererPtr;
+    auto gpu = vktest::openHeadlessVulkan("VulkanDofSeam_test", kW, kH);
+    if (!gpu) return kSkipCode;
+    Canvas& canvas           = *gpu.canvas;
+    VulkanRenderer& renderer = *gpu.renderer;
 
     const auto fb = renderer.framebufferSize();
     if (fb.width() != kW || fb.height() != kH) {

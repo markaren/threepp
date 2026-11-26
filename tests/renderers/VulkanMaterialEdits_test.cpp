@@ -45,34 +45,10 @@ namespace {
 
     constexpr int kW = 160, kH = 120;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
-
-    void setEnv(const char* k, const char* v) {
-#ifdef _WIN32
-        _putenv_s(k, v);
-#else
-        setenv(k, v, /*overwrite*/ 1);
-#endif
-    }
-
-    std::shared_ptr<Texture> constantEnv(float v) {
-        constexpr int W = 64, H = 32;
-        std::vector<float> data(static_cast<size_t>(W) * H * 4, 1.f);
-        for (size_t i = 0; i < data.size(); i += 4) data[i] = data[i + 1] = data[i + 2] = v;
-        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
-        auto tex = Texture::create(img);
-        tex->format = Format::RGBA;
-        tex->type = Type::Float;
-        tex->colorSpace = ColorSpace::Linear;
-        tex->mapping = Mapping::EquirectangularReflection;
-        tex->needsUpdate();
-        return tex;
-    }
+    using vktest::check;
+    using vktest::failures;
+    using vktest::setEnv;
+    using vktest::constantEnv;
 
     // A map whose left half (u < 0.5) is `left` and right half `right`,
     // nearest-filtered so both halves are flat where they are measured.
@@ -139,10 +115,7 @@ int main() {
     const std::uint32_t errorsBefore = vulkan::validationErrorCount();
     std::printf("mode: %s\n", renderer.rayTracingSupported() ? "ray traced" : "no ray tracing");
 
-    renderer.setRenderScale(1.0f);
-    renderer.setDlss(false);
-    renderer.setFsr(false);
-    renderer.setAutoExposure(false);
+    vktest::pinNativeOutput(renderer);
     renderer.setBloomIntensity(0.f);
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;

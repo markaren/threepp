@@ -32,12 +32,8 @@ namespace {
 
     constexpr int kW = 160, kH = 80;
 
-    int failures = 0;
-
-    void check(bool ok, const std::string& what) {
-        std::printf("  %s %s\n", ok ? "[ ok ]" : "[FAIL]", what.c_str());
-        if (!ok) ++failures;
-    }
+    using vktest::check;
+    using vktest::failures;
 
     int lum(const std::vector<unsigned char>& px, int x, int y) {
         const size_t i = (static_cast<size_t>(y) * kW + x) * 3;
