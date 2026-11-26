@@ -410,3 +410,55 @@ TEST_CASE("slerp") {
     REQUIRE(std::abs(result.z - expected.z) <= eps);
     REQUIRE(std::abs(result.w - expected.w) <= eps);
 }
+
+TEST_CASE("a copied quaternion leaves the change callback with its owner") {
+
+    int calls = 0;
+    Quaternion owner(0.1f, 0.2f, 0.3f, 0.9f);
+    owner._onChange([&calls] { ++calls; });
+
+    // Constructed from the owner: the values come along, the callback does not.
+    Quaternion constructed(owner);
+    CHECK(constructed == owner);
+    constructed.set(0, 0, 1, 0);
+    constructed.x = 1;
+    CHECK(calls == 0);
+
+    // Assigned from the owner: the target keeps its own callback.
+    Quaternion assigned;
+    assigned = owner;
+    CHECK(assigned == owner);
+    assigned.set(0, 1, 0, 0);
+    CHECK(calls == 0);
+
+    // Assigned to: the owner keeps its callback and runs it once, as copy() does.
+    owner = Quaternion(0, 0, 0, 1);
+    CHECK(calls == 1);
+    owner.x = 0.5f;
+    CHECK(calls == 2);
+}
+
+TEST_CASE("a copied Euler leaves the change callback with its owner") {
+
+    int calls = 0;
+    Euler owner(0.1f, 0.2f, 0.3f, Euler::YXZ);
+    owner._onChange([&calls] { ++calls; });
+
+    Euler constructed(owner);
+    CHECK(constructed.equals(owner));
+    constructed.set(1, 2, 3);
+    constructed.x = 4;
+    CHECK(calls == 0);
+
+    Euler assigned;
+    assigned = owner;
+    CHECK(assigned.equals(owner));
+    assigned.set(1, 2, 3);
+    CHECK(calls == 0);
+
+    owner = Euler(0, 0, 0, Euler::ZYX);
+    CHECK(calls == 1);
+    CHECK(owner.getOrder() == Euler::ZYX);
+    owner.y = 0.5f;
+    CHECK(calls == 2);
+}

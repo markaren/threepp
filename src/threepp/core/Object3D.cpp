@@ -103,7 +103,7 @@ void Object3D::setRotationFromQuaternion(const Quaternion& q) {
 
     // assumes q is normalized
 
-    this->quaternion = q;
+    this->quaternion.copy(q);
 }
 
 Object3D& Object3D::rotateOnAxis(const Vector3& axis, float angle) {
@@ -642,8 +642,19 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
     this->scale.copy(source.scale);
     this->position.copy(source.position);
 
-    this->rotation = std::move(source.rotation);
-    this->quaternion = std::move(source.quaternion);
+    // The rotation and the quaternion, value for value: a float_view assigned
+    // from another float_view takes the value without notifying, so the pair
+    // keeps the source's numbers exactly (they are already in step). Each
+    // object keeps its own change callbacks: this one's from the delegated
+    // constructor, and the source's, which may stay in its parent's children.
+    this->rotation.order_ = source.rotation.order_;
+    this->rotation.x = source.rotation.x;
+    this->rotation.y = source.rotation.y;
+    this->rotation.z = source.rotation.z;
+    this->quaternion.x = source.quaternion.x;
+    this->quaternion.y = source.quaternion.y;
+    this->quaternion.z = source.quaternion.z;
+    this->quaternion.w = source.quaternion.w;
 
     // The matrices live by value inside the object, so "moving" them copies
     // the 64-byte payloads into our own storage — which also leaves the
@@ -681,13 +692,6 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
 
     this->onAfterRender = std::move(source.onAfterRender);
     this->onBeforeRender = std::move(source.onBeforeRender);
-
-    this->rotation._onChange([this] {
-        quaternion.setFromEuler(rotation, false);
-    });
-    this->quaternion._onChange([this] {
-        rotation.setFromQuaternion(quaternion, std::nullopt, false);
-    });
 
     this->children = std::move(source.children);
     this->children_ = std::move(source.children_);

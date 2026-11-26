@@ -14,6 +14,14 @@ using namespace threepp;
 Euler::Euler(float x, float y, float z, RotationOrders order)
     : x(x), y(y), z(z), order_(order) {}
 
+Euler::Euler(const Euler& e)
+    : x(e.x), y(e.y), z(e.z), order_(e.order_) {}
+
+Euler& Euler::operator=(const Euler& e) {
+
+    return copy(e);
+}
+
 
 Euler::RotationOrders Euler::getOrder() const {
 

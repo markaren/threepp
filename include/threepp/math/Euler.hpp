@@ -43,6 +43,15 @@ namespace threepp {
 
         explicit Euler(float x = 0, float y = 0, float z = 0, RotationOrders order = default_order);
 
+        // A copy takes the angles and the order only. The change callback
+        // belongs to the owner the Euler sits in (an Object3D keeps its
+        // rotation and its quaternion in step through it), so a copy starts
+        // with none, and an assignment keeps the target's own and runs it, as
+        // copy() does.
+        Euler(const Euler& e);
+
+        Euler& operator=(const Euler& e);
+
         [[nodiscard]] RotationOrders getOrder() const;
 
         void setOrder(RotationOrders value);

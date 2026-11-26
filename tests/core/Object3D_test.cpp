@@ -795,3 +795,87 @@ TEST_CASE("copy and move carry the resident hint") {
     Object3D moved(std::move(*source));
     CHECK(moved.resident);
 }
+
+TEST_CASE("setRotationFromQuaternion updates the rotation and keeps the two in step") {
+
+    Object3D o;
+    Quaternion q;
+    q.setFromAxisAngle(Vector3(0, 1, 0), 0.6f);
+
+    o.setRotationFromQuaternion(q);
+
+    CHECK(quatEquals(o.quaternion, q));
+    CHECK_THAT(static_cast<float>(o.rotation.y), Catch::Matchers::WithinAbs(0.6f, 1e-5));
+
+    // still linked both ways
+    o.quaternion.setFromAxisAngle(Vector3(1, 0, 0), math::PI / 4);
+    CHECK_THAT(static_cast<float>(o.rotation.x), Catch::Matchers::WithinAbs(math::PI / 4, 1e-5));
+    CHECK_THAT(static_cast<float>(o.rotation.y), Catch::Matchers::WithinAbs(0, 1e-5));
+
+    o.rotation.z = 0.3f;
+    Quaternion expected;
+    expected.setFromEuler(o.rotation);
+    CHECK(quatEquals(o.quaternion, expected));
+}
+
+TEST_CASE("assigning an object's quaternion or rotation keeps the two in step") {
+
+    Object3D o;
+    Quaternion q;
+    q.setFromAxisAngle(Vector3(0, 0, 1), 0.7f);
+
+    o.quaternion = q;
+    CHECK_THAT(static_cast<float>(o.rotation.z), Catch::Matchers::WithinAbs(0.7f, 1e-5));
+    o.quaternion.setFromAxisAngle(Vector3(0, 0, 1), 0.2f);
+    CHECK_THAT(static_cast<float>(o.rotation.z), Catch::Matchers::WithinAbs(0.2f, 1e-5));
+
+    o.rotation = Euler(0.4f, 0, 0);
+    Quaternion expected;
+    expected.setFromAxisAngle(Vector3(1, 0, 0), 0.4f);
+    CHECK(quatEquals(o.quaternion, expected));
+    o.rotation.y = 0.1f;
+    expected.setFromEuler(Euler(0.4f, 0.1f, 0));
+    CHECK(quatEquals(o.quaternion, expected));
+}
+
+TEST_CASE("a copy of an object's quaternion does not run the object's callback") {
+
+    Object3D o;
+    // Past a full turn: recomputing the rotation from the quaternion would
+    // bring the angle back to 0.25, so it shows whether the object's
+    // quaternion callback ran.
+    const float angle = 2 * math::PI + 0.25f;
+    o.rotation.x = angle;
+
+    Quaternion constructed(o.quaternion);
+    constructed.set(0, 0, 0, 1);
+    Quaternion assigned;
+    assigned = o.quaternion;
+    assigned.set(0, 0, 0, 1);
+
+    CHECK(o.rotation.x == angle);
+}
+
+TEST_CASE("moving an object keeps each rotation tied to its own quaternion") {
+
+    Object3D source;
+    source.rotation.set(0.1f, 0.2f, 0.3f, Euler::YXZ);
+    const Quaternion before(source.quaternion);
+
+    Object3D moved{std::move(source)};
+
+    // the source's values, exactly
+    CHECK(moved.rotation.equals(Euler(0.1f, 0.2f, 0.3f, Euler::YXZ)));
+    CHECK(moved.quaternion == before);
+
+    // the moved object's pair is its own
+    moved.rotation.y = 0.5f;
+    Quaternion expected;
+    expected.setFromEuler(moved.rotation);
+    CHECK(quatEquals(moved.quaternion, expected));
+    CHECK(source.quaternion == before);
+
+    // and the source's still works: its callbacks were not taken from it
+    source.rotation.set(0, 0, 0);
+    CHECK(quatEquals(source.quaternion, Quaternion()));
+}

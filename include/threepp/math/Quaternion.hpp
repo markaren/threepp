@@ -31,6 +31,19 @@ namespace threepp {
         explicit Quaternion(float x = 0, float y = 0, float z = 0, float w = 1)
             : x(x), y(y), z(z), w(w) {}
 
+        // A copy takes the four values only. The change callback belongs to
+        // the owner the quaternion sits in (an Object3D keeps its quaternion
+        // and its rotation in step through it), so a copy starts with none,
+        // and an assignment keeps the target's own and runs it, as copy()
+        // does. A copy that took the callback would run another owner's, and
+        // outlive it.
+        Quaternion(const Quaternion& q)
+            : x(q.x), y(q.y), z(q.z), w(q.w) {}
+
+        Quaternion& operator=(const Quaternion& q) {
+            return copy(q);
+        }
+
         float operator[](unsigned int index) const {
             switch (index) {
                 case 0:
