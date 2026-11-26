@@ -5,7 +5,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_GOOGLE_include_directive                   : enable
 
-#include "ocean_wake.glsl"
+#include "ocean_wake_lists.glsl"
 
 // The wake field's RIPPLES, one patch (DisplacedMesh::WakeField, "RIPPLES").
 //
@@ -87,7 +87,7 @@ layout(push_constant, scalar) uniform Pc {
     uint64_t tableAddr;
     uint     layer;
     uint     mode;        // 0 turn, 1 pack, 2 slopes, 3 space, 4 sponge, 5 back
-    uint     sourceCount;
+    uint     sourceCount; // the table's this step (TURN reads its patch's list, ocean_wake_lists.glsl)
     uint     _pad;
 } pc;
 
@@ -149,8 +149,13 @@ void main() {
         }
         vec2 dent = vec2(0.0);
         const float texel = L / float(N);
-        for (uint i = 0u; i < pc.sourceCount; ++i) {
-            const WakeSource sc = tb.sources[i];
+        // The sources that push on this patch's waves, in the table's order
+        // (ocean_wake_lists.glsl).
+        WakeSourceLists sl    = oceanWakeLists(pc.tableAddr);
+        const uint      first = sl.first[OCEAN_WAKE_LIST_RIPPLE + pc.layer];
+        const uint      count = sl.count[OCEAN_WAKE_LIST_RIPPLE + pc.layer];
+        for (uint j = 0u; j < count; ++j) {
+            const WakeSource sc = tb.sources[sl.index[first + j]];
             if (sc.push == 0.0 || sc.owner != li) continue;
             // nothing narrower than a texel and a half: the spectrum has to be gone at Nyquist
             const float r  = max(sc.radius, 1.5 * texel);

@@ -5,7 +5,8 @@
 // and the water's flow) and wake_ripple.comp (the waves the producers make, a
 // spectrum a patch, through the ocean's own inverse FFT). Each ocean with a
 // wake field owns a State: its patch images, its descriptor sets and the
-// device buffer that holds the patch table and the step's sources.
+// device buffer that holds the patch table, the step's sources and each
+// patch's lists of them (ocean_wake_lists.glsl).
 //
 // Where it meets the rest of the renderer:
 //   * State::stateView() is what the deferred water shade samples (binding 78)
@@ -161,6 +162,19 @@ namespace threepp::vulkan {
                   "WakeTableGpu must match ocean_wake.glsl's WakeTable");
     static_assert(sizeof(DisplacedMesh::WakeSource) == 68,
                   "DisplacedMesh::WakeSource is memcpy'd after the table; ocean_wake.glsl reads 68-byte sources");
+
+    // Mirrors WakeSourceLists in ocean_wake_lists.glsl up to (not including)
+    // its indices: which of the step's sources each patch's loops read, by
+    // their index in the table. first and count hold the field's list
+    // (wake_field.comp, SETTLE) at a patch's index, the ripples' (wake_ripple.comp,
+    // TURN) at kWakeTablePatches + its index. It lies after the table's room
+    // for kMaxWakeSources sources.
+    struct WakeSourceListsGpu {
+        uint32_t first[2 * kWakeTablePatches];
+        uint32_t count[2 * kWakeTablePatches];
+    };
+    // The indices the lists can hold: two lists of every source for each producer's patch.
+    constexpr uint32_t kWakeListIndices = 2u * DisplacedMesh::kMaxWakePatches * DisplacedMesh::kMaxWakeSources;
 
     class WakeFieldPipeline {
 
@@ -404,9 +418,9 @@ namespace threepp::vulkan {
             PushConstants pc{};
         };
 
-        // One step of the field, into the frame's command stream: the table
-        // and this frame's sources, then the three dispatches for every patch
-        // that is on. A frame at the same time as the last (a still that
+        // One step of the field, into the frame's command stream: the table,
+        // this frame's sources and each patch's lists of them, then the three
+        // dispatches for every patch that is on. A frame at the same time as the last (a still that
         // renders the same instant again) records nothing. Returns the ripples
         // the step leaves, for recordRipples right after it.
         RippleStep record(VkCommandBuffer cb, State& st, const DisplacedMesh& dm, double nowSec);

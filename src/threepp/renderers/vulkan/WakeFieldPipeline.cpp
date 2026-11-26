@@ -38,6 +38,36 @@ namespace threepp::vulkan {
         constexpr int32_t kShoreJfaSteps[7] = {32, 16, 8, 4, 2, 1, 1};
         constexpr VkDeviceSize kTableBytes =
                 sizeof(WakeTableGpu) + DisplacedMesh::kMaxWakeSources * sizeof(DisplacedMesh::WakeSource);
+        // The source lists follow (ocean_wake_lists.glsl's OCEAN_WAKE_LISTS_OFFSET is this offset).
+        static_assert(kTableBytes == 88 + 76 * kWakeTablePatches + 68 * 256 && DisplacedMesh::kMaxWakeSources == 256,
+                      "ocean_wake_lists.glsl's OCEAN_WAKE_LISTS_OFFSET and OCEAN_WAKE_MAX_SOURCES");
+        constexpr VkDeviceSize kListBytes = sizeof(WakeSourceListsGpu) + kWakeListIndices * sizeof(uint32_t);
+
+        // Whether the field's step (wake_field.comp, SETTLE) can take anything
+        // from source `s` at a texel of patch `g`: false only where its loop
+        // passes over the source at every texel, so leaving it out of the
+        // patch's list changes nothing. That loop passes over one that only
+        // pushes (the same test in the same order: a NaN fails a comparison
+        // there as here), and one whose squared distance from every texel
+        // centre exceeds 24 r^2. The patch's square holds its texel centres,
+        // so a segment whose box, grown by the reach and a margin above any
+        // rounding of the shader's float arithmetic, misses the square is out
+        // of reach at every texel. Anything not finite, the source's or the
+        // patch's, is kept.
+        bool fieldSourceReaches(const DisplacedMesh::WakeSource& s, const WakePatchGpu& g) {
+            if (s.push != 0.0f && s.foam <= 0.0f && s.aeration <= 0.0f && s.turbulence <= 0.0f && s.lane <= 0.0f) {
+                return false;
+            }
+            const float reach = std::sqrt(24.0f) * std::abs(s.radius);
+            const float m     = reach * (1.0f + 1e-3f) + g.texel + 0.01f;
+            const float lo[2] = {std::min(s.x0, s.x1) - m, std::min(s.z0, s.z1) - m};
+            const float hi[2] = {std::max(s.x0, s.x1) + m, std::max(s.z0, s.z1) + m};
+            if (!std::isfinite(lo[0]) || !std::isfinite(lo[1]) || !std::isfinite(hi[0]) || !std::isfinite(hi[1]) ||
+                !std::isfinite(g.originX) || !std::isfinite(g.originZ) || !std::isfinite(g.size)) {
+                return true;
+            }
+            return hi[0] >= g.originX && lo[0] <= g.originX + g.size && hi[1] >= g.originZ && lo[1] <= g.originZ + g.size;
+        }
 
         constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                              VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -394,7 +424,7 @@ namespace threepp::vulkan {
             arrayImage(ctx_, i < 3 ? kStateFormat : kVelFormat, st->res, st->layers, 1, kNames[i],
                        st->image[i], st->alloc[i], st->view[i]);
         }
-        st->table = createBuffer(ctx_.allocator(), ctx_.device(), kTableBytes,
+        st->table = createBuffer(ctx_.allocator(), ctx_.device(), kTableBytes + kListBytes,
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                  VMA_MEMORY_USAGE_AUTO);
@@ -884,6 +914,37 @@ namespace threepp::vulkan {
             }
         }
 
+        // Each patch's sources, by their index in the table and in its order
+        // (ocean_wake_lists.glsl): for the field's step the ones that can lay
+        // something in the patch or move its water (fieldSourceReaches), for
+        // its ripples the ones whose push forces them, owners as resolved
+        // above. A step's sources lie round a few vessels, so a patch's lists
+        // hold a few of them or none.
+        struct ListUpload {
+            WakeSourceListsGpu head;
+            uint32_t           index[kWakeListIndices];
+        };
+        static_assert(sizeof(ListUpload) == kListBytes, "the lists go up in one piece");
+        ListUpload lists;
+        lists.head      = {};
+        uint32_t listed = 0;
+        for (uint32_t i = 0; i < st.appLayers; ++i) {
+            lists.head.first[i] = listed;
+            for (uint32_t k = 0; (liveMask & (1u << i)) && k < sourceCount; ++k) {
+                if (fieldSourceReaches(up.sources[k], tb.patches[i])) lists.index[listed++] = k;
+            }
+            lists.head.count[i] = listed - lists.head.first[i];
+        }
+        for (uint32_t i = 0; i < st.appLayers; ++i) {
+            const uint32_t r   = kWakeTablePatches + i;
+            lists.head.first[r] = listed;
+            for (uint32_t k = 0; (rippleMask & (1u << i)) && k < sourceCount; ++k) {
+                const DisplacedMesh::WakeSource& s = up.sources[k];
+                if (s.push != 0.0f && s.patch == static_cast<int32_t>(i)) lists.index[listed++] = k;
+            }
+            lists.head.count[r] = listed - lists.head.first[r];
+        }
+
         // The table, in the command stream: last frame's water shade may still
         // be reading the old one, and this frame's must read the new.
         VkBufferMemoryBarrier bmb{};
@@ -898,6 +959,8 @@ namespace threepp::vulkan {
                              0, 0, nullptr, 1, &bmb, 0, nullptr);
         vkCmdUpdateBuffer(cb, st.table.handle, 0,
                           sizeof(WakeTableGpu) + sourceCount * sizeof(DisplacedMesh::WakeSource), &up);
+        vkCmdUpdateBuffer(cb, st.table.handle, kTableBytes, sizeof(WakeSourceListsGpu) + listed * sizeof(uint32_t),
+                          &lists);
         bmb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         bmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
