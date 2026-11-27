@@ -254,7 +254,7 @@ def main():
             ui.render(draw_ui)
 
         if args.shot and terrain_mesh[0] is not None and not rebuilding[0]:
-            renderer.read_rgb_pixels(0, 0, canvas.width, canvas.height, args.shot)
+            renderer.save_frame(args.shot)
             canvas.close()
 
     canvas.animate(frame)
