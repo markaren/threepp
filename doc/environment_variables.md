@@ -53,6 +53,7 @@ Categories (`THREEPP_LOG=<category>:debug` shows a category's diagnostics):
 | `core.raycaster` | `Raycaster::setFromCamera` |
 | `core.string` | number parsing |
 | `extras.sitl` | the ArduPilot SITL bridge: dropped packets, SITL resets |
+| `extras.terrain` | the mountain backdrop: shader hooks it cannot find |
 | `gl.program` | shader compile and link logs (error), link warnings, unsupported color spaces and tone mappings |
 | `gl.texture` | textures that cannot be uploaded, texture unit overflow, incomplete framebuffers |
 | `gl.uniform` | uniform values the renderer cannot set |

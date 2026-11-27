@@ -2,17 +2,19 @@
 #include "threepp/extras/terrain/MountainBackdrop.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/extras/core/NoiseUtils.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 #include "threepp/textures/DataTexture.hpp"
+#include "threepp/utils/Log.hpp"
 #include "threepp/utils/ThreadPool.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <string>
 
 using namespace threepp;
@@ -20,14 +22,11 @@ using namespace threepp::terrain;
 
 namespace {
 
+    constinit log::Category kLog{"extras.terrain"};
+
     constexpr float kTau = 6.28318530717959f;
 
-    float smoothstepf(float e0, float e1, float x) {
-        const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
 
-    float mixf(float a, float b, float t) { return a + (b - a) * t; }
 
     std::uint32_t hashU(std::uint32_t x) {
         x ^= x >> 16;
@@ -53,11 +52,11 @@ namespace {
             const float ang = hash3(a, b, seed) * kTau;
             return std::cos(ang) * dx + std::sin(ang) * dy;
         };
-        const float ux = tx * tx * tx * (tx * (tx * 6 - 15) + 10);
-        const float uy = ty * ty * ty * (ty * (ty * 6 - 15) + 10);
+        const float ux = noise::fade(tx);
+        const float uy = noise::fade(ty);
         const float n00 = grad(ix, iy, tx, ty), n10 = grad(ix + 1, iy, tx - 1, ty);
         const float n01 = grad(ix, iy + 1, tx, ty - 1), n11 = grad(ix + 1, iy + 1, tx - 1, ty - 1);
-        return 1.4142f * mixf(mixf(n00, n10, ux), mixf(n01, n11, ux), uy);
+        return 1.4142f * noise::lerp(noise::lerp(n00, n10, ux), noise::lerp(n01, n11, ux), uy);
     }
 
     // Value noise in [-1, 1] with its derivatives.
@@ -106,8 +105,8 @@ namespace {
     }
     float rNoise(float px, float py) {
         const float ix = std::floor(px), iy = std::floor(py), fx = px - ix, fy = py - iy;
-        const float ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-        return mixf(mixf(rHash(ix, iy), rHash(ix + 1, iy), ux), mixf(rHash(ix, iy + 1), rHash(ix + 1, iy + 1), ux), uy);
+        const float ux = noise::smooth(fx), uy = noise::smooth(fy);
+        return noise::lerp(noise::lerp(rHash(ix, iy), rHash(ix + 1, iy), ux), noise::lerp(rHash(ix, iy + 1), rHash(ix + 1, iy + 1), ux), uy);
     }
     float rFbm(float px, float py) {
         float s = 0, a = 0.5f;
@@ -128,7 +127,7 @@ namespace {
     std::string hook(std::string s, const std::string& what, const std::string& with) {
         const auto p = s.find(what);
         if (p == std::string::npos) {
-            std::cerr << "MountainBackdrop: shader hook not found: " << what << std::endl;
+            THREEPP_LOG(kLog, Warn) << "shader hook not found: " << what;
             return s;
         }
         s.replace(p, what.size(), with);
@@ -330,17 +329,17 @@ MountainBackdrop::MountainBackdrop(MountainBackdropOptions options)
             const float jf = (static_cast<float>(y) + 0.5f) / static_cast<float>(H) * static_cast<float>(R - 1);
             const int j0 = std::min(static_cast<int>(jf), R - 2);
             const float tj = jf - static_cast<float>(j0);
-            const float r = mixf(radii[j0], radii[j0 + 1], tj);
+            const float r = noise::lerp(radii[j0], radii[j0 + 1], tj);
             const float texel = r * kTau / static_cast<float>(W);
             // relief finer than a texel is left out, as the shader leaves out what is finer than a pixel
-            const float f1 = 1.f - smoothstepf(5.f, 20.f, texel), f2 = 1.f - smoothstepf(1.f, 5.f, texel);
+            const float f1 = 1.f - math::smoothstep(5.f, 20.f, texel), f2 = 1.f - math::smoothstep(1.f, 5.f, texel);
             for (int x = 0; x < W; ++x) {
                 const float uf = (static_cast<float>(x) + 0.5f) / static_cast<float>(tps);
                 const int i0 = std::min(static_cast<int>(uf), S - 1);
                 const float ti = uf - static_cast<float>(i0);
                 auto at = [&](const std::vector<float>& a, int stride, int c) {
                     auto v = [&](int jj, int ii) { return a[(static_cast<size_t>(jj) * cols + ii) * stride + c]; };
-                    return mixf(mixf(v(j0, i0), v(j0, i0 + 1), ti), mixf(v(j0 + 1, i0), v(j0 + 1, i0 + 1), ti), tj);
+                    return noise::lerp(noise::lerp(v(j0, i0), v(j0, i0 + 1), ti), noise::lerp(v(j0 + 1, i0), v(j0 + 1, i0 + 1), ti), tj);
                 };
                 const float a = (uf + 0.5f) / static_cast<float>(S) * kTau;
                 const float ca = std::cos(a), sa = std::sin(a);
@@ -351,21 +350,21 @@ MountainBackdrop::MountainBackdrop(MountainBackdropOptions options)
                 const float e = 2.5f;
                 const float r0 = rRelief(px, pz, f1, f2);
                 const float gx = (rRelief(px + e, pz, f1, f2) - r0) / e, gz = (rRelief(px, pz + e, f1, f2) - r0) / e;
-                const float steep0 = smoothstepf(0.12f, 0.45f, 1.f - N.y);
+                const float steep0 = math::smoothstep(0.12f, 0.45f, 1.f - N.y);
                 Vector3 n = N + Vector3(-gx, 0.f, -gz) * (0.2f + 0.8f * steep0);
                 n.normalize();
                 const float slope = 1.f - n.y;
                 const float rN = rFbm(px / 170.f, pz / 170.f);
                 const float cav = std::clamp(at(cavity, 1, 0), -1.f, 1.f);
-                const float line = o.snowSlope + 0.12f * rN + 0.05f * smoothstepf(200.f, 1200.f, alt) + 0.24f * std::max(cav, 0.f) - 0.2f * std::max(-cav, 0.f);
-                float snow = 1.f - smoothstepf(line - 0.03f, line + 0.03f, slope);
-                const float strata = smoothstepf(0.25f, 0.75f, 0.5f + 0.5f * std::sin(alt / 12.f + rN * 7.f));
+                const float line = o.snowSlope + 0.12f * rN + 0.05f * math::smoothstep(200.f, 1200.f, alt) + 0.24f * std::max(cav, 0.f) - 0.2f * std::max(-cav, 0.f);
+                float snow = 1.f - math::smoothstep(line - 0.03f, line + 0.03f, slope);
+                const float strata = math::smoothstep(0.25f, 0.75f, 0.5f + 0.5f * std::sin(alt / 12.f + rN * 7.f));
                 const float grain = 0.7f + 0.6f * rNoise(px / 30.f, pz / 30.f);
-                const float ledge = (1.f - strata) * smoothstepf(0.55f, 0.75f, rNoise(px / 10.f, pz / 10.f)) * (1.f - smoothstepf(0.45f, 0.75f, slope));
+                const float ledge = (1.f - strata) * math::smoothstep(0.55f, 0.75f, rNoise(px / 10.f, pz / 10.f)) * (1.f - math::smoothstep(0.45f, 0.75f, slope));
                 snow = std::max(snow, 0.8f * ledge);
-                const float rr = mixf(o.rockColor.r, o.rockBandColor.r, strata) * grain;
-                const float rg = mixf(o.rockColor.g, o.rockBandColor.g, strata) * grain;
-                const float rb = mixf(o.rockColor.b, o.rockBandColor.b, strata) * grain;
+                const float rr = noise::lerp(o.rockColor.r, o.rockBandColor.r, strata) * grain;
+                const float rg = noise::lerp(o.rockColor.g, o.rockBandColor.g, strata) * grain;
+                const float rb = noise::lerp(o.rockColor.b, o.rockBandColor.b, strata) * grain;
 
                 // the normal in the frame the renderer builds from the uvs: T round the ring
                 // (u), B = N x T outward (v)
@@ -380,9 +379,9 @@ MountainBackdrop::MountainBackdrop(MountainBackdropOptions options)
                     c = c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f;
                     return static_cast<unsigned char>(std::lround(c * 255.f));
                 };
-                colPx[k] = srgb(mixf(rr, snowR, snow));
-                colPx[k + 1] = srgb(mixf(rg, snowG, snow));
-                colPx[k + 2] = srgb(mixf(rb, snowB, snow));
+                colPx[k] = srgb(noise::lerp(rr, snowR, snow));
+                colPx[k + 1] = srgb(noise::lerp(rg, snowG, snow));
+                colPx[k + 2] = srgb(noise::lerp(rb, snowB, snow));
                 auto unit8 = [](float c) { return static_cast<unsigned char>(std::lround(std::clamp(0.5f + 0.5f * c, 0.f, 1.f) * 255.f)); };
                 nrmPx[k] = unit8(nx);
                 nrmPx[k + 1] = unit8(ny);
@@ -424,7 +423,7 @@ float MountainBackdrop::heightAt(float x, float z) const {
     const auto& o = options_;
     const float ground = o.ground ? o.ground(x, z) : 0.f;
     const float r = std::sqrt(x * x + z * z);
-    const float env = smoothstepf(o.innerRadius, o.fullRadius, r);
+    const float env = math::smoothstep(o.innerRadius, o.fullRadius, r);
     if (env <= 0.f) return ground - o.sink;
 
     const int s = static_cast<int>(o.seed);
@@ -434,7 +433,7 @@ float MountainBackdrop::heightAt(float x, float z) const {
     const float e = erodedFbm(wx * 1.4f, wz * 1.4f, 9, s);
     float ridge = 1.f - std::abs(gnoise(wx * 0.9f, wz * 0.9f, s - 7));
     ridge *= ridge;
-    const float mass = smoothstepf(-0.35f, 0.55f, gnoise(x / (2.f * o.featureScale), z / (2.f * o.featureScale), s - 6));
+    const float mass = math::smoothstep(-0.35f, 0.55f, gnoise(x / (2.f * o.featureScale), z / (2.f * o.featureScale), s - 6));
     float crest = 1.f - std::abs(gnoise(wx * 2.3f + 1.7f, wz * 2.3f, s - 5));
     crest = crest * crest * crest;
 
@@ -444,7 +443,7 @@ float MountainBackdrop::heightAt(float x, float z) const {
         const float d = std::hypot(x - m.centre.x, z - m.centre.y);
         H += std::exp(-d * d / (2.f * m.radius * m.radius)) * std::max(0.f, 0.8f + 0.6f * e) * m.height;
     }
-    return ground + env * H - o.sink * (1.f - smoothstepf(0.f, 0.12f, env));
+    return ground + env * H - o.sink * (1.f - math::smoothstep(0.f, 0.12f, env));
 }
 
 const std::shared_ptr<Mesh>& MountainBackdrop::mesh() const {
