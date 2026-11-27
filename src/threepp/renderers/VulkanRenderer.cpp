@@ -148,7 +148,7 @@ namespace threepp {
                     photons = matTableRefs_[s] > 0 && matTable_[s].transmission > 0.f;
             }
             const bool sunPhotons = oceanFineTileSize > 0.f && shadowSun_.valid && shadowSun_.dir[1] > 0.f;
-            pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, frameSerial_, photons, sunPhotons);
+            pathTracer_->prepare(f, regionRenderExt_.width, regionRenderExt_.height, photons, sunPhotons);
             vulkan::PathTracer::FrameInputs pin;
             pin.sunTanHalfAngle   = std::tan(sunAngularRadiusDeg_ * 0.017453292519943295f);
             pin.sunExtracted      = envSun_.found;

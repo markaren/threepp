@@ -116,8 +116,8 @@ namespace threepp::vulkan {
 
     }// namespace
 
-    PathTracer::PathTracer(VulkanContext& ctx, uint32_t framesInFlight)
-        : ctx_(ctx), framesInFlight_(framesInFlight) {
+    PathTracer::PathTracer(VulkanContext& ctx, uint32_t framesInFlight, RetireBufferFn retire)
+        : ctx_(ctx), framesInFlight_(framesInFlight), retire_(std::move(retire)) {
         if (!ctx_.rayQuerySupported()) return;
         for (int i = 0; i < 2; ++i) {
             VkSamplerCreateInfo sci{};
@@ -144,7 +144,6 @@ namespace threepp::vulkan {
 
     PathTracer::~PathTracer() {
         VkDevice d = ctx_.device();
-        freeRetired(0, /*all=*/true);
         destroyBuffer(ctx_.allocator(), accum_);
         destroyBuffer(ctx_.allocator(), photonBuf_);
         destroyBuffer(ctx_.allocator(), photonGrid_);
@@ -487,17 +486,6 @@ namespace threepp::vulkan {
         boundPhotons_[frame] = photonSerial_;
     }
 
-    void PathTracer::freeRetired(uint64_t frameSerial, bool all) {
-        for (auto it = retired_.begin(); it != retired_.end();) {
-            if (all || frameSerial >= it->second + framesInFlight_ + 1) {
-                destroyBuffer(ctx_.allocator(), it->first);
-                it = retired_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
     void PathTracer::begin(const Params& params) {
         ensurePipelines();
         params_                 = params;
@@ -512,10 +500,9 @@ namespace threepp::vulkan {
         ++seed_;
     }
 
-    void PathTracer::prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial,
-                             bool photons, bool sunPhotons) {
+    void PathTracer::prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, bool photons,
+                             bool sunPhotons) {
         if (!available() || !active_) return;
-        freeRetired(frameSerial, false);
         if (renderWidth == 0 || renderHeight == 0) return;
         const bool     own    = params_.width > 0 && params_.height > 0;
         const uint32_t width  = own ? params_.width : renderWidth;
@@ -526,7 +513,7 @@ namespace threepp::vulkan {
         // count was chosen against.
         bandRows_ = std::clamp<uint32_t>(uint32_t((uint64_t(renderWidth) * renderHeight) / width), 1u, height);
         if (width != width_ || height != height_ || accum_.handle == VK_NULL_HANDLE) {
-            if (accum_.handle != VK_NULL_HANDLE) retired_.emplace_back(accum_, frameSerial);
+            if (accum_.handle != VK_NULL_HANDLE) retire_(std::move(accum_));
             accum_ = Buffer{};
             const VkDeviceSize bytes = VkDeviceSize(width) * height * 16;
             accum_ = createBuffer(ctx_.allocator(), ctx_.device(), bytes,
@@ -557,8 +544,8 @@ namespace threepp::vulkan {
             const uint32_t ns   = sunPhotons ? std::clamp<uint32_t>(half, 65536u, 3u << 20) : 0u;
             const uint32_t cap  = ne + ns;
             if (cap != photonCap_ || photonBuf_.handle == VK_NULL_HANDLE) {
-                if (photonBuf_.handle != VK_NULL_HANDLE) retired_.emplace_back(photonBuf_, frameSerial);
-                if (photonGrid_.handle != VK_NULL_HANDLE) retired_.emplace_back(photonGrid_, frameSerial);
+                if (photonBuf_.handle != VK_NULL_HANDLE) retire_(std::move(photonBuf_));
+                if (photonGrid_.handle != VK_NULL_HANDLE) retire_(std::move(photonGrid_));
                 uint32_t buckets = 4096;
                 while (buckets < cap) buckets <<= 1;
                 photonBuf_  = createBuffer(ctx_.allocator(), ctx_.device(), VkDeviceSize(cap) * 2 * kPhotonBytes,

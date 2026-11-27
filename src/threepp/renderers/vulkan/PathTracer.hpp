@@ -134,7 +134,10 @@ namespace threepp::vulkan {
             VkSampler          oceanRippleSampler = VK_NULL_HANDLE;
         };
 
-        PathTracer(VulkanContext& ctx, uint32_t framesInFlight);
+        // retire: where an accumulator or photon buffer replaced mid-session
+        // goes, since frames still in flight may name it (the renderer's
+        // frame-serial retire queue).
+        PathTracer(VulkanContext& ctx, uint32_t framesInFlight, RetireBufferFn retire);
         ~PathTracer();
         PathTracer(const PathTracer&) = delete;
         PathTracer& operator=(const PathTracer&) = delete;
@@ -173,8 +176,7 @@ namespace threepp::vulkan {
         // caustics (a scene with emitters and glass), `sunPhotons` for the
         // sun's through the ocean (a scene with an ocean and a sun).
         // Call at graph build, before declare().
-        void prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, uint64_t frameSerial,
-                     bool photons, bool sunPhotons);
+        void prepare(uint32_t frame, uint32_t renderWidth, uint32_t renderHeight, bool photons, bool sunPhotons);
         void declare(rg::RenderGraph& graph, rg::PassBuilder& pass, uint32_t frame) const;
         // Trace the next band of rows.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame, const FrameInputs& in);
@@ -232,9 +234,7 @@ namespace threepp::vulkan {
         // Which accumulator each frame's set names (binding 8); 0 = none.
         std::vector<uint64_t> boundAccum_;
         uint64_t              accumSerial_ = 0;
-        // Accumulators replaced by a resize, freed once their last frame is
-        // out of flight.
-        std::vector<std::pair<Buffer, uint64_t>> retired_;
+        RetireBufferFn retire_;
 
         Params   params_{};
         bool     active_       = false;
@@ -276,7 +276,6 @@ namespace threepp::vulkan {
         // Trace this pass's photons and sort them into the grid (the pass's
         // first band, before its dispatch).
         void recordPhotons(VkCommandBuffer cb, const FrameInputs& in, const void* cameraPush);
-        void freeRetired(uint64_t frameSerial, bool all);
         // Record `record(cb)` in a one-off command buffer on the graphics
         // queue and wait for it.
         template<class F>

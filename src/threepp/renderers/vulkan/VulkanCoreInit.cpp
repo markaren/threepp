@@ -190,7 +190,8 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
             // The path-trace feature over the same scene state (nothing
             // without ray query; pathTraceBegin then throws). Its pipelines
             // wait for the first pathTraceBegin.
-            pathTracer_ = std::make_unique<vulkan::PathTracer>(*ctx, kFramesInFlight);
+            pathTracer_ = std::make_unique<vulkan::PathTracer>(*ctx, kFramesInFlight,
+                                                               [this](Buffer&& b) { retire(std::move(b)); });
             vulkan::startupMark("path tracer");
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
