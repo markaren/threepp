@@ -62,7 +62,11 @@ namespace threepp::vulkan {
         };
         static_assert(sizeof(ResolvePush) == 112);
 
-        constexpr uint32_t kNumBindings = 20;// 0-9, then 67-69, 58, 13, 78, 79, 10, 11 and 99
+        constexpr uint32_t kNumBindings = 21;// 0-9, then 67-69, 58, 13, 78, 79, 10, 11, 99 and 12
+        // path_trace.comp's sky guide: kSgCells blocks of kSgBlock counters
+        // a half, two halves (75 MB).
+        constexpr VkDeviceSize kGuideCells = 65536, kGuideBlock = 144;
+        constexpr VkDeviceSize kGuideHalfBytes = kGuideCells * kGuideBlock * 4;
 
         // The photon grid's header (path_trace.comp's PhotonGridBuf), ahead of
         // its buckets' count, start and end arrays. The shader's set-up pass
@@ -142,12 +146,33 @@ namespace threepp::vulkan {
                              VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
     }
 
+    void PathTracer::ensureGuide() {
+        if (guideBuf_.handle != VK_NULL_HANDLE || sets_.empty()) return;
+        guideBuf_ = createBuffer(ctx_.allocator(), ctx_.device(), 2 * kGuideHalfBytes,
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+        for (uint32_t f = 0; f < framesInFlight_; ++f) {
+            VkDescriptorBufferInfo info{};
+            info.buffer = guideBuf_.handle;
+            info.range  = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = sets_[f];
+            w.dstBinding      = 12;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo     = &info;
+            updateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        }
+    }
+
     PathTracer::~PathTracer() {
         VkDevice d = ctx_.device();
         destroyBuffer(ctx_.allocator(), accum_);
         destroyBuffer(ctx_.allocator(), photonBuf_);
         destroyBuffer(ctx_.allocator(), photonGrid_);
         for (auto& b : photonStandIn_) destroyBuffer(ctx_.allocator(), b);
+        destroyBuffer(ctx_.allocator(), guideBuf_);
         for (auto s : sets_) forgetDescriptorSet(s);
         if (resolveSet_) forgetDescriptorSet(resolveSet_);
         if (descPool_) vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -205,6 +230,7 @@ namespace threepp::vulkan {
         setAt(17, 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);                         // the photons
         setAt(18, 11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);                         // their grid
         setAt(19, 99, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxDensityFields);// solved volumes' kelvin
+        setAt(20, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);                         // the sky guide
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -279,7 +305,7 @@ namespace threepp::vulkan {
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (4 + kMaxMaterialTextures + 3 * kMaxDensityFields);// env + ocean x3 + bindless + volumes
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        sizes[2].descriptorCount = framesInFlight_ * 6 + 2;// materials + geometry + emissive + accumulation + photons x2; the resolve's two
+        sizes[2].descriptorCount = framesInFlight_ * 7 + 2;// materials + geometry + emissive + accumulation + photons x2 + sky guide; the resolve's two
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;
 
@@ -493,6 +519,8 @@ namespace threepp::vulkan {
         params_.maxBounces      = std::min(params_.maxBounces, 64u);
         params_.height          = std::min(params_.height, 65535u);
         params_.domePort        = std::max(params_.domePort, 0.f);
+        ensureGuide();
+        guideFresh_   = true;
         active_       = true;
         resetPending_ = true;
         samples_      = 0;
@@ -638,6 +666,32 @@ namespace threepp::vulkan {
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         if (rowCursor_ == 0 && photonsLive_) recordPhotons(cb, in, &pc);
         if (photonsLive_) pc.flags |= 256u;
+        // The sky guide: a pass reads the half the last one learned into and
+        // learns into the other, cleared as it begins (both as the session's
+        // first does, when there is nothing to read yet).
+        const bool guide = guideBuf_.handle != VK_NULL_HANDLE;
+        if (guide) {
+            if (rowCursor_ == 0) {
+                if (resetPending_ || samples_ == 0) guideFresh_ = true;
+                guidePass_ = guideFresh_ ? 0u : guidePass_ + 1u;
+                const VkDeviceSize learnAt = (guidePass_ & 1u) ? 0 : kGuideHalfBytes;
+                VkMemoryBarrier mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 1, &mb, 0, nullptr, 0, nullptr);
+                if (guideFresh_) vkCmdFillBuffer(cb, guideBuf_.handle, 0, 2 * kGuideHalfBytes, 0u);
+                else vkCmdFillBuffer(cb, guideBuf_.handle, learnAt, kGuideHalfBytes, 0u);
+                mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     0, 1, &mb, 0, nullptr, 0, nullptr);
+                guideFresh_ = false;
+            }
+            // Bit 14: the half this pass reads (it learns into the other); bit 15: on.
+            pc.flags |= ((guidePass_ & 1u) << 14) | 32768u;
+        }
         if (sunLive_) pc.flags |= 512u;
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cb, (width_ + 7) / 8, (rows + 7) / 8, 1);

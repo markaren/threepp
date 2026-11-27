@@ -266,6 +266,14 @@ namespace threepp::vulkan {
         bool                  emitLive_    = false;
         bool                  sunLive_     = false;
 
+        // The sky guide (binding 12, path_trace.comp skyGuideNee): two
+        // halves, the one a pass reads and the one it learns into, swapped
+        // each pass; the learning half cleared as the pass begins, both as a
+        // session does. Made by the first begin(), bound in every frame's set.
+        Buffer   guideBuf_{};
+        uint32_t guidePass_  = 0;// this pass's number in the session
+        bool     guideFresh_ = true;// the next pass is the session's first: clear both
+
         void createLayout();
         void createResolveLayout();
         // The trace's pipeline and the resolve's, made by the first begin().
@@ -273,6 +281,7 @@ namespace threepp::vulkan {
         void createDescriptorPool();
         void bindAccumulator(uint32_t frame);
         void bindPhotons(uint32_t frame);
+        void ensureGuide();
         // Trace this pass's photons and sort them into the grid (the pass's
         // first band, before its dispatch).
         void recordPhotons(VkCommandBuffer cb, const FrameInputs& in, const void* cameraPush);

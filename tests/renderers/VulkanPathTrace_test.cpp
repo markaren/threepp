@@ -18,7 +18,11 @@
 //       a thin lens, the lens distortion, a spot light's beam in clear
 //       air, a dome port, and haze that glows in the open but not in a shut
 //       room;
-//   [7] no validation errors.
+//   [7] the sky guide: a dark room lit by the sky through a small window
+//       comes out the same traced in one pass (which only learns) as in
+//       many (guided from the second on), and the guided one is far less
+//       noisy for the same samples;
+//   [8] no validation errors.
 //
 // Exit 42 (SKIP) without a Vulkan device; a device without ray query checks
 // that pathTraceBegin refuses and skips the rest.
@@ -670,7 +674,91 @@ int main() {
         }
     }
 
-    // ── 7. Validation ───────────────────────────────────────────────────────
+    // ── 7. The sky guide ───────────────────────────────────────────────────
+    // A 4 m room of black walls and a grey floor under a white sky, lit only
+    // through a 0.8 x 0.7 m window: a bounce ray from the floor finds the
+    // window one time in fifty, so the floor is noisy without help. The first
+    // pass of a session only learns where the sky is seen; the passes after
+    // it also aim at it. 128 samples in one pass are the trace without the
+    // guide, 128 in sixteen passes with it: both must come to the reference's
+    // floor, the guided one with a fraction of the noise.
+    std::printf("\n[7] the sky guide: a room lit through a small window\n");
+    {
+        Scene room;
+        auto white       = constantEnv(1.f, 1.f, 1.f);
+        room.environment = white;
+        room.background  = white;
+        auto dark          = MeshStandardMaterial::create();
+        dark->color        = Color(0.f, 0.f, 0.f);
+        dark->roughness    = 1.f;
+        auto floorMat       = MeshStandardMaterial::create();
+        floorMat->color     = Color(0.5f, 0.5f, 0.5f);
+        floorMat->roughness = 1.f;
+        const auto slab = [&](float sx, float sy, float sz, float x, float y, float z, const auto& m) {
+            auto mesh = Mesh::create(BoxGeometry::create(sx, sy, sz), m);
+            mesh->position.set(x, y, z);
+            room.add(mesh);
+        };
+        slab(4.2f, 0.1f, 4.2f, 0, -0.05f, 0, floorMat);// floor
+        slab(4.2f, 0.1f, 4.2f, 0, 2.55f, 0, dark);     // ceiling
+        slab(0.1f, 2.5f, 4.2f, -2.05f, 1.25f, 0, dark);// side walls
+        slab(0.1f, 2.5f, 4.2f, 2.05f, 1.25f, 0, dark);
+        slab(4.2f, 2.5f, 0.1f, 0, 1.25f, 2.05f, dark); // back wall
+        slab(4.2f, 0.9f, 0.1f, 0, 0.45f, -2.05f, dark);// the front wall round the window:
+        slab(4.2f, 0.9f, 0.1f, 0, 2.05f, -2.05f, dark);// below, above,
+        slab(1.6f, 0.7f, 0.1f, -1.2f, 1.25f, -2.05f, dark);// and either side
+        slab(1.6f, 0.7f, 0.1f, 1.2f, 1.25f, -2.05f, dark);
+        auto cam8 = PerspectiveCamera::create(60, float(kW) / float(kH), 0.05f, 100.f);
+        cam8->position.set(0, 1.8f, 1.8f);
+        cam8->lookAt(0, 0, -1.f);
+        cam8->updateMatrixWorld();
+        // The floor in front of the window, where its light falls.
+        const int fx0 = kW / 2 - 60, fx1 = kW / 2 + 60, fy0 = kH / 2 - 20, fy1 = kH / 2 + 60;
+        const auto trace = [&](uint32_t perPass, uint32_t samples, std::vector<float>& img) {
+            VulkanRenderer::PathTraceParams q;
+            q.samplesPerFrame = perPass;
+            q.maxBounces      = 2;
+            int iw = 0, ih = 0;
+            for (int i = 0; i < 2; ++i) renderer.render(room, *cam8);
+            // The session form with one frame after the last pass: read at
+            // once, the accumulator can miss the frame that holds the last
+            // pass, which for a one-pass session is all of it.
+            renderer.pathTraceBegin(q);
+            while (renderer.pathTraceSamples() < samples) renderer.render(room, *cam8);
+            renderer.pathTraceStop();
+            renderer.render(room, *cam8);
+            return renderer.pathTraceRead(img, iw, ih) && iw == kW && ih == kH;
+        };
+        std::vector<float> ref, once, guided;
+        const bool ok = trace(16, 4096, ref) && trace(128, 128, once) && trace(8, 128, guided);
+        check(ok, "the room traces");
+        if (ok) {
+            const auto mse = [&](const std::vector<float>& a) {
+                double se = 0;
+                int    n  = 0;
+                for (int y = fy0; y < fy1; ++y)
+                    for (int x = fx0; x < fx1; ++x)
+                        for (int c = 0; c < 3; ++c) {
+                            const std::size_t i = (std::size_t(y) * kW + x) * 3 + c;
+                            se += (double(a[i]) - ref[i]) * (double(a[i]) - ref[i]);
+                            ++n;
+                        }
+                return se / std::max(n, 1);
+            };
+            const double mRef = meanLinear(ref, kW, fx0, fx1, fy0, fy1).lum();
+            const double mOne = meanLinear(once, kW, fx0, fx1, fy0, fy1).lum();
+            const double mGui = meanLinear(guided, kW, fx0, fx1, fy0, fy1).lum();
+            const double eOne = mse(once), eGui = mse(guided);
+            std::printf("  floor: reference %.5f, one pass %.5f, guided %.5f; noise (MSE) one pass %.3g, guided %.3g "
+                        "(%.1fx)\n", mRef, mOne, mGui, eOne, eGui, eGui > 0 ? eOne / eGui : 0.0);
+            check(mRef > 0.002, "the window lights the floor");
+            check(std::abs(mOne - mRef) < 0.05 * mRef, "one pass (no guide) comes to the reference's floor");
+            check(std::abs(mGui - mRef) < 0.05 * mRef, "the guided passes come to the same floor");
+            check(eGui < 0.5 * eOne, "and the guide takes away more than half the noise");
+        }
+    }
+
+    // ── 8. Validation ───────────────────────────────────────────────────────
     if (!vulkan::validationActive()) {
         std::printf("\n[note] no validation layer (THREEPP_VULKAN_VALIDATION=1 asks for it): the zero-error\n"
                     "       check is skipped.\n");

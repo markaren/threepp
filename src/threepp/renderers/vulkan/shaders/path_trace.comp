@@ -183,6 +183,11 @@ layout(set = 0, binding = 11, scalar) buffer PhotonGridBuf {
     uint  pgCells[];   // three arrays of the buckets: count, start, end
 };
 
+// The sky guide (skyGuideNee): two halves, one the pass reads, one it learns
+// into (pc.flags bit 14 says which); each half kSgCells blocks of kSgBlock
+// counters, a cell's at its hash.
+layout(set = 0, binding = 12) buffer SkyGuideBuf { uint sg[]; };
+
 // The scene-fog block (GpuFogUbo) as far as the deferred shade reads it: the
 // air medium and the underwater murk.
 layout(set = 0, binding = 9, scalar) uniform FogUbo {
@@ -241,6 +246,8 @@ layout(push_constant) uniform Pc {
                              // bit 11 = lastBounceMis (THREEPP_PT_LAST_BOUNCE_MIS)
                              // bit 12 = ambientLights (THREEPP_PT_AMBIENT_LIGHTS)
                              // bit 13 = blendPass (THREEPP_PT_BLEND_PASS)
+                             // bit 14 = the sky guide's half this pass reads (it learns into the other)
+                             // bit 15 = the sky guide is bound (skyGuideNee)
                              // bits 16-31 = the ocean's wave scale in 256ths (oceanNormal)
     uint  emissiveCount;     // triangles in the emitter table (0 = none)
     float emissiveTotalPower;// the table's power-CDF total
@@ -1690,6 +1697,126 @@ bool cameraCandidateHits(int instIdx, int primId, vec2 bary, bool front, uint ra
     return float(h) * (1.0 / 4294967296.0) < a;
 }
 
+// ── The sky guide ───────────────────────────────────────────────────────────
+// A room lit by the sky through a door or a window gets that light only when
+// a bounce ray happens to leave through an opening, so its interior is the
+// slowest part of a picture to converge. The trace learns where the sky is
+// seen from: every bounce ray that escapes adds its direction, weighted by the
+// sky's brightness there, to a histogram of the cell it left from (a hash
+// grid, 25 cm cells near the camera, twice as large every doubling of the
+// distance past 8 m; 128 bins of equal solid angle, 16 round by 8 high). Two
+// cells that hash alike share a histogram: a little less guidance there, the
+// same picture (the light ray and the bounce ray read the same one). The
+// next pass reads them: at a vertex in a cell with a histogram, one light ray
+// draws a direction from it, reads the environment as an escaping bounce ray
+// would, and the two are weighted against each other (power heuristic). A
+// direction the histogram has never seen stays the bounce ray's alone, so the
+// converged picture is the one without the guide. Integer counters and no
+// claimed slots: the same samples give the same picture in any thread order.
+// Off where the escaping
+// ray's light is traced rather than read (the cloud layer, ParticleField
+// volumes, the murk, inside a dielectric) and at a path's last vertex, which
+// traces no bounce (the sky's light there was never counted). pc.flags bit
+// 15: the guide is bound.
+const uint  kSgCells    = 65536u;            // cells a half (a power of two)
+const uint  kSgBlock    = 144u;              // [0] total, [1..8] the rows' sums, [16..143] the bins
+const uint  kSgHalf     = kSgCells * kSgBlock;
+const float kSgBinSolid = 4.0 * PI / 128.0;
+bool skyGuideOn() { return (pc.flags & 32768u) != 0u && !cloudsOn() && pd.counts.x == 0u && !murkOn(); }
+uint sgGuideBase() { return ((pc.flags >> 14) & 1u) * kSgHalf; }
+uint sgLearnBase() { return (1u - ((pc.flags >> 14) & 1u)) * kSgHalf; }
+// The counters of P's cell in the half at base.
+uint sgBlockAt(uint base, vec3 P) {
+    const float dist = length(P - cam.viewInverse[3].xyz);
+    const int   lvl  = clamp(int(floor(log2(max(dist * 0.25, 1.0)))), 0, 14);
+    const ivec3 c    = ivec3(floor(P / (0.25 * exp2(float(lvl)))));
+    const uint  h    = pcgHash(uint(c.x) + pcgHash(uint(c.y) + pcgHash(uint(c.z) + pcgHash(uint(lvl) + 0x51ed27u))));
+    return base + (h & (kSgCells - 1u)) * kSgBlock;
+}
+uvec2 sgBin(vec3 d) {
+    const float u = (atan(d.z, d.x) + PI) / TWO_PI;
+    const float v = (clamp(d.y, -1.0, 1.0) + 1.0) * 0.5;
+    return uvec2(min(uint(u * 16.0), 15u), min(uint(v * 8.0), 7u));
+}
+// The solid-angle pdf skyGuideNee draws d from at P (0 where it never would).
+float sgPdf(vec3 P, vec3 d) {
+    const uint  b     = sgBlockAt(sgGuideBase(), P);
+    const uint  total = sg[b];
+    if (total == 0u) return 0.0;
+    const uvec2 bin = sgBin(d);
+    return float(sg[b + 16u + bin.y * 16u + bin.x]) / (float(total) * kSgBinSolid);
+}
+// An escaping bounce ray from P along d, the sky's light Le there: into the
+// half this pass learns.
+void sgLearn(vec3 P, vec3 d, vec3 Le) {
+    const float ref = max(dot(sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u)), LUM), 1e-6);
+    const uint  w    = 1u + min(uint(dot(Le, LUM) / ref * 8.0), 1023u);
+    const uint  b   = sgBlockAt(sgLearnBase(), P);
+    const uvec2 bin = sgBin(d);
+    atomicAdd(sg[b], w);
+    atomicAdd(sg[b + 1u + bin.y], w);
+    atomicAdd(sg[b + 16u + bin.y * 16u + bin.x], w);
+}
+
+// Nothing between o and the sky along d, by the bounce ray's own rule
+// (cameraCandidateHits, its own random key): the ray reaches the sky exactly
+// where a bounce ray along d would escape.
+bool skyVisible(vec3 o, vec3 d, inout uint seed) {
+    rayQueryEXT rq;
+    const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT, kRayMaskAll, o, 0.0, d, 1e30);
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            cameraCandidateHits(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                                rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                                rayQueryGetIntersectionBarycentricsEXT(rq, false),
+                                rayQueryGetIntersectionFrontFaceEXT(rq, false), rayKey))
+            rayQueryConfirmIntersectionEXT(rq);
+    }
+    return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+// The sky's light at s along a direction its cell's histogram draws, weighted
+// against the bounce ray that could escape the same way.
+vec3 skyGuideNee(const Surf s, vec3 V, inout uint seed) {
+    const uint b     = sgBlockAt(sgGuideBase(), s.P);
+    const uint total = sg[b];
+    if (total == 0u) return vec3(0.0);
+    uint t   = min(uint(rnd(seed) * float(total)), total - 1u);
+    uint row = 0u;
+    for (; row < 7u; ++row) {
+        const uint r = sg[b + 1u + row];
+        if (t < r) break;
+        t -= r;
+    }
+    uint col = 0u;
+    for (; col < 15u; ++col) {
+        const uint c = sg[b + 16u + row * 16u + col];
+        if (t < c) break;
+        t -= c;
+    }
+    const float phi = (float(col) + rnd(seed)) / 16.0 * TWO_PI - PI;
+    const float y   = (float(row) + rnd(seed)) / 8.0 * 2.0 - 1.0;
+    const float rxz = sqrt(max(1.0 - y * y, 0.0));
+    const vec3  L   = vec3(rxz * cos(phi), y, rxz * sin(phi));
+    const vec3  fc  = evalBsdfCos(s, V, L);
+    if (max(max(fc.r, fc.g), fc.b) <= 0.0) return vec3(0.0);
+    const float pdfG = sgPdf(s.P, L);
+    if (pdfG <= 1e-12) return vec3(0.0);
+    const vec3 o = offsetOrigin(s, L);
+    if (!skyVisible(o, L, seed)) return vec3(0.0);
+    // The escaping bounce ray's light: the environment as a lighting ray
+    // reads it (mip 1 under an extracted sun), the ambient lights', and the
+    // air's transmittance to the sky.
+    const bool  sunExtracted = (pc.flags & 2u) != 0u;
+    const float lod = (!sunExtracted || pc.envMipCount < 2u) ? 0.0 : 1.0;
+    vec3 Le = sampleEnvLod(L, lod) + ambientRadiance(L);
+    if (airOn()) Le *= airSkyTransmittance(o, L);
+    const float pdfB = pdfBsdf(s, V, L);
+    const float w    = pdfG * pdfG / (pdfG * pdfG + pdfB * pdfB);
+    return fc * Le * (w / pdfG);
+}
+
 // ── The last vertex's bounce (lastBounceMis) ────────────────────────────────
 // The emitter NEE at a path's last vertex is weighted against a bounce ray
 // that the path no longer traces, so its weights summed to the NEE's share
@@ -1791,8 +1918,15 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
     bool  inside     = false;// travelling inside a dielectric (Beer-Lambert on the next leg)
     vec3  insideAtt  = vec3(1.0);// per-metre transmittance while inside
     float insideDist = 0.0;      // attenuationDistance of that medium
+    // The ray left a vertex the sky guide served (skyGuideNee) with this
+    // bounce, nothing between: its escape teaches the guide and is weighted
+    // against it (at pvP).
+    bool  pvLive     = false;
+    vec3  pvP        = vec3(0.0);
 
     for (uint bounce = 0u; bounce <= pc.maxBounces; ++bounce) {
+        const bool fromGuideVertex = pvLive;// any event on the way (glass, a pass) ends it
+        pvLive = false;
         rayQueryEXT rq;
         const uint rayKey = pcgHash(uint(rnd(seed) * 4294967295.0));
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsNoneEXT, kRayMaskAll, o, 0.0, d, 1e30);
@@ -1888,7 +2022,14 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
                 const bool  sunExtracted = (pc.flags & 2u) != 0u;
                 const bool  sunDisc      = causticPath && envSunLight();
                 const float lod = (!sunExtracted || pc.envMipCount < 2u || sunDisc) ? 0.0 : 1.0;
-                L += throughput * (sampleEnvLod(d, lod) + ambientRadiance(d));
+                const vec3 sky  = sampleEnvLod(d, lod) + ambientRadiance(d);
+                float      wSky = 1.0;// the share skyGuideNee did not already count
+                if (fromGuideVertex) {
+                    const float pG = sgPdf(pvP, d);
+                    wSky = lastPdf * lastPdf / max(lastPdf * lastPdf + pG * pG, 1e-30);
+                    sgLearn(pvP, d, sky);
+                }
+                L += throughput * sky * wSky;
             }
             break;
         }
@@ -2117,6 +2258,8 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         }
         L += throughput * analyticNee(s, V, seed, sunByPhotons);
         L += throughput * emitterNee(s, V, seed);
+        const bool pvHere = !inside && bounce < pc.maxBounces && skyGuideOn();
+        if (pvHere) L += throughput * skyGuideNee(s, V, seed);
         // The emitters' light through glass and the sun's through the waves.
         // Past the second vertex, a vertex gathers by chance (one in two,
         // weighted back), the bounce on keeping out of the photons' share
@@ -2154,6 +2297,8 @@ vec3 tracePath(vec3 o, vec3 d, inout uint seed) {
         o        = offsetOrigin(s, wi);
         d        = wi;
         lastPdf  = pdf;
+        pvLive   = pvHere;
+        pvP      = P;
         legDist  = 0.0;
         delta    = false;
         camChain = false;

@@ -1969,6 +1969,15 @@ namespace threepp {
         // and pathTraceSamples() counts whole passes (pathTraceProgress()
         // counts the rows of the pass in progress too).
         //
+        // Sky light through openings: the trace learns from its own bounce
+        // rays that reach the sky where each part of the scene sees it, and
+        // from a session's second pass on it also aims a light ray that way,
+        // weighted against the bounce rays, so the picture converges to the
+        // same result. A room lit by the sky through a door or a window
+        // converges several times sooner (about three times at equal time
+        // on a boathouse lit through its door). The guide holds about 75 MB
+        // of GPU memory from the renderer's first session on.
+        //
         // It is an offline tool: spend samples. Measured on an RTX 4060 laptop
         // at 640x400 with 6 bounces, 528 samples per pixel took 0.5 s. One
         // dispatch traces samplesPerFrame paths per pixel and must stay well
