@@ -208,6 +208,7 @@ runs standalone too.
 | --- | --- |
 | [`examples/warp_hull_sculpt.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_hull_sculpt.py) | Differentiable hull sculpting: gradient descent designs a hull, live in the water. |
 | [`examples/lidar_sculpt.py`](https://github.com/markaren/threepp/blob/master/python/examples/lidar_sculpt.py) | Sculpting against a sensor: a body reshaped to hide from, or shout at, the engine's own LIDAR. |
+| [`examples/trajectoid.py`](https://github.com/markaren/threepp/blob/master/python/examples/trajectoid.py) | Draw a line and get the solid that rolls along it down a tilted table ([trajectoids](https://doi.org/10.1038/s41586-023-06306-y)), with PhysX rolling it and the distance from the line measured. Needs a PhysX build; Vulkan or GL. |
 
 **Probes** — instruments, not demos: each answers one question and prints (or
 writes) the answer. They live in [`examples/probes/`](https://github.com/markaren/threepp/blob/master/python/examples/probes) with
