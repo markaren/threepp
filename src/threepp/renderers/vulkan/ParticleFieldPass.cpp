@@ -316,14 +316,14 @@ ParticleFieldPass::~ParticleFieldPass() {
     if (convertDsLayout_)   vkDestroyDescriptorSetLayout(d, convertDsLayout_, nullptr);
 }
 
-void ParticleFieldPass::retireOrDestroy(Buffer& b) {
+void ParticleFieldPass::retire(Buffer& b) {
 
     if (b.handle == VK_NULL_HANDLE) return;
     retireFn_(std::move(b));
     b = Buffer{};
 }
 
-void ParticleFieldPass::retireOrDestroy(Image2D& img) {
+void ParticleFieldPass::retire(Image2D& img) {
 
     if (img.image == VK_NULL_HANDLE) return;
     retireImageFn_(std::move(img));
@@ -588,7 +588,7 @@ void ParticleFieldPass::ensureTransCapacity(std::uint32_t count) {
     if (want <= transCapacity_ && transBufs_[0].handle != VK_NULL_HANDLE) return;
 
     const std::uint32_t newCap = std::max(want, transCapacity_ * 2u);
-    for (auto& b : transBufs_) retireOrDestroy(b);
+    for (auto& b : transBufs_) retire(b);
     for (auto& b : transBufs_) {
         b = createBuffer(ctx_.allocator(), ctx_.device(),
                          VkDeviceSize(newCap) * sizeof(std::uint32_t),
@@ -841,7 +841,7 @@ void ParticleFieldPass::ensureDescCapacity(std::uint32_t frame, std::uint32_t co
     const std::uint32_t newCap = std::max(want, descCapacity_ * 2u);
     // Grow EVERY slot, not just this one: the capacity is shared bookkeeping and
     // a half-grown ring would silently under-run the other frame next time.
-    for (auto& b : descBufs_) retireOrDestroy(b);
+    for (auto& b : descBufs_) retire(b);
     for (auto& b : descBufs_) {
         b = createBuffer(ctx_.allocator(), ctx_.device(),
                          VkDeviceSize(newCap) * sizeof(FieldDescGpu),
@@ -861,7 +861,7 @@ void ParticleFieldPass::ensureBbParamCapacity(std::uint32_t frame, std::uint32_t
     if (want <= bbParamCapacity_ && bbParamBufs_[frame].handle != VK_NULL_HANDLE) return;
 
     const std::uint32_t newCap = std::max(want, bbParamCapacity_ * 2u);
-    for (auto& b : bbParamBufs_) retireOrDestroy(b);
+    for (auto& b : bbParamBufs_) retire(b);
     for (auto& b : bbParamBufs_) {
         b = createBuffer(ctx_.allocator(), ctx_.device(),
                          VkDeviceSize(newCap) * sizeof(BillboardParamsGpu),
@@ -879,7 +879,7 @@ void ParticleFieldPass::ensureAuxCapacity(std::uint32_t frame, std::uint32_t cou
     if (want <= auxCapacity_ && auxBufs_[frame].handle != VK_NULL_HANDLE) return;
 
     const std::uint32_t newCap = std::max(want, auxCapacity_ * 2u);
-    for (auto& b : auxBufs_) retireOrDestroy(b);
+    for (auto& b : auxBufs_) retire(b);
     for (auto& b : auxBufs_) {
         b = createBuffer(ctx_.allocator(), ctx_.device(),
                          VkDeviceSize(newCap) * sizeof(EmitAuxGpu),
@@ -1482,7 +1482,7 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 // Resolution is the only thing that changes the ALLOCATION; the
                 // centre and extent are a transform on the same texels.
                 if (st.heightRes != res) {
-                    for (auto& b : st.heights) retireOrDestroy(b);
+                    for (auto& b : st.heights) retire(b);
                     for (auto& b : st.heights) {
                         b = createBuffer(ctx_.allocator(), ctx_.device(),
                                          VkDeviceSize(res) * VkDeviceSize(res) *
@@ -2011,15 +2011,15 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
         const bool absent = st.lastSeenSerial != serial;
         const bool dead = st.ownerTracked ? st.owner.expired() : absent;
         if (absent && dead) {
-            for (auto& b : st.positions) retireOrDestroy(b);
-            retireOrDestroy(st.devPositions);
-            retireOrDestroy(st.devPrevPositions);
-            for (auto& b : st.counts) retireOrDestroy(b);
-            for (auto& b : st.indirect) retireOrDestroy(b);
-            for (auto& b : st.bbIndirect) retireOrDestroy(b);
-            for (auto& b : st.heights) retireOrDestroy(b);
-            retireOrDestroy(st.orientations);
-            for (auto& b : st.attributes) retireOrDestroy(b);
+            for (auto& b : st.positions) retire(b);
+            retire(st.devPositions);
+            retire(st.devPrevPositions);
+            for (auto& b : st.counts) retire(b);
+            for (auto& b : st.indirect) retire(b);
+            for (auto& b : st.bbIndirect) retire(b);
+            for (auto& b : st.heights) retire(b);
+            retire(st.orientations);
+            for (auto& b : st.attributes) retire(b);
             // The exported allocation cannot go through the renderer's retire
             // queue (that takes Buffers; this one is outside VMA), so it takes
             // the same rule by hand. The application's CUDA import of it is the
@@ -2053,8 +2053,8 @@ void ParticleFieldPass::prepareFrame(std::uint64_t serial, std::uint32_t frame,
                 st.marchSet = VK_NULL_HANDLE;
             }
             if (st.smoke) smokeRetire_.push_back({std::move(st.smoke), serial});
-            retireOrDestroy(st.density);
-            retireOrDestroy(st.densityLin);
+            retire(st.density);
+            retire(st.densityLin);
             it = states_.erase(it);
         } else {
             ++it;

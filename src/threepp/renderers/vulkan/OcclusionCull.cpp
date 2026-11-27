@@ -179,13 +179,11 @@ namespace threepp::vulkan {
 
     void OcclusionCull::retireBuffer(Buffer& b) {
         if (b.handle == VK_NULL_HANDLE) return;
-        if (retireFn_) {
-            // Deferred: the old handle may still be read by a sibling frame in
-            // flight (these buffers are single, not per-fif). The retire queue
-            // frees it once its last referencing frame's fence has signaled.
-            // retireFn_ zeroes b so the reallocation below can't double-free.
-            retireFn_(std::move(b));
-        }
+        // Deferred: the old handle may still be read by a sibling frame in
+        // flight (these buffers are single, not per-fif). The retire queue
+        // frees it once its last referencing frame's fence has signaled.
+        // retireFn_ zeroes b so the reallocation below can't double-free.
+        retireFn_(std::move(b));
     }
 
     bool OcclusionCull::ensureCapacity(uint32_t frame, uint32_t drawCount, uint32_t metaCount, uint32_t bitDomain) {

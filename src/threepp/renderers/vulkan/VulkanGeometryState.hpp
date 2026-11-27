@@ -876,8 +876,9 @@ namespace threepp::vulkan::impl {
         // attribute), else 0: unorm8x4 per vertex under kGeomFlagPackedColor,
         // tight float xyz otherwise. Read at a ray hit by the path tracer
         // (path_trace.comp), which shades the hit's albedo the way gbuffer.frag
-        // shades the raster's. After `flags` so every word offset the shaders
-        // index by (kGeomDescColorWord, kGeomDescFlagsWord) stays where it was.
+        // shades the raster's. Last, after `flags`, so the word offsets the
+        // shaders index by (kGeomDescColorWord, kGeomDescFlagsWord) do not
+        // depend on it.
         VkDeviceAddress colorAddress;
     };
 

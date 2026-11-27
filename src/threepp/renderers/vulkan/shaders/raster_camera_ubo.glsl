@@ -1,8 +1,8 @@
 // The raster-side camera block: what the G-buffer vertex and fragment
 // stages, the overlay depth pass, the particle-field G-buffer pass and the
 // occlusion cull read. Mirrors RasterCameraData in VulkanViewContext.hpp,
-// filled by uploadRasterCameraUbo: three mat4, then four vec4; std140, 256
-// bytes. This is the ONE declaration (until 2026-10-10 six shaders carried
+// filled by uploadRasterCameraUbo: three mat4, then five 16-byte members;
+// std140, 272 bytes. This is the ONE declaration (until 2026-10-10 six shaders carried
 // their own copies).
 //
 // Set, binding and instance name default to set 0, binding 0, `cam`. A

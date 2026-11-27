@@ -1241,8 +1241,8 @@ namespace threepp::vulkan {
         // is what every caller checks before recording a traversal.
         bool   ensureTlasSet();
         void   destroyState(State& st);
-        void   retireOrDestroy(Buffer& b);
-        void   retireOrDestroy(Image2D& img);
+        void   retire(Buffer& b);
+        void   retire(Image2D& img);
         void   ensureEmitPipeline();
         void   ensureDensityPipeline();
         bool   ensureSmokePipelines();
