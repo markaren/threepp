@@ -23,9 +23,11 @@ if (THREEPP_WITH_USD)
     add_test_executable(USDLoader_test)
 endif ()
 # Every XacroUr case needs a Universal_Robots_ROS2_Description clone to expand
-# (THREEPP_UR_DESCRIPTION). Without one Catch2 skips them all and exits 4, which is a
-# ctest skip, not a failure.
-set_tests_properties(XacroUr_test SogLoader_test PROPERTIES SKIP_RETURN_CODE 4)
+# (THREEPP_UR_DESCRIPTION). Without one each case skips with this message, which is a
+# ctest skip, not a failure. Not SKIP_RETURN_CODE 4: Catch2 3.4 exits 4 when every case
+# skipped, but also when exactly four assertions failed.
+set_tests_properties(XacroUr_test PROPERTIES
+        SKIP_REGULAR_EXPRESSION "set THREEPP_UR_DESCRIPTION to a Universal_Robots_ROS2_Description clone")
 
 add_subdirectory(svg)
 
