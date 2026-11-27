@@ -146,10 +146,9 @@ namespace threepp::vulkan::impl {
         // Procedural direction-space star field on deferred sky pixels (0 = off).
         float deferredStarIntensity_ = 0.f;
 
-        // ReSTIR DI master toggle. When false, chit's primary RIS branch is
-        // bypassed and the legacy per-light NEE classic loops run instead
-        // (same pattern as bounces). Forwarded to the deferred shade via
-        // pc.motionFlags bit 4 each frame.
+        // ReSTIR DI master toggle. When false, the deferred shade skips its
+        // emissive-triangle RIS (restirEmissiveDI). Forwarded each frame as the
+        // shade's push-constant flags bit 3 (DeferredShade::shadePush).
         bool restirDIEnabled_ = true;
     };
 

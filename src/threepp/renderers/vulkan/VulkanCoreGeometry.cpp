@@ -863,11 +863,11 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
                 blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
                 blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
                 blasGeom.geometry.triangles = triData;
-                // No OPAQUE flag — that would suppress any-hit invocation per
-                // geometry regardless of the ray flags, breaking alpha-test. The
-                // any-hit shader short-circuits cheaply for materials with
-                // alphaCutoff <= 0, so the cost on truly opaque meshes is one
-                // buffer read + compare per hit candidate.
+                // No OPAQUE flag — that would commit every triangle without a
+                // candidate test whatever the ray flags, and the shadow rays'
+                // candidate test (shadowOccludes) is what alpha-tests cutouts. It
+                // returns early for materials without an alpha cutoff, so the cost
+                // on truly opaque meshes is one buffer read + compare per candidate.
                 blasGeom.flags = 0;
 
                 VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
@@ -1045,7 +1045,7 @@ std::unique_ptr<VulkanRenderer::Impl::BlasRecord> VulkanRenderer::Impl::finishBl
             // scratch above were sized for FULL capacity (the size query used
             // primitiveCount), which the spec allows to be built with any
             // smaller count — so only [0, start+count) is built. NOT the exact
-            // [start, start+count) sub-span: the chit/ray-query fetches resolve
+            // [start, start+count) sub-span: the ray-query hit fetches resolve
             // gl_PrimitiveID against the BUFFER BASE (GeometryDesc carries no
             // offset), so a range with firstVertex/primitiveOffset would shade
             // the wrong vertices. start is 0 in practice (over-allocated
@@ -1351,9 +1351,9 @@ bool VulkanRenderer::Impl::buildLodLevelFor(BlasRecord& rec,
             blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
             blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
             blasGeom.geometry.triangles = triData;
-            // Same any-hit-visible flags as LOD0 (0, not OPAQUE) — a
-            // simplified level of an alpha-tested surface must still run
-            // the any-hit alpha cutout, not just its opaque triangles.
+            // Same flags as LOD0 (0, not OPAQUE) — a simplified level of an
+            // alpha-tested surface must still get the shadow rays' candidate
+            // alpha test, not just its opaque triangles.
             blasGeom.flags = 0;
 
             VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
@@ -2438,8 +2438,8 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
             }
             if (liveOps.empty()) return;
 
-            // Phase B — snapshot current vertex into prevVertex for the chit's
-            // per-vertex motion vector. Recorded into one shared cmdbuf; submit
+            // Phase B — snapshot current vertex into prevVertex for the raster
+            // motion vectors (DrawInfo::prevPosAddr). Recorded into one shared cmdbuf; submit
             // + wait once. Must run before the host memcpy of new positions
             // below or we'd snapshot the new state, not last frame's.
             {
@@ -3021,7 +3021,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
 
             // Phase 5 — publish the copies: the BLAS refit reads vertex as
             // build input, the raster prepass reads vertex/normal/prevVertex
-            // as vertex attributes, chit/probe fetch them as storage.
+            // as vertex attributes, the ray-query hits (shade, probes) fetch them as storage.
             {
                 VkMemoryBarrier2 mb{};
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -3326,7 +3326,7 @@ void VulkanRenderer::Impl::refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) 
             VkCommandBuffer cb = beginOneShot();
             // Motion-vector prev-pose: buildBlasFor seeded prevVertex with the
             // REST (unmorphed) positions, but we just overwrote vertex with the
-            // BLENDED positions. Left as-is, the gbuffer VS / chit read
+            // BLENDED positions. Left as-is, the G-buffer vertex stage reads
             // prevPos = rest while pos = blended → a permanent rest→blend motion
             // vector on an otherwise static morph, so TAA reprojects history
             // from the wrong pixel every frame and the surface shakes. Sync
@@ -4512,8 +4512,8 @@ void VulkanRenderer::Impl::refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMesh
 namespace {
 
         // The motion-vector base of a grass field: blas->vertex (the pose the
-        // field shows) -> blas->prevVertex, which the G-buffer vertex stage and
-        // the closest-hit reprojection read as the previous pose. Without it
+        // field shows) -> blas->prevVertex, which the G-buffer vertex stage
+        // reads as the previous pose. Without it
         // prevVertex kept the pose of the field's BLAS build forever, so a
         // swaying blade reported its offset from that pose, not its motion
         // since the last frame: a field frozen in time read up to a pixel of
@@ -5553,7 +5553,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             if (!blas) return nullptr;
             blas->liveCheck = dm.geometry();
 
-            // FFT-displaced ocean mesh: mark it so the chit / deferred passes
+            // FFT-displaced ocean mesh: mark it so the deferred passes
             // apply the thin-shell water shading (it used to be a zero-filled
             // per-vertex foam buffer, read solely for its non-null address —
             // the contents were dead).

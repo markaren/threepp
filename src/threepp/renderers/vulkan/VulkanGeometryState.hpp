@@ -118,10 +118,10 @@ namespace threepp::vulkan::impl {
 
     // Per-geometry BLAS + the buffers that back its build inputs. Vertex /
     // index / normal / uv buffers are kept alive past the build so the
-    // closest-hit shader can sample them via buffer-reference pointers.
-    // `uv.handle == VK_NULL_HANDLE` for geometries without a UV attribute;
-    // the matching GeometryDesc.uvAddress is then 0 and closest_hit treats
-    // the surface as untextured.
+    // ray-query hit fetches (hit_fetch.glsl) read them via buffer-reference
+    // pointers. `uv.handle == VK_NULL_HANDLE` for geometries without a UV
+    // attribute; the matching GeometryDesc.uvAddress is then 0 and a hit
+    // treats the surface as untextured.
     struct BlasRecord {
         VkAccelerationStructureKHR as = VK_NULL_HANDLE;
         Buffer storage;
@@ -310,7 +310,7 @@ namespace threepp::vulkan::impl {
         // rather than the soft-body swap's. `vertex` has seven consumers,
         // five of them by DEVICE ADDRESS (the bindless raster pull's
         // DrawInfo::posAddr, the BLAS build/refit input, GeometryDesc::
-        // vertexAddress in chit/ray-query/probe/lidar, the prev-frame
+        // vertexAddress in the ray-query hits and lidar's closest-hit, the prev-frame
         // fallbacks) — and createExternalBuffer allocates its dedicated
         // memory WITHOUT VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, so an
         // exported buffer can never carry one. Substituting the export FOR

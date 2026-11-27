@@ -88,7 +88,7 @@ namespace threepp::vulkan::impl {
         Image2D       rrSpecularAlbedo;
         Image2D       rrNormalRough;
         Image2D       rrHitDist;
-        Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
+        Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by the deferred shade + TAA)
         // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
         // an extra depth-only prepass (overlay_depth.vert) right after
         // the main G-buffer pass. The wireframe overlay reads it as a

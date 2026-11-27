@@ -1121,7 +1121,7 @@ namespace threepp::vulkan {
         // texture per wave, TAA-jitter-dependent → flicker). NOT implied by
         // descriptorIndexing above — it is a separate fine-grained feature bit.
         f12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-        f12.scalarBlockLayout = VK_TRUE;// closest-hit reads GeometryDesc[] / normals via scalar layout
+        f12.scalarBlockLayout = VK_TRUE;// GeometryDesc[] / MaterialDesc[] and the vertex streams are read with scalar layout
         f12.pNext = &f13;
 
         VkPhysicalDeviceAccelerationStructureFeaturesKHR fAS{};

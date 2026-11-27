@@ -698,7 +698,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         // Cutout (MASK) transparent texel committed: the budget confirmed it
         // (the ray is buried in a canopy), or a FORCE_OPAQUE instance skipped
         // the candidate test — sub-cutoff texels pass through (mirrors
-        // gbuffer.frag / shadow_anyhit). Without this a masked plane behind
+        // gbuffer.frag / shadowOccludes). Without this a masked plane behind
         // glass shaded fully opaque, painting its transparent regions as a
         // solid wall.
         if (hm.alphaCutoff > 0.0 &&

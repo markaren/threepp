@@ -12,9 +12,9 @@
 namespace threepp::vulkan::impl {
 
     struct EnvironmentState {
-        // Environment equirect (HDR float) used by the primary miss
-        // for backgrounds and by closest-hit for a single mirror-reflection
-        // IBL probe. Default is a 1×1 black dummy so descriptors are always
+        // Environment equirect (HDR float) that the deferred shade, the probe
+        // GI, the path tracer and the splats sample (VulkanCoreDescriptors.cpp
+        // hands it to each). Default is a 1×1 black dummy so descriptors are always
         // valid; replaced lazily when the scene's environment / background
         // texture is set or changed.
         Image2D envImage{};

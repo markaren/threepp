@@ -6373,7 +6373,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialDescOf(const Ma
                 d.normalTexIndex = -1;
                 d.normalScale[0] = 1.0f;
                 d.normalScale[1] = 1.0f;
-                d.alphaCutoff = 0.0f;// disabled by default; any-hit short-circuits on alphaCutoff <= 0
+                d.alphaCutoff = 0.0f;// disabled by default (0 = no alpha test)
                 d.transmission = 0.0f;// opaque by default
                 d.ior          = 1.5f;// glass-typical default; only consulted when transmission > 0
                 d.transmissionTexIndex = -1;

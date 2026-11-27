@@ -1062,8 +1062,6 @@ namespace threepp {
         // deferred shade → nothing would ever light the result buffer).
         void prepareParticleLighting();
 
-        // (currVPunjit_ / currViewUnjit_ / currProjUnjit_ moved to ViewContext.)
-
         // Definition moved to VulkanViewContext.hpp.
         using RasterCameraData = vulkan::impl::RasterCameraData;
         // (rasterCameraUbos, the prev-VP / prev-jitter / sky-reproject /
@@ -1471,8 +1469,6 @@ namespace threepp {
             }
             return false;
         }
-
-        // (cameraUbos moved to ViewContext.)
 
         // Hand a resource to the retire queue, stamped with this frame's serial.
         void retire(Buffer&& b)   { retireQueue_.retire(std::move(b), frameSerial_); }
@@ -1925,7 +1921,7 @@ namespace threepp {
         using GeomRefreshOp = vulkan::impl::GeomRefreshOp;
 
         // Batched per-frame BLAS refresh. For each op:
-        //   (1) snapshot rec.vertex → rec.prevVertex (chit motion-vector channel)
+        //   (1) snapshot rec.vertex → rec.prevVertex (the raster motion vectors' previous pose)
         //   (2) host memcpy of new positions/normals/uv/index into rec.vertex etc.
         //   (3) refit rec.as in place (MODE_UPDATE, periodic MODE_BUILD every
         //       kBlasFullRebuildInterval frames to keep the BVH balanced)
@@ -2749,7 +2745,7 @@ namespace threepp {
         // (ocean, most glass viewed from outside) render correctly under
         // BACK culling. Camera-inside-glass cases (windshield from cabin)
         // are an artist content concern: mark the glass as Side::Double if
-        // you need interior viewing — chit's BVH path doesn't cull, but the
+        // you need interior viewing — the ray queries don't cull, but the
         // raster prepass does, so unmarked single-sided glass shows the
         // surface BEHIND it in the gbuffer.
         void cacheCullFlags();
@@ -3501,17 +3497,6 @@ namespace threepp {
         // descriptor for materials whose albedoTexIndex stays at -1 (the
         // shader still indexes safely; the multiply by 1.0 is a no-op).
         void createDefaultMaterialTexture();
-
-        // GPU skinning pipeline moved into vulkan/SkinningPipeline.{hpp,cpp}.
-        // Renderer holds a unique_ptr `skinning_` and delegates allocation +
-        // dispatch through it.
-
-        // Water displace pipeline moved into vulkan/WaterDisplacePipeline.{hpp,cpp}.
-        // Renderer holds a unique_ptr `waterDisplace_` and delegates allocation
-        // + dispatch through it.
-
-        // createPmremEnvImage moved into vulkan/EnvPrefilter.{hpp,cpp}.
-        // Call envPrefilter_->buildPmrem(w, h, pixels, byteSize) instead.
 
         static VkSamplerAddressMode wrapToVk(TextureWrapping w) {
             switch (w) {

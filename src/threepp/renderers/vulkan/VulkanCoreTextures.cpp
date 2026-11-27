@@ -543,7 +543,7 @@ void VulkanRenderer::Impl::createOceanFoamDummy_() {
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
                     "oceanFoamDummy (1x1, binding 44 placeholder)");
             // Transition to GENERAL so the binding matches the foam image's
-            // layout (compute leaves it in GENERAL; chit reads from there).
+            // layout (compute leaves it in GENERAL; the deferred shade samples it there).
             {
                 VkCommandBuffer cb = beginOneShot();
                 VkImageMemoryBarrier imb{};

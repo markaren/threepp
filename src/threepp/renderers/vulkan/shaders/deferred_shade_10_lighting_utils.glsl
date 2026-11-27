@@ -619,8 +619,8 @@ vec3 glassFresnel(float r0, float c, float iridescence, float iridescenceIOR, fl
     return F;
 }
 
-// Does a shadow-ray candidate hit actually OCCLUDE? Policy mirrors the RT
-// shadow_anyhit.rahit so the deferred and ray-traced backends agree:
+// Does a shadow-ray candidate hit actually OCCLUDE? (path_trace.comp's
+// shadowOccludes keeps the same policy, without the emitter rule):
 //   transmission > 0 (glass / alpha-blend transparency / additive) → never blocks
 //   cutoff < 0 (blend)  → never blocks (e.g. textured decals — light passes through)
 //   cutoff > 0 (cutout) → occludes iff alpha ≥ cutoff (foliage, grids)
@@ -639,12 +639,12 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary, out bool cutoutMiss) {
     if (max(max(em.r, em.g), em.b) >= 1.0) return false;
     // Transmissive surfaces — glass, alpha-blend transparency (host encodes
     // opacity<1 as transmission=1-opacity, ior=1) and additive blends
-    // (transmission>1) — do NOT cast a solid shadow. Mirrors shadow_anyhit.rahit,
-    // which ignores these candidate hits so direct light passes through. Without
+    // (transmission>1) — do NOT cast a solid shadow: these candidate hits are
+    // ignored, so direct light passes through. Without
     // this the deferred path paints opaque shadows behind transparent materials.
     if (m.transmission > 0.0) return false;
     // Alpha-blend (host sets alphaCutoff < 0: transparent=true + texture, opacity=1).
-    // Like shadow_anyhit.rahit's isBlend branch these do NOT block light, so blend
+    // These do NOT block light either, so blend
     // decals (bullet-scorch splats etc.) stop painting a hard shadow halo that the
     // GL backend never produces — decals default to castShadow=false there.
     if (m.alphaCutoff < 0.0) return false;
