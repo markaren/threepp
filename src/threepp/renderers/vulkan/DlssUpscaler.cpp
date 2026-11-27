@@ -70,34 +70,6 @@ namespace threepp::vulkan {
             return slash == std::wstring::npos ? L"." : p.substr(0, slash);
         }
 
-        // Once-per-frame image layout transition for the NGX borrow/restore.
-        // Broad stage/access masks (one barrier per resource per frame) — same
-        // shape as FsrUpscaler's. Restores use UNDEFINED as the old layout: the
-        // input contents are not needed after the upscale.
-        void transition(VkCommandBuffer cb, VkImage image,
-                        VkImageLayout oldLayout, VkImageLayout newLayout,
-                        VkImageAspectFlags aspect) {
-            VkImageMemoryBarrier2 b{};
-            b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            b.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
-            b.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.oldLayout     = oldLayout;
-            b.newLayout     = newLayout;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image         = image;
-            b.subresourceRange.aspectMask = aspect;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = 1;
-            VkDependencyInfo dep{};
-            dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers    = &b;
-            vkCmdPipelineBarrier2(cb, &dep);
-        }
-
         NVSDK_NGX_Resource_VK wrapView(VkImageView view, VkImage image, VkFormat format,
                                        uint32_t width, uint32_t height,
                                        VkImageAspectFlags aspect, bool readWrite) {
@@ -398,8 +370,8 @@ namespace threepp::vulkan {
             vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
 
             // Regenerated in full every frame → UNDEFINED old layout (discard).
-            transition(in.cmd, maskImg, VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, maskImg, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
             vkCmdBindPipeline(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, reactivePipe_);
             vkCmdBindDescriptorSets(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                                     reactivePipeLayout_, 0, 1, &reactiveSets_[in.frame], 0, nullptr);
@@ -408,19 +380,19 @@ namespace threepp::vulkan {
                                0, sizeof(pcm), &pcm);
             vkCmdDispatch(in.cmd, (in.renderWidth + 7u) / 8u, (in.renderHeight + 7u) / 8u, 1u);
             // Compute write (GENERAL) → DLSS sampled read.
-            transition(in.cmd, maskImg, VK_IMAGE_LAYOUT_GENERAL,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, maskImg, VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         }
 
         // Borrow the inputs into NGX's expected sampled-read layout. The output
         // (TAA history slot) already lives in GENERAL — NGX's UAV layout.
-        transition(in.cmd, in.colorImage, in.colorLayout,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-        transition(in.cmd, in.depthImage, in.depthLayout,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+        broadTransition(in.cmd, in.colorImage, in.colorLayout,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        broadTransition(in.cmd, in.depthImage, in.depthLayout,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
         if (in.motionLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            transition(in.cmd, in.motionImage, in.motionLayout,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, in.motionImage, in.motionLayout,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         }
         // Ray Reconstruction replaces the SR evaluate this frame when the
         // caller asks for it and its feature is live and not failing.
@@ -432,8 +404,8 @@ namespace threepp::vulkan {
         // into the sampled-read layout like the colour, handed back below.
         if (rr) {
             for (const auto* gd : guides) {
-                transition(in.cmd, gd->image, VK_IMAGE_LAYOUT_GENERAL,
-                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+                broadTransition(in.cmd, gd->image, VK_IMAGE_LAYOUT_GENERAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
             }
         }
 
@@ -461,8 +433,8 @@ namespace threepp::vulkan {
                                     maskImg != VK_NULL_HANDLE ? &mask : nullptr);
             // UNDEFINED old layout: the next frame's shade rewrites them whole.
             for (const auto* gd : guides) {
-                transition(in.cmd, gd->image, VK_IMAGE_LAYOUT_UNDEFINED,
-                           VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
+                broadTransition(in.cmd, gd->image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
             }
             restoreInputs(in);
             return;
@@ -509,13 +481,13 @@ namespace threepp::vulkan {
     void DlssUpscaler::restoreInputs(const DispatchInputs& in) {
         // Restore the borrowed inputs to their steady-state layouts. UNDEFINED
         // old layout: their contents aren't needed after the upscale.
-        transition(in.cmd, in.colorImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                   in.colorLayout, VK_IMAGE_ASPECT_COLOR_BIT);
-        transition(in.cmd, in.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                   in.depthLayout, VK_IMAGE_ASPECT_DEPTH_BIT);
+        broadTransition(in.cmd, in.colorImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                        in.colorLayout, VK_IMAGE_ASPECT_COLOR_BIT);
+        broadTransition(in.cmd, in.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                        in.depthLayout, VK_IMAGE_ASPECT_DEPTH_BIT);
         if (in.motionLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            transition(in.cmd, in.motionImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                       in.motionLayout, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, in.motionImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                            in.motionLayout, VK_IMAGE_ASPECT_COLOR_BIT);
         }
         // The output is left in GENERAL with the upscale's writes; the caller
         // barriers it before PostComposite reads it.

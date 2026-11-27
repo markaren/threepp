@@ -114,36 +114,6 @@ namespace threepp::vulkan {
             return ffxApiGetResourceVK(reinterpret_cast<void*>(image), desc, state);
         }
 
-        // Once-per-frame image layout transition for the FSR borrow/restore. Broad
-        // stage/access masks (correctness over micro-optimisation — this is a
-        // single barrier per resource per frame). Restores use UNDEFINED as the
-        // old layout: the input contents are not needed after the upscale (colour
-        // and depth are regenerated next frame), so we don't depend on whatever
-        // working layout the ffx backend left them in.
-        void transition(VkCommandBuffer cb, VkImage image,
-                        VkImageLayout oldLayout, VkImageLayout newLayout,
-                        VkImageAspectFlags aspect) {
-            VkImageMemoryBarrier2 b{};
-            b.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            b.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
-            b.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.oldLayout     = oldLayout;
-            b.newLayout     = newLayout;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image         = image;
-            b.subresourceRange.aspectMask = aspect;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = 1;
-            VkDependencyInfo dep{};
-            dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers    = &b;
-            vkCmdPipelineBarrier2(cb, &dep);
-        }
-
     }// namespace
 
     FsrUpscaler::FsrUpscaler(VulkanContext& ctx, uint32_t framesInFlight)
@@ -280,8 +250,8 @@ namespace threepp::vulkan {
             vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
 
             // Regenerated in full every frame → UNDEFINED old layout (discard).
-            transition(in.cmd, reactiveImg, VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, reactiveImg, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT);
             vkCmdBindPipeline(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, reactivePipe_);
             vkCmdBindDescriptorSets(in.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                                     reactivePipeLayout_, 0, 1, &reactiveSets_[in.frame], 0, nullptr);
@@ -290,19 +260,19 @@ namespace threepp::vulkan {
                                0, sizeof(pc), &pc);
             vkCmdDispatch(in.cmd, (in.renderWidth + 7u) / 8u, (in.renderHeight + 7u) / 8u, 1u);
             // Compute write (GENERAL) → FSR read (SHADER_READ; declared COMPUTE_READ).
-            transition(in.cmd, reactiveImg, VK_IMAGE_LAYOUT_GENERAL,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, reactiveImg, VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         }
 
         // Borrow the inputs into the layout the ffx backend expects for a
         // read state (SHADER_READ_ONLY_OPTIMAL). Motion is already there.
-        transition(in.cmd, in.colorImage, in.colorLayout,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
-        transition(in.cmd, in.depthImage, in.depthLayout,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+        broadTransition(in.cmd, in.colorImage, in.colorLayout,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+        broadTransition(in.cmd, in.depthImage, in.depthLayout,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
         if (in.motionLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            transition(in.cmd, in.motionImage, in.motionLayout,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, in.motionImage, in.motionLayout,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
         }
 
         ffxDispatchDescUpscale d{};
@@ -360,14 +330,14 @@ namespace threepp::vulkan {
         if (g_ffx.Dispatch) g_ffx.Dispatch(&context_, &d.header);
 
         // Restore the borrowed inputs to their steady-state layouts. UNDEFINED old
-        // layout: their contents aren't needed after the upscale (see transition()).
-        transition(in.cmd, in.colorImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                   in.colorLayout, VK_IMAGE_ASPECT_COLOR_BIT);
-        transition(in.cmd, in.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                   in.depthLayout, VK_IMAGE_ASPECT_DEPTH_BIT);
+        // layout: their contents aren't needed after the upscale (see broadTransition).
+        broadTransition(in.cmd, in.colorImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                        in.colorLayout, VK_IMAGE_ASPECT_COLOR_BIT);
+        broadTransition(in.cmd, in.depthImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                        in.depthLayout, VK_IMAGE_ASPECT_DEPTH_BIT);
         if (in.motionLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            transition(in.cmd, in.motionImage, VK_IMAGE_LAYOUT_UNDEFINED,
-                       in.motionLayout, VK_IMAGE_ASPECT_COLOR_BIT);
+            broadTransition(in.cmd, in.motionImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                            in.motionLayout, VK_IMAGE_ASPECT_COLOR_BIT);
         }
         // The output is left in GENERAL with the upscale's writes; the caller
         // barriers it before PostComposite reads it (threepp's existing pattern

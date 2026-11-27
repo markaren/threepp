@@ -225,6 +225,17 @@ namespace threepp::vulkan {
     using RetireBufferFn = std::function<void(Buffer&&)>;
     using RetireImageFn  = std::function<void(Image2D&&)>;
 
+    // Moves `image` (one mip, one layer) from oldLayout to newLayout behind an
+    // all-commands, all-memory barrier: the upscalers' once-per-frame borrow
+    // and restore of their inputs around a vendor SDK (NGX, FidelityFX) that
+    // records its own work in between. One barrier per resource per frame, so
+    // broad beats exact. A restore passes UNDEFINED as oldLayout: the inputs'
+    // contents are not needed after the upscale (colour and depth are
+    // regenerated next frame), so nothing depends on whatever working layout
+    // the SDK left them in.
+    void broadTransition(VkCommandBuffer cb, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                         VkImageAspectFlags aspect);
+
     // vkCreateImageView, registering the view's image and subresource range
     // for the render graph's descriptor-derived declarations (see
     // DescriptorShadow.hpp). Every view the backend creates goes through this.
