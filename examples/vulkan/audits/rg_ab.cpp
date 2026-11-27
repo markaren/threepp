@@ -130,6 +130,11 @@
 //               history). Suspected: the SplatPass tile-expansion budget grows
 //               from a GPU readback, so which early frame is truncated depends
 //               on timing.
+//   fields_views  the same mode: one fixed second state (195 final.rgb bytes
+//               at 1/255, 243 view2.rgb bytes at <= 12/255). A change that
+//               moves shader timing can land in it most runs. RG_SERIALIZE=1
+//               (the device idles every frame) takes the timing out of both
+//               fields scenes: the two exes must then match byte for byte.
 //   deform      diverges run to run under CPU load (other processes busy);
 //               unloaded runs are bit-exact.
 //   room_fx     the first runs of a newly linked rg_ab.exe: final.rgb only
