@@ -1,6 +1,7 @@
 
 #include "threepp/loaders/EXRLoader.hpp"
 
+#include "threepp/extras/DataUtils.hpp"
 #include "threepp/loaders/HdrTexture.hpp"
 #include "threepp/loaders/exr/PizDecode.hpp"
 
@@ -106,44 +107,12 @@ namespace {
         int32_t ySampling{1};
     };
 
-    float halfToFloat(uint16_t h) {
-
-        const uint32_t sign = static_cast<uint32_t>(h >> 15) & 1u;
-        int32_t exp = (h >> 10) & 0x1f;
-        uint32_t mant = h & 0x3ffu;
-
-        uint32_t bits;
-        if (exp == 0) {
-            if (mant == 0) {
-                bits = sign << 31;// ±0
-            } else {
-                // Subnormal half, normal float: shift the mantissa left until the
-                // implicit leading 1 appears and pay for each shift in the exponent.
-                while ((mant & 0x400u) == 0) {
-                    mant <<= 1;
-                    --exp;
-                }
-                ++exp;
-                mant &= ~0x400u;
-                bits = (sign << 31) | (static_cast<uint32_t>(exp + (127 - 15)) << 23) | (mant << 13);
-            }
-        } else if (exp == 0x1f) {
-            bits = (sign << 31) | 0x7f800000u | (mant << 13);// Inf / NaN
-        } else {
-            bits = (sign << 31) | (static_cast<uint32_t>(exp + (127 - 15)) << 23) | (mant << 13);
-        }
-
-        float f;
-        std::memcpy(&f, &bits, sizeof f);
-        return f;
-    }
-
     float sampleToFloat(const unsigned char* p, PixelType t) {
 
         if (t == PixelType::Half) {
             uint16_t h;
             std::memcpy(&h, p, sizeof h);
-            return halfToFloat(h);
+            return DataUtils::fromHalfFloat(h);
         }
         if (t == PixelType::Float) {
             float f;
