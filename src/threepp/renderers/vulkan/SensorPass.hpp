@@ -57,7 +57,7 @@ namespace threepp::vulkan {
             poolView_ = view;
         }
 
-        SensorPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight);
+        SensorPass(VulkanContext& ctx, uint32_t framesInFlight);
         ~SensorPass();
         SensorPass(const SensorPass&) = delete;
         SensorPass& operator=(const SensorPass&) = delete;
@@ -120,7 +120,6 @@ namespace threepp::vulkan {
         TransientPool* pool_     = nullptr;// frame-local scratch (setTransientPool)
         uint32_t       poolView_ = 0;
         VulkanContext& ctx_;
-        VkCommandPool  cmdPool_;
         uint32_t       framesInFlight_;
 
         VkSampler sampler_ = VK_NULL_HANDLE;// LINEAR clamp — the warp resamples

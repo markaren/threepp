@@ -343,7 +343,6 @@ namespace threepp::vulkan {
 
     void GbufResolve::recordDepthResolve(VkCommandBuffer cb, uint32_t frame,
                                          uint32_t width, uint32_t height,
-                                         VkImageView /*depthMSView*/, VkImageView /*idsResolvedView*/,
                                          VkImageView depthResolvedView) {
         VkRenderingAttachmentInfo depthAtt{};
         depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;

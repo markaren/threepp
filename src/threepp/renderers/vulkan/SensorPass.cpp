@@ -48,8 +48,8 @@ namespace threepp::vulkan {
 
     }// namespace
 
-    SensorPass::SensorPass(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight)
-        : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
+    SensorPass::SensorPass(VulkanContext& ctx, uint32_t framesInFlight)
+        : ctx_(ctx), framesInFlight_(framesInFlight) {
         snapshot_.resize(framesInFlight_);
         boundDst_.assign(framesInFlight_, 0);
         boundFaces_.assign(framesInFlight_, {});

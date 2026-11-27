@@ -364,20 +364,18 @@ namespace threepp::vulkan {
 
     void ProbeGI::setGridBounds(const float aabbMin[3], const float aabbMax[3]) {
         uint32_t dims[3] = {kDimX, kDimY, kDimZ};
-        if (fitShape_ > 0.f) {
-            // Near-cubic cells within the same probe budget (the stores and the
-            // update cost are unchanged), no axis below 1/fitShape_ of its
-            // fixed-grid count: 1 is the fixed grid, 2 lets an axis give up
-            // half its probes, a large value is fully cubic. Only the scene fit
-            // uses these; the cascades below keep kDim*.
-            float ext[3];
-            for (int a = 0; a < 3; ++a) ext[a] = std::max(aabbMax[a] - aabbMin[a], 0.f);
-            const uint32_t fixed[3] = {kDimX, kDimY, kDimZ};
-            uint32_t       minDims[3];
-            for (int a = 0; a < 3; ++a)
-                minDims[a] = static_cast<uint32_t>(std::ceil(static_cast<float>(fixed[a]) / std::max(fitShape_, 1.f)));
-            shapedDims(ext, kProbeCount, minDims, dims);
-        }
+        // Near-cubic cells within the same probe budget (the stores and the
+        // update cost are unchanged), no axis below 1/fitShape_ of its
+        // fixed-grid count: 1 is the fixed grid, 2 lets an axis give up
+        // half its probes, a large value is fully cubic. Only the scene fit
+        // uses these; the cascades below keep kDim*.
+        float ext[3];
+        for (int a = 0; a < 3; ++a) ext[a] = std::max(aabbMax[a] - aabbMin[a], 0.f);
+        const uint32_t fixed[3] = {kDimX, kDimY, kDimZ};
+        uint32_t       minDims[3];
+        for (int a = 0; a < 3; ++a)
+            minDims[a] = static_cast<uint32_t>(std::ceil(static_cast<float>(fixed[a]) / std::max(fitShape_, 1.f)));
+        shapedDims(ext, kProbeCount, minDims, dims);
         float newSpacing[3], newOrigin[3];
         for (int a = 0; a < 3; ++a) {
             // Cell-centered probes: spacing = extent/dims, first probe half a

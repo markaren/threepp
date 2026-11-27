@@ -78,9 +78,10 @@ namespace threepp::vulkan {
         // between, and needs its own depthResolved UNDEFINED/whatever ->
         // DEPTH_ATTACHMENT_OPTIMAL transition (caller's responsibility,
         // mirroring the overlay depth prepass pattern).
+        // The MS depth and the resolved ids are read through this frame's
+        // descriptor set (rewriteDescriptors), not passed here.
         void recordDepthResolve(VkCommandBuffer cb, uint32_t frame,
                                 uint32_t width, uint32_t height,
-                                VkImageView depthMSView, VkImageView idsResolvedView,
                                 VkImageView depthResolvedView);
 
     private:

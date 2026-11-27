@@ -168,7 +168,7 @@ VulkanRenderer::Impl::Impl(Canvas& c) : CoreState(c) {
             // Lens distortion + sensor noise, applied to the FINISHED frame at
             // the very end of recording (after the overlay pass — see
             // SensorPass.hpp). Allocates nothing until a lens or noise is set.
-            sensorPass_ = std::make_unique<vulkan::SensorPass>(*ctx, cmdPool, kFramesInFlight);
+            sensorPass_ = std::make_unique<vulkan::SensorPass>(*ctx, kFramesInFlight);
             sensorPass_->setTransientPool(transientPool_.get(), 0);
             vulkan::startupMark("sensor pass");
             // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so

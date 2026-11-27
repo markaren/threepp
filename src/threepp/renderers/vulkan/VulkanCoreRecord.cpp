@@ -671,8 +671,6 @@ void VulkanRenderer::Impl::recordGbufferMsaaResolve(VkCommandBuffer cb) {
                 vkCmdPipelineBarrier2(cb, &depDep);
 
                 gbufResolve_->recordDepthResolve(cb, currentFrame, resExt.width, resExt.height,
-                                                 view().rasterGbufs[currentFrame].depthMS.view,
-                                                 view().rasterGbufs[currentFrame].ids.view,
                                                  view().rasterGbufs[currentFrame].depth.view);
 
                 // DEPTH_ATTACHMENT_OPTIMAL -> DEPTH_STENCIL_READ_ONLY

@@ -314,7 +314,8 @@ namespace threepp::vulkan {
         float    gridSpacing_[3] = {1.f, 1.f, 1.f};
         bool     gridFitted_     = false;
         // Probes per axis and their product for the current layout. Cascades
-        // always use kDim*; the scene fit too unless fitShape_.
+        // always use kDim*; the scene fit shapes them within fitShape_ (1 = the
+        // fixed grid).
         uint32_t gridDims_[3]    = {kDimX, kDimY, kDimZ};
         uint32_t probeCount_     = kProbeCount;
         float    fitShape_       = kFitShapeDefault;// env THREEPP_VK_PROBE_FIT_SHAPE, 1 = fixed grid
