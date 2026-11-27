@@ -38,8 +38,7 @@ namespace rfdetr {
     };
 
     /// RF-DETR-Nano object detector on the Vulkan compute pipeline. Port of the
-    /// LWDETR / DINOv2-windowed-ViT model (rfdetr package). Same VkInfer harness
-    /// and most shaders as the RT-DETR port; the new piece is the windowed ViT
+    /// LWDETR / DINOv2-windowed-ViT model (rfdetr package): the windowed ViT
     /// backbone (patch-embed + CLS token + 12 transformer layers w/ LayerScale,
     /// 2x2 windowed attention with global layers {3,6,9}, no register tokens),
     /// the C2f projector (tap layers 3/6/9/final -> single P4), and a two-stage

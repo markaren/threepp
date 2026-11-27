@@ -50,7 +50,7 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     zero(dummy_.buffer);
 
-    tsEnabled_ = std::getenv("RTDETR_PROFILE") != nullptr;
+    tsEnabled_ = std::getenv("RFDETR_PROFILE") != nullptr;
     if (tsEnabled_) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(phys_, &props);

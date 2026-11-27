@@ -15,9 +15,9 @@ namespace rfdetr {
         ShapeMap  shapes;  ///< name → shape dims
     };
 
-    /// Reads the binary format emitted by scripts/export_rtdetr_weights.py.
+    /// Reads the binary format emitted by scripts/export_rfdetr_weights.py.
     /// Same format as the YoloV8 exporter (magic "YOLO"), re-parsed here to keep
-    /// the rtdetr example self-contained. Throws std::runtime_error on failure.
+    /// the rfdetr example self-contained. Throws std::runtime_error on failure.
     Weights parseWeightBinary(const std::string& path);
 
 }// namespace rfdetr

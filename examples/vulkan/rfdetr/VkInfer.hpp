@@ -157,7 +157,7 @@ namespace rfdetr {
                       uint32_t gx, uint32_t gy, uint32_t gz);
         void endFrame();// end + submit + wait
 
-        // GPU timestamp between dispatches (no-op unless RTDETR_PROFILE is set).
+        // GPU timestamp between dispatches (no-op unless RFDETR_PROFILE is set).
         // endFrame() prints per-mark GPU deltas, isolating GPU time from CPU
         // command-recording overhead.
         void markTimestamp(const char* label);
@@ -203,7 +203,7 @@ namespace rfdetr {
         VkTensor uploadStaging_;  // persistent host-visible upload scratch
         VkTensor readbackStaging_;// persistent host-cached readback scratch
 
-        // Profiling timestamps (enabled by RTDETR_PROFILE).
+        // Profiling timestamps (enabled by RFDETR_PROFILE).
         VkQueryPool tsPool_ = VK_NULL_HANDLE;
         float tsPeriodNs_ = 1.0f;
         bool tsEnabled_ = false;

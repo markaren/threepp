@@ -119,46 +119,6 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/reduce_splitk.comp"        kRfReduceSplitKSpv VARIANT_SUFFIX rfdetr)
     endif ()
 
-    add_example(NAME "vulkan_rtdetr_inference"
-            SOURCES vulkan_rtdetr_inference.cpp
-            rtdetr/RtDetrVk.cpp
-            rtdetr/VkInfer.cpp
-            rtdetr/WeightLoader.cpp)
-
-    if (TARGET vulkan_rtdetr_inference)
-        target_include_directories(vulkan_rtdetr_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-        target_link_libraries(vulkan_rtdetr_inference PRIVATE Vulkan::Vulkan)
-
-        # VARIANT_SUFFIX=rtdetr keeps the generated headers from colliding with
-        # the YOLO kernels that share a basename (conv2d/add/maxpool/concat/upsample).
-        set(_rt_sh "${CMAKE_CURRENT_SOURCE_DIR}/rtdetr/shaders")
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/conv2d.comp"   kRtConv2dSpv   VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/conv3x3.comp"  kRtConv3x3Spv  VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/conv1x1.comp"  kRtConv1x1Spv  VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/im2col.comp"   kRtIm2colSpv   VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/dwconv.comp"   kRtDwConvSpv   VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/maxpool.comp"  kRtMaxPoolSpv  VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/concat.comp"   kRtConcatSpv   VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/add.comp"      kRtAddSpv      VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/add_silu.comp" kRtAddSiluSpv  VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/upsample.comp" kRtUpsampleSpv VARIANT_SUFFIX rtdetr)
-        # Phase B: AIFI transformer encoder.
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/linear.comp"               kRtLinearSpv     VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/layernorm.comp"            kRtLayerNormSpv  VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/softmax.comp"              kRtSoftmaxSpv    VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/gelu.comp"                 kRtGeluSpv       VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/transpose_chw2tokens.comp" kRtT2tSpv        VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/transpose_tokens2chw.comp" kRtT2cSpv        VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/qkv_splice.comp"           kRtQkvSpliceSpv  VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/attn_scores.comp"          kRtAttnScoresSpv VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/attn_apply.comp"           kRtAttnApplySpv  VARIANT_SUFFIX rtdetr)
-        # Phase D: deformable decoder.
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/relu.comp"             kRtReluSpv     VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/transpose_mask.comp"   kRtTMaskSpv    VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/offset_preprocess.comp" kRtOffPreSpv  VARIANT_SUFFIX rtdetr)
-        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/msdeformattn.comp"     kRtMsDeformSpv VARIANT_SUFFIX rtdetr)
-    endif ()
-
     add_example(NAME "vulkan_rfdetr_inference"
             SOURCES vulkan_rfdetr_inference.cpp
             rfdetr/RfDetrVk.cpp
@@ -169,7 +129,8 @@ if (THREEPP_WITH_INFERENCE)
         target_include_directories(vulkan_rfdetr_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
         target_link_libraries(vulkan_rfdetr_inference PRIVATE Vulkan::Vulkan)
 
-        # VARIANT_SUFFIX=rfdetr — distinct generated headers from the rtdetr set.
+        # VARIANT_SUFFIX=rfdetr keeps the generated headers from colliding with
+        # the YOLO kernels that share a basename (conv2d/conv1x1/add/concat).
         set(_rf_sh "${CMAKE_CURRENT_SOURCE_DIR}/rfdetr/shaders")
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv2d.comp"     kRfConv2dSpv     VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv1x1.comp"    kRfConv1x1Spv    VARIANT_SUFFIX rfdetr)

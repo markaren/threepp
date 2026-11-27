@@ -1,5 +1,5 @@
 #version 450
-// Multi-Scale Deformable Attention. RT-DETR-L: H=8, L=3, P=4, d=32.
+// Multi-Scale Deformable Attention. RF-DETR's decoder: H=16, L=1, P=2, d=16.
 // One thread per (query, head_dim_k), iterating L*P sampling points and
 // accumulating bilinearly-interpolated value weighted by attention.
 // Bindings: 0 value [tot,H*d], 1 shapes [L*2] u32, 2 lvlStart [L] u32,

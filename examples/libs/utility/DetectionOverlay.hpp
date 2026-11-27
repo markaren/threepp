@@ -1,4 +1,4 @@
-// Shared overlay primitives for the Vulkan inference demos (yolov8 / rtdetr /
+// Shared overlay primitives for the Vulkan inference demos (yolov8 /
 // rfdetr): detection box outlines and class-label tags, drawn in the demos'
 // 640x640 ortho space through the renderer's HUD overlay (Sprite +
 // LineSegments + TextSprite — see examples' viewer blocks).

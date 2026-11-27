@@ -1,8 +1,10 @@
-# Framework-free detector inference on Vulkan compute (YOLOv8n · RT-DETR · RF-DETR)
+# Framework-free detector inference on Vulkan compute (YOLOv8n · RF-DETR)
 
-Umbrella notes for the three object detectors reimplemented as hand-written GLSL
+Umbrella notes for the two object detectors reimplemented as hand-written GLSL
 compute shaders on threepp's Vulkan path, sharing one device/memory space with the
-renderer. Deep dive for RF-DETR: `rfdetr/PORTING_NOTES.md`.
+renderer. Deep dive for RF-DETR: `rfdetr/PORTING_NOTES.md`. A third port, RT-DETR-L,
+was deleted on 2026-11-27 because RF-DETR (Nano to Medium) covers its range; git
+history keeps it.
 
 All numbers: NVIDIA RTX 4070, fp32, end-to-end (preprocess + forward + postprocess),
 lean pre/post (not the framework convenience API), `cudnn.benchmark` on for baselines.
@@ -26,7 +28,7 @@ lean pre/post (not the framework convenience API), `cudnn.benchmark` on for base
 > rather than the framework's convenience API, with cuDNN convolution autotuning
 > enabled; forward-only and end-to-end latency are reported separately.
 
-> Across detectors spanning the CNN (YOLOv8n) and transformer (RT-DETR, RF-DETR)
+> Across detectors spanning the CNN (YOLOv8n) and transformer (RF-DETR)
 > families, the hand-written Vulkan path is competitive with optimized PyTorch
 > end-to-end on a desktop NVIDIA GPU — at parity for the CNN and within ~10% for the
 > transformer — despite not matching vendor-optimized cuBLAS/cuDNN kernels on raw
@@ -46,17 +48,11 @@ support — do not strengthen "competitive" to "faster.")
 |---|---|---|---|
 | YOLOv8n @640 | 7.9 ms (126.8 FPS) | 8.2 ms (121.5 FPS) | **parity** (within noise) |
 | RF-DETR-Nano @384 | ~23.6 ms (42 FPS) | 21.5 ms (46.5 FPS) | within ~10% |
-| RT-DETR-L @640 | ~47 ms (21.5 FPS) | *re-run `bench_rtdetr_pytorch.py` with the fair protocol* | unverified — see note |
 
 Why YOLO reaches parity but RF-DETR doesn't: YOLO's forward at 640 is large enough
 to saturate the GPU and its e2e (~8 ms) is host-sensitive, where the lean C++
 pre/post competes; RF-DETR-Nano's GEMMs are tiny (N=384 → ~60 workgroups on 46 SMs),
 so the forward is GPU-underutilized and cuBLAS's advantage shows.
-
-> Note on RT-DETR: its 21.5 FPS was tuned earlier against an ultralytics number that
-> predates the fair-baseline rigor in this repo (eager-vs-optimized, `cudnn.benchmark`,
-> lean pre/post). Re-measure with `scripts/bench_rtdetr_pytorch.py` before citing a
-> comparison.
 
 ---
 
@@ -70,29 +66,22 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
 - Baseline: `scripts/yolo_benchmark.py` (eager / TorchScript / fp16 / TensorRT-if-present;
   `--legacy` reproduces the old unfair per-run-decode benchmark).
 
-### RT-DETR-L (transformer; second port)
-- HGNetv2 backbone → AIFI transformer encoder → CCFM neck → deformable decoder + heads.
-- Established the shared `VkInfer` harness and the register-blocked GEMM / im2col /
-  attention / MSDeformAttn shaders later reused by RF-DETR.
-- Validated bit-exact (~1e-5) vs captured PyTorch activations; correct detections on
-  bus.jpg. Optimized 198 → 47 ms.
-- fp16 and VK_KHR_cooperative_matrix (tensor-core) GEMM both gave **no speedup** —
-  the workload is memory-bandwidth-bound on f32 activations, not ALU-bound. Reverted.
-- Same top-K-on-noise caveat as RF-DETR: validate the decoder on a real image.
-
-### RF-DETR-Nano (transformer; third port)
+### RF-DETR-Nano (transformer)
 - DINOv2-windowed ViT-S backbone + C2f projector + two-stage LW-DETR deformable decoder.
 - Full deep-dive, insights, bugs, and optimization log in `rfdetr/PORTING_NOTES.md`.
 - Bit-exact through the projector; ~42 FPS after optimization.
 
 ---
 
-## Shared optimization & benchmarking lessons (all three)
+## Shared optimization & benchmarking lessons (both)
 
 - **Profile before optimizing.** Small models underutilize the GPU; the bottleneck
   is structural (small-N GEMM occupancy), not fixable by op fusion.
 - **fp16 / tensor cores help CNNs, not these transformers** (memory-bound) — a
-  consistent, citable cross-architecture finding.
+  consistent, citable cross-architecture finding. The Vulkan fp16 and
+  VK_KHR_cooperative_matrix GEMM tries were made on the RT-DETR-L port (no speedup:
+  bandwidth-bound on f32 activations; reverted, and the port is deleted). In PyTorch,
+  fp16 speeds YOLO (11.5 → 9.5 ms) but not RF-DETR-Nano.
 - **Benchmark only against optimized PyTorch**, with `cudnn.benchmark` on and a lean
   pre/post; the framework's `predict()` convenience API carries large host tax and is
   not a deployment path. Getting this wrong flipped conclusions twice during this work.
@@ -102,7 +91,7 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
 
 ## Reproducibility
 - Weights/refs: `scripts/export_*_weights.py`, `scripts/capture_*_activations.py`.
-- Validation: `<exe> --validate <weights> <ref.bin>` (per-layer element-wise diff).
+- Validation (RF-DETR; YOLO has none): `vulkan_rfdetr_inference --validate <weights> <ref.bin>`
+  (per-layer element-wise diff).
 - Detection: `<exe> <image> <weights>`.
-- PyTorch baselines: `scripts/bench_rfdetr_pytorch.py`, `bench_rtdetr_pytorch.py`,
-  `yolo_benchmark.py`.
+- PyTorch baselines: `scripts/bench_rfdetr_pytorch.py`, `yolo_benchmark.py`.

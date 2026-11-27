@@ -3,7 +3,8 @@
 An engineering record of how the RF-DETR-Nano detector was reimplemented from
 scratch on threepp's Vulkan compute path (`examples/vulkan/rfdetr/`), how it was
 validated, optimized, and honestly benchmarked. Builds on the earlier YOLOv8n and
-RT-DETR ports that established the shared `VkInfer` harness and most shaders.
+RT-DETR ports that established the shared `VkInfer` harness and most shaders (the
+RT-DETR port was deleted on 2026-11-27; git history keeps it).
 
 Target/host for all numbers: NVIDIA RTX 4070, fp32, 384×384 input.
 
@@ -136,7 +137,7 @@ image for the decoder, layer activations for everything upstream.
 
 ## 6. Optimization (profile-driven)
 
-Profiling used GPU timestamps (`RTDETR_PROFILE`), per-ViT-layer then per-op.
+Profiling used GPU timestamps (`RFDETR_PROFILE`), per-ViT-layer then per-op.
 
 **Findings.** The 12 ViT layers dominate (~14 of ~17 ms backbone); decoder ~2 ms;
 ~6 ms is CPU/submit overhead. Per-op, only `fc2` (N=384, K=1536) and `dense`
@@ -207,9 +208,9 @@ This was where rigor mattered most, and where I corrected myself twice.
   installed) would widen the compute gap further, so latency claims must stay
   "competitive," never "faster."
 
-Baselines live in `scripts/bench_rfdetr_pytorch.py`, `scripts/bench_rtdetr_pytorch.py`,
-and `scripts/yolo_benchmark.py` (each: eager / TorchScript / fp16 / TensorRT-if-present,
-forward / lean-e2e / convenience-`predict()` columns).
+Baselines live in `scripts/bench_rfdetr_pytorch.py` and `scripts/yolo_benchmark.py`
+(each: eager / TorchScript / fp16 / TensorRT-if-present, forward / lean-e2e /
+convenience-`predict()` columns).
 
 ---
 

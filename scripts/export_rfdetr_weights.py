@@ -1,5 +1,5 @@
 """Export RF-DETR weights to the 'YOLO' binary format used by the threepp
-Vulkan inference examples (same format as export_rtdetr_weights.py).
+Vulkan inference examples.
 
     python scripts/export_rfdetr_weights.py                   # -> rfdetr-nano.weights
     python scripts/export_rfdetr_weights.py --variant medium  # -> rfdetr-medium.weights
