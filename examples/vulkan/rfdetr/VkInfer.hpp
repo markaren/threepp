@@ -100,6 +100,7 @@ namespace rfdetr {
         VkDescriptorSetLayout dsLayout = VK_NULL_HANDLE;
         uint32_t nSSBO = 0;
         uint32_t pushBytes = 0;
+        const char* name = "";// the per-kernel profile's label
     };
 
     /// One host->device copy for uploadMany (batches N uploads into a single submit).
@@ -113,6 +114,9 @@ namespace rfdetr {
     public:
         VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily);
         ~VkInfer();
+
+        // Clustered subgroup operations in compute shaders (GL_KHR_shader_subgroup_clustered).
+        [[nodiscard]] bool subgroupClustered() const { return subgroupClustered_; }
 
         VkInfer(const VkInfer&) = delete;
         VkInfer& operator=(const VkInfer&) = delete;
@@ -154,7 +158,8 @@ namespace rfdetr {
         [[nodiscard]] VkBuffer dummy() const { return dummy_.buffer; }
 
         // ── pipelines ──────────────────────────────────────────────────────
-        VkPipe createPipe(const uint32_t* spv, size_t spvByteCount, uint32_t nSSBO, uint32_t pushBytes);
+        VkPipe createPipe(const uint32_t* spv, size_t spvByteCount, uint32_t nSSBO, uint32_t pushBytes,
+                          const char* name = "");
         void destroyPipe(VkPipe& p);
 
         // Drop all cached descriptor sets (call when weight buffers are replaced,
@@ -175,7 +180,8 @@ namespace rfdetr {
 
         // GPU timestamp between dispatches (no-op unless RFDETR_PROFILE is set).
         // endFrame() prints per-mark GPU deltas, isolating GPU time from CPU
-        // command-recording overhead.
+        // command-recording overhead, and the GPU time of every dispatch summed
+        // by kernel (each dispatch is timestamped too while profiling).
         void markTimestamp(const char* label);
 
         [[nodiscard]] VkDevice device() const { return device_; }
@@ -228,12 +234,17 @@ namespace rfdetr {
         bool frameHasReadback_ = false;
         VkFence frameFence_ = VK_NULL_HANDLE;
 
-        // Profiling timestamps (enabled by RFDETR_PROFILE).
+        bool subgroupClustered_ = false;
+
+        // Profiling timestamps (enabled by RFDETR_PROFILE): marks and, after
+        // every dispatch, one per dispatch labelled with its kernel.
+        static constexpr uint32_t kMaxTimestamps = 1024;
         VkQueryPool tsPool_ = VK_NULL_HANDLE;
         float tsPeriodNs_ = 1.0f;
         bool tsEnabled_ = false;
         uint32_t tsCount_ = 0;
         std::vector<const char*> tsLabels_;
+        std::vector<bool> tsIsDispatch_;
     };
 
 }// namespace rfdetr

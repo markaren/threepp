@@ -1,8 +1,10 @@
 #include "VkInfer.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -21,6 +23,18 @@ namespace {
 
 VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily)
     : device_(device), phys_(phys), queue_(queue), queueFamily_(queueFamily) {
+
+    {
+        VkPhysicalDeviceSubgroupProperties sg{};
+        sg.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        VkPhysicalDeviceProperties2 p2{};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &sg;
+        vkGetPhysicalDeviceProperties2(phys_, &p2);
+        subgroupClustered_ = (sg.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+                             (sg.supportedOperations & VK_SUBGROUP_FEATURE_CLUSTERED_BIT) != 0 &&
+                             sg.subgroupSize >= 4;
+    }
 
     VkCommandPoolCreateInfo cpci{};
     cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -62,7 +76,7 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
         VkQueryPoolCreateInfo qpci{};
         qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         qpci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qpci.queryCount = 64;
+        qpci.queryCount = kMaxTimestamps;
         if (vkCreateQueryPool(device_, &qpci, nullptr, &tsPool_) != VK_SUCCESS) tsPool_ = VK_NULL_HANDLE;
     }
 }
@@ -77,9 +91,10 @@ VkInfer::~VkInfer() {
 }
 
 void VkInfer::markTimestamp(const char* label) {
-    if (!tsEnabled_ || !tsPool_ || !recording_ || tsCount_ >= 64) return;
+    if (!tsEnabled_ || !tsPool_ || !recording_ || tsCount_ >= kMaxTimestamps) return;
     vkCmdWriteTimestamp(frameCb_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, tsPool_, tsCount_);
     tsLabels_.push_back(label);
+    tsIsDispatch_.push_back(false);
     ++tsCount_;
 }
 
@@ -408,10 +423,12 @@ void VkInfer::readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
     vkUnmapMemory(device_, readbackStaging_.memory);
 }
 
-VkPipe VkInfer::createPipe(const uint32_t* spv, size_t spvByteCount, uint32_t nSSBO, uint32_t pushBytes) {
+VkPipe VkInfer::createPipe(const uint32_t* spv, size_t spvByteCount, uint32_t nSSBO, uint32_t pushBytes,
+                           const char* name) {
     VkPipe p;
     p.nSSBO = nSSBO;
     p.pushBytes = pushBytes;
+    p.name = name;
 
     VkShaderModuleCreateInfo smci{};
     smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -495,9 +512,10 @@ void VkInfer::beginFrame() {
     vkCheck(vkBeginCommandBuffer(frameCb_, &bi), "begin frame cmd buffer");
     recording_ = true;
     if (tsEnabled_ && tsPool_) {
-        vkCmdResetQueryPool(frameCb_, tsPool_, 0, 64);
+        vkCmdResetQueryPool(frameCb_, tsPool_, 0, kMaxTimestamps);
         tsCount_ = 0;
         tsLabels_.clear();
+        tsIsDispatch_.clear();
         markTimestamp("begin");
     }
 }
@@ -558,6 +576,12 @@ void VkInfer::dispatch(const VkPipe& pipe, const std::vector<VkBuffer>& ssbos,
     if (pushBytes > 0 && push)
         vkCmdPushConstants(frameCb_, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes, push);
     vkCmdDispatch(frameCb_, gx, gy, gz);
+    if (tsEnabled_ && tsPool_ && tsCount_ < kMaxTimestamps) {
+        vkCmdWriteTimestamp(frameCb_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, tsPool_, tsCount_);
+        tsLabels_.push_back(pipe.name);
+        tsIsDispatch_.push_back(true);
+        ++tsCount_;
+    }
 }
 
 void VkInfer::endFrame() {
@@ -588,12 +612,30 @@ void VkInfer::endFrame() {
         if (vkGetQueryPoolResults(device_, tsPool_, 0, tsCount_, tsCount_ * sizeof(uint64_t),
                                   ts.data(), sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
-            double total = double(ts[tsCount_ - 1] - ts[0]) * double(tsPeriodNs_) / 1e6;
-            std::cerr << "    [gpu] frame total: " << total << " ms\n";
+            auto ms = [&](uint32_t a, uint32_t b) { return double(ts[b] - ts[a]) * double(tsPeriodNs_) / 1e6; };
+            std::cerr << "    [gpu] frame total: " << ms(0, tsCount_ - 1) << " ms\n";
+            // Marks: the time since the previous mark.
+            uint32_t lastMark = 0;
             for (uint32_t i = 1; i < tsCount_; ++i) {
-                double ms = double(ts[i] - ts[i - 1]) * double(tsPeriodNs_) / 1e6;
-                if (ms > 0.30) std::cerr << "    [gpu]   " << tsLabels_[i] << ": " << ms << " ms\n";
+                if (tsIsDispatch_[i]) continue;
+                const double d = ms(lastMark, i);
+                if (d > 0.30) std::cerr << "    [gpu]   " << tsLabels_[i] << ": " << d << " ms\n";
+                lastMark = i;
             }
+            // Kernels: a dispatch owns the time since the timestamp before it
+            // (its leading barrier included), summed per kernel, largest first.
+            std::map<std::string, std::pair<int, double>> kernels;
+            for (uint32_t i = 1; i < tsCount_; ++i) {
+                if (!tsIsDispatch_[i]) continue;
+                auto& k = kernels[tsLabels_[i]];
+                ++k.first;
+                k.second += ms(i - 1, i);
+            }
+            std::vector<std::pair<std::string, std::pair<int, double>>> byTime(kernels.begin(), kernels.end());
+            std::sort(byTime.begin(), byTime.end(),
+                      [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+            for (const auto& [name, k] : byTime)
+                std::cerr << "    [gpu] kernel " << name << " x" << k.first << ": " << k.second << " ms\n";
         }
     }
 }

@@ -73,6 +73,8 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
 - One submit per inference since 2026-11-27 (preprocess and top-K on the GPU): on an
   RTX 5080, Nano 16.0 → 11.8 ms and Medium 33.3 → 26.3 ms end-to-end. The PyTorch
   comparison above is still the 4070's.
+- Fused ViT attention (one pass, online softmax) since 2026-11-27: Nano 12.5 → 10.2 ms and
+  Medium 27.5 → 18.9 ms end-to-end on the same card (a busier machine than the line above).
 
 ---
 
@@ -84,7 +86,9 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
   consistent, citable cross-architecture finding. The Vulkan fp16 and
   VK_KHR_cooperative_matrix GEMM tries were made on the RT-DETR-L port (no speedup:
   bandwidth-bound on f32 activations; reverted, and the port is deleted). In PyTorch,
-  fp16 speeds YOLO (11.5 → 9.5 ms) but not RF-DETR-Nano.
+  fp16 speeds YOLO (11.5 → 9.5 ms) but not RF-DETR-Nano. A cooperative-matrix GEMM for
+  RF-DETR on an RTX 5080 (2026-11-27) was slower too: its GEMMs are too small to be
+  compute-bound.
 - **Benchmark only against optimized PyTorch**, with `cudnn.benchmark` on and a lean
   pre/post; the framework's `predict()` convenience API carries large host tax and is
   not a deployment path. Getting this wrong flipped conclusions twice during this work.

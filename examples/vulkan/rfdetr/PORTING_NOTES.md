@@ -202,6 +202,38 @@ Split-K re-measured on the 5080: Nano backbone 12.03 → 9.01 ms GPU (end-to-end
 16.2 ms), Medium 22.8 → 21.3 ms. It helps both variants on this card, so it stays on for
 all of them and the `RF_NOSPLITK` switch is gone.
 
+### Per-kernel profile and fused attention (2026-11-27, RTX 5080)
+
+`RFDETR_PROFILE` now also timestamps every dispatch and sums GPU time per kernel. On Nano
+(one-submit build, 10.2 ms of GPU work per inference) it showed attention
+(`attn_vit_scores` + `attn_vit_apply`) at 3.8 ms, the GEMMs with their split-K reduce passes
+at 3.7 ms, the projector convolutions at 1.0 ms and everything else at ~1.9 ms. LayerNorm
+and softmax, though one thread per row, are under 0.1 ms in total.
+
+The attention kernels wrote the [T,T] scores, read them back for the softmax and again for
+the apply, and read Q, K and V straight from global memory. `attn_vit_flash.comp` does all
+three in one pass with an online softmax: K and V tiles go through shared memory, four
+invocations share a query (each owning every fourth head dim, so their reads hit different
+banks), and a clustered subgroup add joins their partial dot products. Nano's attention went
+from 3.8 to ~1.2 ms of GPU time; Medium's global layers (T = 1300) gain the most.
+
+| bus.jpg, RTX 5080 (median of 3 interleaved runs) | before | after |
+|---|---|---|
+| Nano end-to-end | 12.47 ms | 10.24 ms |
+| Medium end-to-end | 27.51 ms | 18.85 ms |
+
+The machine was busier than for the one-submit table above, so this "before" is higher
+than that table's "after". The validation output stays at fp32 level (taps ≤ 1.6e-4 max
+abs error, the same diverging noise rows) and the detections are identical to 4 decimals.
+Devices without clustered subgroup operations keep the three-pass kernels.
+
+**Negative result: tensor-core GEMMs.** A `VK_KHR_cooperative_matrix` GEMM (fp16 inputs,
+fp32 accumulation, 64x64 tiles, split-K planes into the same reduce) matched the detections
+within 0.0015 but was slower: Nano 11.3 vs 10.7 ms and Medium 20.2 vs 18.6 ms with the fused
+attention, and worse still without split-K. At M ≈ 580 to 1300 tokens the GEMMs are limited
+by how few workgroups fill the GPU, not by arithmetic, so tensor cores have little to speed
+up until the kernel itself is restructured. Not kept.
+
 ---
 
 ## 7. Honest benchmarking (the part most likely to be wrong)

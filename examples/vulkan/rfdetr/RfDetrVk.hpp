@@ -95,6 +95,10 @@ namespace rfdetr {
         VkPipe scaleAddPipe_;
         VkPipe linearSplitKPipe_, reduceSplitKPipe_;
         VkPipe preprocessPipe_, proposalsPipe_, topkRankPipe_, queryRefsPipe_;
+        // Fused ViT attention (created when VkInfer::subgroupClustered() and head dim 64;
+        // else scores + softmax + apply).
+        VkPipe attnFlashPipe_;
+        bool useFlashAttn_ = false;
 
         // Scratch for split-K partial sums [splitK, M, N], reused across all
         // split-K linears (serialized by VkInfer's per-dispatch barriers).
@@ -132,6 +136,8 @@ namespace rfdetr {
         Tensor attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B);
         // out[b,i,h*d+e] = Σ_j attn[b,h,i,j] * V (qkv offset 2D).
         Tensor attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B);
+        // Both in one pass with an online softmax (attn_vit_flash.comp): out [B*T, D].
+        Tensor attnVitFlash_(const Tensor& qkv, uint32_t T, uint32_t B);
         // One DINOv2 transformer block. global=true runs full attention (B=1,T=M).
         Tensor vitLayer_(const Tensor& x, int layerIdx, bool global);
 

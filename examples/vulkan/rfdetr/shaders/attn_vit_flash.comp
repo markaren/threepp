@@ -1,0 +1,104 @@
+#version 450
+// Fused multi-head attention for the DINOv2 ViT (flash-style, one pass): for query
+// i of group b (a window, or all tokens on a global layer) and head h,
+//   out[b*T+i, h*64+e] = sum_j softmax_j(scale * q_i . k_j) * v_j[e],
+// with the softmax accumulated online, so the T x T scores never touch memory
+// (attn_vit_scores + softmax + attn_vit_apply write and re-read them).
+// Four invocations share a query; invocation `lane` owns head dims lane, lane+4,
+// ..., lane+60, so the four read four different shared-memory banks, and their
+// partial dot products are summed with a clustered subgroup add. K and V of the
+// head are staged through shared memory 64 keys at a time; the running maximum is
+// updated once per 16 keys. Head dim 64 only (the host checks).
+// Bindings: 0 qkv [B*T, 3D] laid out [Q | K | V] per token, 1 out [B*T, D].
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_clustered : require
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint T, H, d, B;
+    float scale;
+    uint _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly  buffer Qkv { float qkv[]; };
+layout(std430, binding = 1) writeonly buffer Out { float outp[]; };
+
+const uint LANES = 4u;// invocations per query
+const uint DL = 16u;  // head dims per invocation
+const uint HD = 64u;  // head dim
+const uint BC = 64u;  // keys per shared tile
+const uint CH = 16u;  // keys per running-max update
+
+shared float sK[BC * HD];
+shared float sV[BC * HD];
+
+void main() {
+    // Query slots from the subgroup layout, so the four lanes of a query are always
+    // one cluster of the clustered add, whatever the subgroup size.
+    const uint lane = gl_SubgroupInvocationID % LANES;
+    const uint slot = gl_SubgroupID * (gl_SubgroupSize / LANES) + gl_SubgroupInvocationID / LANES;
+    const uint qi = gl_WorkGroupID.x * (128u / LANES) + slot;
+    const uint h = gl_WorkGroupID.y, b = gl_WorkGroupID.z;
+    const uint D = p.H * HD, S = 3u * D;
+    const uint tid = gl_LocalInvocationIndex;
+
+    float q[DL];
+    const uint qBase = (b * p.T + min(qi, p.T - 1u)) * S + h * HD + lane;
+    for (uint i = 0u; i < DL; ++i) q[i] = qkv[qBase + LANES * i] * p.scale;// scale = 1/8: exact
+    float o[DL];
+    for (uint i = 0u; i < DL; ++i) o[i] = 0.0;
+    float m = -3.4e38, l = 0.0;
+
+    for (uint j0 = 0u; j0 < p.T; j0 += BC) {
+        const uint nk = min(BC, p.T - j0);
+        for (uint e = tid; e < BC * HD; e += 128u) {
+            const uint r = e / HD, c = e % HD;
+            float kv = 0.0, vv = 0.0;
+            if (r < nk) {
+                const uint base = (b * p.T + j0 + r) * S + h * HD + c;
+                kv = qkv[base + D];
+                vv = qkv[base + 2u * D];
+            }
+            sK[e] = kv;
+            sV[e] = vv;
+        }
+        barrier();
+
+        for (uint c0 = 0u; c0 < nk; c0 += CH) {
+            const uint nc = min(CH, nk - c0);
+            // Constant trip counts with guards: s[] stays in registers.
+            float s[CH];
+            float cmax = -3.4e38;
+            for (uint k = 0u; k < CH; ++k) {
+                float part = 0.0;
+                if (k < nc) {
+                    const uint kb = (c0 + k) * HD + lane;
+                    for (uint i = 0u; i < DL; ++i) part += q[i] * sK[kb + LANES * i];
+                }
+                s[k] = subgroupClusteredAdd(part, LANES);// all four lanes get the full dot
+                if (k < nc) cmax = max(cmax, s[k]);
+            }
+            const float mNew = max(m, cmax);
+            const float corr = exp(m - mNew);
+            l *= corr;
+            for (uint i = 0u; i < DL; ++i) o[i] *= corr;
+            for (uint k = 0u; k < CH; ++k) {
+                if (k < nc) {
+                    const float pk = exp(s[k] - mNew);
+                    l += pk;
+                    const uint vb = (c0 + k) * HD + lane;
+                    for (uint i = 0u; i < DL; ++i) o[i] += pk * sV[vb + LANES * i];
+                }
+            }
+            m = mNew;
+        }
+        barrier();
+    }
+
+    if (qi < p.T) {
+        const float inv = 1.0 / l;
+        const uint oBase = (b * p.T + qi) * D + h * HD + lane;
+        for (uint i = 0u; i < DL; ++i) outp[oBase + LANES * i] = o[i] * inv;
+    }
+}

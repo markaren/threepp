@@ -39,6 +39,7 @@
 #include "threepp/renderers/vulkan/shaders/proposals.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/topk_rank.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/query_refs.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/attn_vit_flash.comp.rfdetr.spv.h"
 
 using threepp::VulkanRenderer;
 
@@ -98,37 +99,44 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
           r.graphicsQueueFamily()),
       cfg_(RfDetrConfig::forVariant(variant)) {
 
-    convPipe_       = vk_.createPipe(kRfConv2dSpv,    sizeof(kRfConv2dSpv),    4, sizeof(ConvParams));
-    conv1x1Pipe_    = vk_.createPipe(kRfConv1x1Spv,   sizeof(kRfConv1x1Spv),   4, sizeof(ConvParams));
-    conv3x3Pipe_    = vk_.createPipe(kRfConv3x3Spv,   sizeof(kRfConv3x3Spv),   4, sizeof(ConvParams));
-    im2colPipe_     = vk_.createPipe(kRfIm2colSpv,    sizeof(kRfIm2colSpv),    2, sizeof(ConvParams));
-    linearPipe_     = vk_.createPipe(kRfLinearSpv,    sizeof(kRfLinearSpv),    4, sizeof(LinearParams));
-    layerNormPipe_  = vk_.createPipe(kRfLayerNormSpv, sizeof(kRfLayerNormSpv), 4, sizeof(LNParams));
-    softmaxPipe_    = vk_.createPipe(kRfSoftmaxSpv,   sizeof(kRfSoftmaxSpv),   2, sizeof(SoftmaxParams));
-    geluPipe_       = vk_.createPipe(kRfGeluSpv,      sizeof(kRfGeluSpv),      2, sizeof(GeluParams));
-    layerScalePipe_ = vk_.createPipe(kRfLayerScaleSpv, sizeof(kRfLayerScaleSpv), 3, sizeof(LayerScaleParams));
-    attnScoresPipe_ = vk_.createPipe(kRfAttnScoresSpv, sizeof(kRfAttnScoresSpv), 2, sizeof(AttnParams));
-    attnApplyPipe_  = vk_.createPipe(kRfAttnApplySpv, sizeof(kRfAttnApplySpv), 3, sizeof(AttnParams));
-    addPipe_        = vk_.createPipe(kRfAddSpv,       sizeof(kRfAddSpv),       3, sizeof(AddParams));
-    concatPipe_     = vk_.createPipe(kRfConcatSpv,    sizeof(kRfConcatSpv),    3, sizeof(ConcatParams));
-    buildEmbeddingsPipe_ = vk_.createPipe(kRfBuildEmbedSpv, sizeof(kRfBuildEmbedSpv), 4, sizeof(EmbedParams));
-    attnVitScoresPipe_ = vk_.createPipe(kRfAttnVitScoresSpv, sizeof(kRfAttnVitScoresSpv), 2, sizeof(AttnVitParams));
-    attnVitApplyPipe_  = vk_.createPipe(kRfAttnVitApplySpv,  sizeof(kRfAttnVitApplySpv),  3, sizeof(AttnVitParams));
-    unwindowPipe_ = vk_.createPipe(kRfUnwindowSpv, sizeof(kRfUnwindowSpv), 2, sizeof(UnwindowParams));
-    lnChwPipe_    = vk_.createPipe(kRfLnChwSpv,    sizeof(kRfLnChwSpv),    4, sizeof(LnChwParams));
-    chCopyPipe_   = vk_.createPipe(kRfChCopySpv,   sizeof(kRfChCopySpv),   2, sizeof(ChCopyParams));
-    transposeT2tPipe_     = vk_.createPipe(kRfT2tSpv,       sizeof(kRfT2tSpv),       2, sizeof(TransposeParams));
-    qkvSplicePipe_        = vk_.createPipe(kRfQkvSpliceSpv, sizeof(kRfQkvSpliceSpv), 3, sizeof(QkvSpliceParams));
-    reluPipe_             = vk_.createPipe(kRfReluSpv,      sizeof(kRfReluSpv),      2, sizeof(GeluParams));
-    offsetPreprocessPipe_ = vk_.createPipe(kRfOffPreSpv,   sizeof(kRfOffPreSpv),    3, sizeof(OffPreParams));
-    msDeformAttnPipe_     = vk_.createPipe(kRfMsDeformSpv,  sizeof(kRfMsDeformSpv),  7, sizeof(MsDeformParams));
-    scaleAddPipe_         = vk_.createPipe(kRfScaleAddSpv,  sizeof(kRfScaleAddSpv),  4, sizeof(LayerScaleParams));
-    linearSplitKPipe_     = vk_.createPipe(kRfLinearSplitKSpv, sizeof(kRfLinearSplitKSpv), 3, sizeof(SplitKParams));
-    reduceSplitKPipe_     = vk_.createPipe(kRfReduceSplitKSpv, sizeof(kRfReduceSplitKSpv), 3, sizeof(ReduceParams));
-    preprocessPipe_       = vk_.createPipe(kRfPreprocessSpv, sizeof(kRfPreprocessSpv), 2, sizeof(PreprocessParams));
-    proposalsPipe_        = vk_.createPipe(kRfProposalsSpv,  sizeof(kRfProposalsSpv),  4, sizeof(ProposalParams));
-    topkRankPipe_         = vk_.createPipe(kRfTopkRankSpv,   sizeof(kRfTopkRankSpv),   2, sizeof(TopKParams));
-    queryRefsPipe_        = vk_.createPipe(kRfQueryRefsSpv,  sizeof(kRfQueryRefsSpv),  7, sizeof(QueryRefParams));
+    convPipe_       = vk_.createPipe(kRfConv2dSpv,    sizeof(kRfConv2dSpv),    4, sizeof(ConvParams), "conv2d");
+    conv1x1Pipe_    = vk_.createPipe(kRfConv1x1Spv,   sizeof(kRfConv1x1Spv),   4, sizeof(ConvParams), "conv1x1");
+    conv3x3Pipe_    = vk_.createPipe(kRfConv3x3Spv,   sizeof(kRfConv3x3Spv),   4, sizeof(ConvParams), "conv3x3");
+    im2colPipe_     = vk_.createPipe(kRfIm2colSpv,    sizeof(kRfIm2colSpv),    2, sizeof(ConvParams), "im2col");
+    linearPipe_     = vk_.createPipe(kRfLinearSpv,    sizeof(kRfLinearSpv),    4, sizeof(LinearParams), "linear");
+    layerNormPipe_  = vk_.createPipe(kRfLayerNormSpv, sizeof(kRfLayerNormSpv), 4, sizeof(LNParams), "layernorm");
+    softmaxPipe_    = vk_.createPipe(kRfSoftmaxSpv,   sizeof(kRfSoftmaxSpv),   2, sizeof(SoftmaxParams), "softmax");
+    geluPipe_       = vk_.createPipe(kRfGeluSpv,      sizeof(kRfGeluSpv),      2, sizeof(GeluParams), "gelu");
+    layerScalePipe_ = vk_.createPipe(kRfLayerScaleSpv, sizeof(kRfLayerScaleSpv), 3, sizeof(LayerScaleParams), "layerscale");
+    attnScoresPipe_ = vk_.createPipe(kRfAttnScoresSpv, sizeof(kRfAttnScoresSpv), 2, sizeof(AttnParams), "attn_scores");
+    attnApplyPipe_  = vk_.createPipe(kRfAttnApplySpv, sizeof(kRfAttnApplySpv), 3, sizeof(AttnParams), "attn_apply");
+    addPipe_        = vk_.createPipe(kRfAddSpv,       sizeof(kRfAddSpv),       3, sizeof(AddParams), "add");
+    concatPipe_     = vk_.createPipe(kRfConcatSpv,    sizeof(kRfConcatSpv),    3, sizeof(ConcatParams), "concat");
+    buildEmbeddingsPipe_ = vk_.createPipe(kRfBuildEmbedSpv, sizeof(kRfBuildEmbedSpv), 4, sizeof(EmbedParams), "build_embeddings");
+    attnVitScoresPipe_ = vk_.createPipe(kRfAttnVitScoresSpv, sizeof(kRfAttnVitScoresSpv), 2, sizeof(AttnVitParams), "attn_vit_scores");
+    attnVitApplyPipe_  = vk_.createPipe(kRfAttnVitApplySpv,  sizeof(kRfAttnVitApplySpv),  3, sizeof(AttnVitParams), "attn_vit_apply");
+    unwindowPipe_ = vk_.createPipe(kRfUnwindowSpv, sizeof(kRfUnwindowSpv), 2, sizeof(UnwindowParams), "unwindow");
+    lnChwPipe_    = vk_.createPipe(kRfLnChwSpv,    sizeof(kRfLnChwSpv),    4, sizeof(LnChwParams), "layernorm_chw");
+    chCopyPipe_   = vk_.createPipe(kRfChCopySpv,   sizeof(kRfChCopySpv),   2, sizeof(ChCopyParams), "chcopy");
+    transposeT2tPipe_     = vk_.createPipe(kRfT2tSpv,       sizeof(kRfT2tSpv),       2, sizeof(TransposeParams), "transpose_chw2tokens");
+    qkvSplicePipe_        = vk_.createPipe(kRfQkvSpliceSpv, sizeof(kRfQkvSpliceSpv), 3, sizeof(QkvSpliceParams), "qkv_splice");
+    reluPipe_             = vk_.createPipe(kRfReluSpv,      sizeof(kRfReluSpv),      2, sizeof(GeluParams), "relu");
+    offsetPreprocessPipe_ = vk_.createPipe(kRfOffPreSpv,   sizeof(kRfOffPreSpv),    3, sizeof(OffPreParams), "offset_preprocess");
+    msDeformAttnPipe_     = vk_.createPipe(kRfMsDeformSpv,  sizeof(kRfMsDeformSpv),  7, sizeof(MsDeformParams), "msdeformattn");
+    scaleAddPipe_         = vk_.createPipe(kRfScaleAddSpv,  sizeof(kRfScaleAddSpv),  4, sizeof(LayerScaleParams), "scale_add");
+    linearSplitKPipe_     = vk_.createPipe(kRfLinearSplitKSpv, sizeof(kRfLinearSplitKSpv), 3, sizeof(SplitKParams), "linear_splitk");
+    reduceSplitKPipe_     = vk_.createPipe(kRfReduceSplitKSpv, sizeof(kRfReduceSplitKSpv), 3, sizeof(ReduceParams), "reduce_splitk");
+    preprocessPipe_       = vk_.createPipe(kRfPreprocessSpv, sizeof(kRfPreprocessSpv), 2, sizeof(PreprocessParams), "preprocess");
+    proposalsPipe_        = vk_.createPipe(kRfProposalsSpv,  sizeof(kRfProposalsSpv),  4, sizeof(ProposalParams), "proposals");
+    topkRankPipe_         = vk_.createPipe(kRfTopkRankSpv,   sizeof(kRfTopkRankSpv),   2, sizeof(TopKParams), "topk_rank");
+    queryRefsPipe_        = vk_.createPipe(kRfQueryRefsSpv,  sizeof(kRfQueryRefsSpv),  7, sizeof(QueryRefParams), "query_refs");
+
+    // Fused attention when the device has clustered subgroup adds and the head dim
+    // is the kernel's 64; otherwise scores + softmax + apply.
+    useFlashAttn_ = vk_.subgroupClustered() && cfg_.embedDim / cfg_.numHeads == 64;
+    if (useFlashAttn_)
+        attnFlashPipe_ = vk_.createPipe(kRfAttnFlashSpv, sizeof(kRfAttnFlashSpv), 2, sizeof(AttnVitParams), "attn_vit_flash");
+    std::cout << "RfDetrVk: ViT attention " << (useFlashAttn_ ? "fused" : "in three passes") << "\n";
 
     // Partial-sum scratch sized for the largest split-K linear we route: splitK=4
     // planes of [maxTokens, N<=512]. Scales with the variant's token count (Nano
@@ -154,6 +162,7 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
 }
 
 RfDetrVk::~RfDetrVk() {
+    vk_.destroyPipe(attnFlashPipe_);
     vk_.destroyPipe(convPipe_);
     vk_.destroyPipe(conv1x1Pipe_);
     vk_.destroyPipe(conv3x3Pipe_);
@@ -394,6 +403,15 @@ Tensor RfDetrVk::attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T
     return out;
 }
 
+Tensor RfDetrVk::attnVitFlash_(const Tensor& qkv, uint32_t T, uint32_t B) {
+    const uint32_t H = cfg_.numHeads, d = cfg_.embedDim / cfg_.numHeads;
+    AttnVitParams ap{T, H, d, B, 1.0f / std::sqrt(float(d)), 0u, 0u, 0u};
+    Tensor out = vk_.createTensorV({B * T, H * d});
+    // 32 queries per workgroup (four invocations each), one head and one group per y/z.
+    vk_.dispatch(attnFlashPipe_, {qkv.buffer, out.buffer}, &ap, sizeof(ap), divCeil(T, 32), H, B);
+    return out;
+}
+
 // One DINOv2 transformer block on a flat [M, C] token buffer (M = numWin²·tokens).
 // Windowed layers attend within each window (B=numWin², T=tokens/window); global
 // layers attend across all tokens (B=1, T=M). Because the windowed→global reshape
@@ -410,9 +428,14 @@ Tensor RfDetrVk::vitLayer_(const Tensor& x, int layerIdx, bool global) {
     // Fused QKV: one [M,3D] GEMM instead of three [M,D] GEMMs (better occupancy,
     // n1 read once); the attention shaders index Q/K/V out of the fused buffer.
     Tensor qkv = linear_(n1, pfx + "attention.attention.qkv.weight", pfx + "attention.attention.qkv.bias");
-    Tensor scores = attnVitScores_(qkv, T, B);
-    Tensor probs  = softmaxRows_(scores, B * cfg_.numHeads * T, T);
-    Tensor ctx = attnVitApply_(probs, qkv, T, B);
+    Tensor ctx;
+    if (useFlashAttn_) {
+        ctx = attnVitFlash_(qkv, T, B);
+    } else {
+        Tensor scores = attnVitScores_(qkv, T, B);
+        Tensor probs  = softmaxRows_(scores, B * cfg_.numHeads * T, T);
+        ctx = attnVitApply_(probs, qkv, T, B);
+    }
     Tensor ao = linear_(ctx, pfx + "attention.output.dense.weight", pfx + "attention.output.dense.bias");
     Tensor x1 = scaleAdd_(x, ao, pfx + "layer_scale1.lambda1", C);// x + ao*lambda1
 
