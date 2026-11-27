@@ -121,7 +121,9 @@ int main(int argc, char** argv) {
             for (auto& d : detections) {
                 const char* name = (d.cls_id >= 0 && d.cls_id < 80) ? kCocoNames[d.cls_id] : "unknown";
                 std::cout << "             > " << std::left << std::setw(20) << name << std::right
-                          << "  conf: " << std::fixed << std::setprecision(3) << d.conf << "\n";
+                          << "  conf: " << std::fixed << std::setprecision(4) << d.conf
+                          << "  box: " << std::setprecision(2) << d.x1 << " " << d.y1 << " " << d.x2 << " " << d.y2
+                          << "\n";
             }
         }
 
