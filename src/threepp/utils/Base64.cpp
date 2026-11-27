@@ -15,7 +15,8 @@ namespace {
         for (int i = 0; i < 10; ++i) t['0' + i] = i + 52;
         t['+'] = 62;
         t['/'] = 63;
-        t['='] = 0;
+        // '=' stays outside the alphabet: padding ends the payload. Decoded as
+        // zero bits it appended one zero byte per pad character.
         return t;
     }
 
