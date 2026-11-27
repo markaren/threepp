@@ -1272,7 +1272,8 @@ namespace threepp::editor {
             std::shared_ptr<LineBasicMaterial> material;
             std::size_t hash = 0;
             // Vertices the position attribute can hold. The attribute is only
-            // replaced when the curve outgrows it — see writeSamples().
+            // replaced when the curve outgrows it — see overlay::writeLinePoints
+            // (OverlayLines.hpp).
             int capacity = 0;
             // The owner's uuid, which is how the record finds its owner again
             // in the play copy and back (see retargetSplineOverlays).

@@ -149,8 +149,9 @@ test off. Headless, the core simply clears the list — the scripts still *run*
 their draw calls, because a draw must not behave differently just because nobody
 is looking; the segments just go nowhere.
 
-The overlay group is registered with the document as editor-only, so it never
-enters the play copy or an export, and it is handed to the sensor session as
+The overlay group is registered with the document as editor-only, so it is never
+written to an export or copied into the play copy (the document re-attaches it to
+the copy's scene for the episode), and it is handed to the sensor session as
 hidden-during-scan, so a lidar cannot range against somebody's debug arrow.
 
 ## Layout

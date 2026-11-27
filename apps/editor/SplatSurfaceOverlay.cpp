@@ -185,7 +185,7 @@ void EditorApp::clearSplatSurfacePreviews() {
         preview.mesh->removeFromParent();
         // The renderer keys GPU buffers on geometry identity; an orphan that is
         // never disposed leaks them and re-arms the recycled-pointer staleness
-        // (SplineOverlay::writeSamples).
+        // (overlay::writeLinePoints, OverlayLines.hpp).
         if (const auto geometry = preview.mesh->geometry()) geometry->dispose();
     }
     splatSurfacePreviews_.clear();

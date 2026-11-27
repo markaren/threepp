@@ -1371,7 +1371,7 @@ namespace {
     // the document rather than a live view of a file.
     //
     // Nodes are referenced by uuid, which the loader preserves, so the block
-    // survives anything that keeps identities — including the play snapshot.
+    // survives anything that keeps identities — including the play copy.
     // Ignored by three.js and by any older threepp: they read the same
     // hierarchy, just frozen, exactly as they did before this existed.
     json writeArticulation(Robot& robot) {

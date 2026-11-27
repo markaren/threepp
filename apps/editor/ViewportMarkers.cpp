@@ -610,7 +610,7 @@ void EditorApp::syncSoundRings() {
 
         // Replaced wholesale rather than rewritten: the buffer only changes
         // when a radius is edited, and the old geometry is disposed so the
-        // renderer provably lets go of it (see SplineOverlay's writeSamples).
+        // renderer provably lets go of it (see overlay::writeLinePoints, OverlayLines.hpp).
         const auto old = soundRings_->geometry();
         auto geometry = BufferGeometry::create();
         if (!positions.empty()) {

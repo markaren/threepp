@@ -5476,8 +5476,9 @@ int EditorApp::runSelfTest() {
             // A node authored INTO the robot — the way a robot cell is built:
             // drop a camera on the wrist, a marker on a link. Play/Stop used to
             // rebuild the robot's subtree from its URDF, which deleted every one
-            // of them; the document carries the joint table now, so Stop restores
-            // the subtree it saved instead of re-reading the file.
+            // of them; the document carries the joint table now, and Play runs on
+            // a copy, so Stop brings back the authored subtree instead of
+            // re-reading the file.
             if (live) {
 
                 Object3D* mount = nullptr;

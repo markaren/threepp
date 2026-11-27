@@ -9,8 +9,9 @@
 //     snapshot, so a body that fell in episode 0 starts episode 1 back where it
 //     was authored, and every episode ends in the same place. This is the
 //     property that makes "run it a hundred times with a hundred seeds" mean
-//     anything, and it is not the player's own code — it is PlayController's
-//     snapshot/restore, which is exactly why it needs a test that would notice
+//     anything, and it is not the player's own code — it is the play copy
+//     PlayController runs each episode on and Stop drops, which is exactly why
+//     it needs a test that would notice
 //     if the player ever grew a shortcut around it;
 //   * THE EXIT CODE. Nonzero when a script raised, nonzero when nothing ran,
 //     zero only when every episode was clean. A gate that goes green because
@@ -502,7 +503,7 @@ TEST_CASE("an authored particle field is counted even where it cannot be drawn",
 
     // The authored node is a plain Group carrying one userData entry, and it is
     // the only thing the document ever held: a ParticleField is session content,
-    // dropped with the snapshot restore.
+    // dropped with the play copy.
     auto* authored = core.scene().getObjectByName("Weather");
     REQUIRE(authored != nullptr);
     CHECK(ParticleFieldConfig::isParticleField(*authored));

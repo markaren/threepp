@@ -75,7 +75,9 @@ TEST_CASE("DDSLoader reads a file from disk") {
     const auto path  = std::filesystem::temp_directory_path() / "threepp_ddsloader_test.dds";
     {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        REQUIRE(out);
         out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(out.good());
     }
     DDSLoader loader;
     const auto tex = loader.load(path);

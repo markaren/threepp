@@ -79,8 +79,8 @@ namespace {
     // same userData, because the user may have put physics or a texture on it —
     // only the geometry is swapped, and the orphaned one disposed, since the
     // renderer keys GPU buffers on geometry identity and an undisposed one both
-    // leaks them and re-arms the recycled-pointer staleness SplineOverlay's
-    // writeSamples() was fixed for.
+    // leaks them and re-arms the recycled-pointer staleness
+    // overlay::writeLinePoints (OverlayLines.hpp) was fixed for.
     void syncPart(Object3D& tree, const TreeConfig& config, TreeConfig::Part part,
                   const std::shared_ptr<BufferGeometry>& geometry) {
 
