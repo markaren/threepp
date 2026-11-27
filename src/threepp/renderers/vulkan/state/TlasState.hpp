@@ -63,11 +63,15 @@ namespace threepp::vulkan::impl {
         float cutoutRayCamPos_[3] = {0.f, 0.f, 0.f};// ...and the camera position
         bool  cutoutRayClassified_ = false;// false after a full re-expansion (the bits were reset)
 
-        // The lean fill's layout key: pendingTlasInstances_ is rewritten in
-        // place only while these hold (buildTlas clears tlasFillValid_), and
+        // The lean fill's key: pendingTlasInstances_ is rewritten in place
+        // only while these hold (buildTlas clears tlasFillValid_), and
         // tlasInstDirty_ names the instance ranges each frame slot still lacks.
+        // The span layout is not part of the key. Each span's tlasInstBase,
+        // tlasInstCount and tlasSig (EntrySpan) say whether its rows stand; a
+        // span made since the last fill has none (tlasInstBase ~0u), and the
+        // first span whose rows moved is rewritten with every span after it,
+        // so a slot edit keeps the rows ahead of the first span it changed.
         bool     tlasFillValid_        = false;
-        uint64_t tlasFillSpansVersion_ = ~0ull;
         size_t   tlasFillEntryCount_   = 0;
         bool     tlasFillGenOn_        = false;
         std::array<DescDirtyRanges, kFramesInFlight> tlasInstDirty_{DescDirtyRanges{.maxRanges = 1024},
