@@ -1,6 +1,7 @@
-// Vulkan deferred renderer. Built against the Vulkan SDK and requires
-// VK_KHR_ray_tracing_pipeline + VK_KHR_acceleration_structure (ray-queried
-// AO/GI) and VK_KHR_ray_query.
+// Vulkan deferred renderer, built against the Vulkan SDK. Ray tracing is
+// optional: with VK_KHR_ray_query (and the acceleration-structure and
+// ray-tracing-pipeline extensions) it traces AO, GI, reflections and shadows;
+// without them it runs as a raster renderer (rayTracingSupported()).
 //
 // Shades a clean, analytic, noise-free base from the raster material G-buffer
 // (direct analytic lights + split-sum specular IBL + approximate diffuse IBL)

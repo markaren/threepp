@@ -7,8 +7,9 @@
 // Cloud shadow map — a 512² R8 top-down cloud TRANSMITTANCE field over an
 // 8 km square centred on the camera. One thread per texel marches the cloud
 // shell along the SUN direction and stores exp(-τ) (1 = full sun, 0 = full
-// shade). The surface shading, froxel sun in-scatter and water path multiply
-// their sun visibility by a bilinear sample of this map → moving cloud shadows
+// shade). The surface shading, the per-pixel volumetric sun march, the lit
+// particles and the water path multiply their sun visibility by a bilinear
+// sample of this map → moving cloud shadows
 // crawling over the terrain (the single biggest realism win for aerial
 // footage). Regenerated every frame (it's tiny) so it wind-scrolls with the
 // clouds. Only dispatched when clouds are on (clouds.shadowActive).

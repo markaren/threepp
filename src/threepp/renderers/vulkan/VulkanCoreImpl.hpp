@@ -45,11 +45,10 @@
 namespace threepp {
 
     using vulkan::VulkanContext;
-    // Resource helpers moved to vulkan/VulkanResources.{hpp,cpp} to start
-    // peeling apart the 11k-line VulkanRenderer.cpp monolith. Type names +
-    // free functions imported into the local scope so the rest of this file
-    // (which references them as unqualified Buffer / Image2D / createBuffer
-    // / destroyBuffer / check / alignUp / etc.) keeps compiling unchanged.
+    // The resource helpers of vulkan/VulkanResources.{hpp,cpp}: their type
+    // names and free functions are imported so Impl and the VulkanCore*.cpp
+    // TUs use them unqualified (Buffer / Image2D / createBuffer /
+    // destroyBuffer / check / alignUp / etc.).
     using vulkan::Buffer;
     using vulkan::Image2D;
     using vulkan::check;

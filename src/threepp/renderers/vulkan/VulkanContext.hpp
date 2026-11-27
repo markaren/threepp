@@ -68,7 +68,7 @@ namespace threepp::vulkan {
         // Shared pipeline cache, loaded from disk at construction and saved at
         // destruction. Pass to every vkCreate{Graphics,Compute,RayTracing}
         // Pipelines call so repeat launches skip the (multi-second, esp. for
-        // the RT megakernel) cold pipeline compile. Purely an optimization —
+        // the deferred shade) cold pipeline compile. Purely an optimization —
         // the driver validates the on-disk blob against the device and it is
         // discarded if incompatible, so it can never affect correctness.
         VkPipelineCache pipelineCache() const { return pipelineCache_; }

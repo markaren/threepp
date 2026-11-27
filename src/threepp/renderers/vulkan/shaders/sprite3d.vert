@@ -1,6 +1,6 @@
 #version 460
 
-// World-space Sprite billboard vertex shader. Vulkan port of the GL/WGPU sprite
+// World-space Sprite billboard vertex shader. Vulkan port of the GL sprite
 // path for sprites with screenSpace == false (3D-positioned camera-facing quads —
 // e.g. the TPS shooter's impact "particles"). The screen-space HUD sprites go
 // through overlay_sprite.vert (ortho); this is the perspective, depth-tested

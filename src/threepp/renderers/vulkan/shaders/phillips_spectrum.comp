@@ -339,7 +339,7 @@ void main() {
     const vec2 h0_pos = nk_pos * sqrt(phillips2D(k) * 0.5);
 
     // Wrap-around fetch for h0(-k); ((N - id) mod N) places (0,0) onto itself
-    // so the DC term remains symmetric, matching the WGSL reference.
+    // so the DC term remains symmetric.
     const ivec2 idNeg = ivec2((int(P.textureSize) - id.x) & (int(P.textureSize) - 1),
                               (int(P.textureSize) - id.y) & (int(P.textureSize) - 1));
     const vec2 nk_neg = texelFetch(Noise, idNeg, 0).xy;

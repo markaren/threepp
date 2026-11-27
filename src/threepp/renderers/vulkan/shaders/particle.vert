@@ -1,6 +1,6 @@
 #version 460
 
-// World-space particle billboard vertex shader. Vulkan port of the GL/WGPU
+// World-space particle billboard vertex shader. Vulkan port of the GL
 // ParticleSystem shader (src/threepp/objects/ParticleSystem.cpp): the renderer
 // has no generic ShaderMaterial path, so the particle Mesh is drawn here by a
 // dedicated billboard pass in the post-TAA overlay block rather than the

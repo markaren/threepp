@@ -79,14 +79,15 @@ namespace threepp::vulkan::impl {
         std::array<VkDeviceSize, kFramesInFlight> emissiveTriBufferCapacity{};
         uint32_t emissiveTriCountThisFrame_ = 0;
         float    emissiveTotalPowerThisFrame_ = 0.0f;
-        // Per-NEE firefly clamp; pushed to shaders as float bits in slot [11].
+        // Per-NEE firefly clamp; ShadePush::fireflyClamp.
         // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
         float    fireflyClamp_ = 30.f;
         // Directional-light angular RADIUS (degrees) for the deferred renderer's
-        // soft sun shadows — pushed to deferred_shade as tan(radians(deg)) in PC
-        // slot [16]. 0 = exact hard 1-ray shadow (old behaviour). Default 0.0°
-        // (the real sun subtends ~0.27°): thin occluders cast a stable narrow
-        // penumbra instead of a per-frame lit/shadow coin flip under TAA jitter.
+        // soft sun shadows — pushed to deferred_shade as tan(radians(deg)) in
+        // ShadePush::sunTanHalfAngle. 0 = exact hard 1-ray shadow (old
+        // behaviour). Default 0.0° (the real sun subtends ~0.27°): thin
+        // occluders cast a stable narrow penumbra instead of a per-frame
+        // lit/shadow coin flip under TAA jitter.
         float    sunAngularRadiusDeg_ = 0.0f;
 
         // The deferred shade's ray budget (setSunSoftDistance, setFogMarchSteps,
