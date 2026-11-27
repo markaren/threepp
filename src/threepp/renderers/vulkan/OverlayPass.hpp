@@ -8,8 +8,8 @@
 //
 // Atlas texture creation is delegated back to the caller via SampledImageCreator
 // because createSampledImage2D is shared across 10+ Impl call sites and cannot
-// move here alone. The lambda supplied at construction captures Impl's
-// beginOneShot/endAndSubmitOneShot transparently.
+// move here alone. The lambda supplied at construction records the upload into
+// the frame's own command buffer (createSampledImageLevelsInFrame).
 //
 // Extracted from VulkanRenderer.cpp during the file split.
 

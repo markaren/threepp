@@ -1,6 +1,6 @@
 # Turn the CC0 drone photo of sea foam into a tileable, rank-equalised 512^2
 # foam-density tile (R8) and a C++ header that embeds it.
-#   python -I make_foam_tile.py <photo.jpg> <out_dir>
+#   python -I make_ocean_foam_tile.py <photo.jpg> <out_dir>
 # Source: "Ocean foam drone view" by Tommy Lisbin, Huntington Beach, 2017,
 # CC0 1.0 (Unsplash before 5 June 2017, via Wikimedia Commons).
 import sys

@@ -5,10 +5,11 @@
 // loop that capped the helper at ~30 FPS.
 //
 // Pipeline:
-//   1. Renderer's existing addSceneCapturePass() copies the post-TAA
-//      swapchain into sceneCaptureBuf_ (host-visible storage buffer).
+//   1. The renderer's event_shade pass fills eventLumaBuf_: Lambert
+//      lighting from the G-buffer (the Shaded source) or a box average of
+//      the final frame in the swapchain (the Final source).
 //   2. EventCameraDetector::record() dispatches event_detect.comp,
-//      which reads sceneCaptureBuf_, updates a persistent rg32f
+//      which reads that buffer, updates a persistent rg32f
 //      log-history image (.x = emit reference, .y = last raw sample),
 //      and paints an RGBA8 accumulator image.
 //   3. The accumulator is copied to a 3-slot host-visible ring; the

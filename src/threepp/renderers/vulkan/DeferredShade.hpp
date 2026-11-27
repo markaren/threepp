@@ -229,7 +229,7 @@ namespace threepp::vulkan {
 
         // Rebind just the emissive-triangle buffer (binding 12) for one frame —
         // the emissive buffer grows in the per-frame path, so call this when it
-        // reallocates (mirrors the RT rewriteEmissiveTriDescriptors).
+        // reallocates (ProbeGI and PathTracer have the same call for their sets).
         void rewriteEmissive(uint32_t frame, VkBuffer emissiveTriBuf);
 
         // Bindings 80-83 alone for one frame slot: the view's maps when its

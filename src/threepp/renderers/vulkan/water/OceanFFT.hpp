@@ -17,7 +17,7 @@
 // existing command buffer (typically the renderer's main frame buffer
 // just before the BLAS rebuild dispatch).
 //
-// Private to the Vulkan renderer — included by VulkanRenderer.cpp only.
+// Private to the Vulkan renderer and its tests.
 
 #ifndef THREEPP_VULKAN_OCEAN_FFT_HPP
 #define THREEPP_VULKAN_OCEAN_FFT_HPP

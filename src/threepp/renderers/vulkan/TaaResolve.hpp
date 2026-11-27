@@ -1,9 +1,10 @@
 // TaaResolve — temporal anti-aliasing resolve pass.
 //
-// Reads the denoise output (`inputView(frame)` — denoise targets this image
-// when TAA is active), reprojects last frame's history via the raster
-// G-buffer's motion vector, blends with neighborhood-AABB clamp, writes the
-// result to the swapchain + a fresh history slot for next frame.
+// Reads PostComposite's LDR output (`inputView(frame)` — the post composite
+// writes this image when the built-in TAA runs), reprojects last frame's
+// history via the raster G-buffer's motion vector, blends with
+// neighborhood-AABB clamp, writes the result to the swapchain + a fresh
+// history slot for next frame.
 //
 // Extracted from VulkanRenderer.cpp during the file split. Owns its
 // pipeline, descriptor set layout + pool + sets, sampler, input/history
@@ -151,8 +152,10 @@ namespace threepp::vulkan {
             return inputImagesPP_[frame].image;
         }
 
-        // History images — accessed for inter-frame barriers in the caller's
-        // pre-RT block (TAA writes them, denoise / next-frame TAA reads).
+        // History images — the caller imports them into the frame graph. The
+        // built-in TAA writes one slot and reads the other next frame; on the
+        // DLSS / FSR path the upscaler writes its output here and
+        // PostComposite's HDR mode reads it.
         [[nodiscard]] VkImage historyImage(uint32_t slot) const {
             return historyImagesPP_[slot].image;
         }
@@ -220,9 +223,9 @@ namespace threepp::vulkan {
         uint32_t       imageCount_;
         uint32_t       framesInFlight_;
 
-        // Input image per frame-in-flight (denoise's target) — sized to the
-        // deferred RENDER extent. BGRA8_UNORM to match denoise.comp's
-        // rgba8 output and the swapchain channel order.
+        // Input image per frame-in-flight (PostComposite's LDR target) — sized
+        // to the deferred RENDER extent. BGRA8_UNORM, the swapchain's channel
+        // order.
         std::vector<Image2D> inputImagesPP_;
         // History ping-pong — sized to the OUTPUT (swapchain) extent, so it
         // accumulates the temporal upsampler's reconstructed full-res image.

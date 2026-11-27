@@ -11,7 +11,8 @@
 // different view OBJECT, by imageViewSerial; a handle value says nothing);
 // record() lazily transitions the fresh image to GENERAL, builds the chain
 // with per-mip barriers, and ends with the write→sampled-read barrier the
-// shade dispatch needs — callers add nothing.
+// occlusion cull's test (occl_cull.comp, its only reader) needs — callers add
+// nothing.
 
 #ifndef THREEPP_VULKAN_HIZ_PYRAMID_HPP
 #define THREEPP_VULKAN_HIZ_PYRAMID_HPP

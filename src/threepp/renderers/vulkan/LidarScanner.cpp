@@ -648,7 +648,7 @@ namespace threepp::vulkan {
         ctx_.rt().cmdTraceRays(cmd, &rgenRgn_, &missRgn_, &hitRgn_, &callRgn_,
                                 numBeams * legs, 1, 1);
 
-        // Barrier: RT shader writes to resultBuf_ → transfer read.
+        // Barrier: RT shader writes to the slot's resultBuf → transfer read.
         VkBufferMemoryBarrier2 rtToCopy{};
         rtToCopy.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         rtToCopy.srcStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;

@@ -289,7 +289,7 @@ namespace threepp::vulkan {
                           (static_cast<uint32_t>(pc.dstH) + 7u) / 8u, 1);
         }
 
-        // Trailing: pyramid writes → the shade dispatch's sampled reads.
+        // Trailing: pyramid writes → occl_cull.comp's sampled reads.
         VkMemoryBarrier2 tb{};
         tb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
         tb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;

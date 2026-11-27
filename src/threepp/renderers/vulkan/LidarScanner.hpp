@@ -254,8 +254,8 @@ namespace threepp::vulkan {
         // Round (numBeams, slotsPerBeam) up to powers of two and reallocate
         // buffers if larger than current capacity. `slotsPerBeam` is the
         // total result slots per beam = samplesPerBeam · maxReturns.
-        // Updates the descriptor set bindings for beamBuf_ + resultBuf_
-        // since the VkBuffer handles change.
+        // Updates the slot's descriptor set bindings for its beamBuf +
+        // resultBuf, since the VkBuffer handles change.
         void ensureCapacity(Slot& slot, uint32_t numBeams, uint32_t slotsPerBeam);
 
         // Update the shared bindings (TLAS, geomDescs, matDescs, fogUbo)

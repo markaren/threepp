@@ -38,8 +38,9 @@
 namespace threepp::vulkan {
 
     // Number of descriptor bindings in the deferred set. Binding NUMBERS run
-    // 0..71 with 56 retired, so the table has 71 entries and the highest
-    // binding number is 71 — they are not the same quantity, which is exactly
+    // 0..99 with 14, 27-30, 34 and 56 retired, so the table has 93 entries (92
+    // without ray tracing, which drops the TLAS at 8) and the highest binding
+    // number is 99 — they are not the same quantity, which is exactly
     // how the two exact-fit stack arrays below used to drift: adding binding 67
     // to a 66-entry array wrote one element past the end (a silent stack smash
     // that no validation layer can see). Both tables are std::array of this
@@ -140,10 +141,10 @@ namespace threepp::vulkan {
         const bool rt = ctx_.rayQuerySupported();
 
         std::array<VkDescriptorSetLayoutBinding, kDeferredBindingCount> b{};
-        // Dense cursor: array index and binding number diverge past the
-        // retired 56 slot (55 is live — the prev-ids history; binding numbers
-        // stay stable for the shaders, the array carries no zero-init gap
-        // entries — those are invalid layout bindings, not padding).
+        // Dense cursor: array index and binding number diverge at every
+        // retired slot (14, 27-30, 34, 56; binding numbers stay stable for the
+        // shaders, the array carries no zero-init gap entries — those are
+        // invalid layout bindings, not padding).
         uint32_t nb = 0;
         auto set = [&](uint32_t binding, VkDescriptorType t) {
             auto& e = b.at(nb);// bound-checked: one slot per set() call, exact fit
@@ -334,8 +335,7 @@ namespace threepp::vulkan {
         // Derive the descriptor-pool sizes straight from the bindings above:
         // one entry per distinct type, summing descriptorCount × framesInFlight.
         // The bindless array at b[11] contributes kMaxMaterialTextures on its
-        // own, so this reproduces the old hand-summed counts (uniform 6, sampler
-        // 32+bindless, storage-image 20, AS 1, storage-buffer 7) but can never
+        // own. These replaced hand-summed counts, and unlike them can never
         // fall out of step with the table as bindings are added.
         poolSizes_.clear();
         for (uint32_t i = 0; i < dlci.bindingCount; ++i) {

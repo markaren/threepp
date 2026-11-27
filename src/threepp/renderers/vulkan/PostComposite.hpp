@@ -45,7 +45,8 @@
 // (VulkanRenderer::Impl) finalizes it into the swapchain via TaaResolve's
 // existing swapchain-indexed RCAS/copy machinery (recordPostFinalize),
 // exactly the pattern a downstream RCAS already uses on the LDR history
-// slot. setTaaHdrOutput(bool) selects which output binding 3 targets;
+// slot. recordDispatch's hdrMode (a push-constant flag) selects which of the
+// two outputs the shader writes;
 // resizeHdrOutput must be called (once, at display-extent) before HDR mode
 // is used.
 
