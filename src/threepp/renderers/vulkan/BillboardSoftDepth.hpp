@@ -55,10 +55,7 @@ namespace threepp::vulkan {
     class BillboardSoftDepth {
 
     public:
-        // Same contract as ParticleFieldPass::RetireBufferFn: a buffer an
-        // in-flight frame may still name goes to the frame-serial queue.
-        using RetireBufferFn = std::function<void(Buffer&&)>;
-
+        // retireFn: where a buffer an in-flight frame may still name goes.
         BillboardSoftDepth(VulkanContext& ctx, std::uint32_t framesInFlight, RetireBufferFn retireFn);
         ~BillboardSoftDepth();
         BillboardSoftDepth(const BillboardSoftDepth&) = delete;

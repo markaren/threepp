@@ -57,13 +57,9 @@ namespace threepp::vulkan {
         };
         static_assert(sizeof(SpanDesc) == 80, "instance_expand SpanDesc drift");
 
-        // Defers the free of a grown-out SHARED buffer (the world-matrix
-        // output) to the renderer's frame-serial retire queue. Same contract
-        // and same reason as OcclusionCull::RetireBufferFn.
-        using RetireBufferFn = std::function<void(Buffer&&)>;
-
-        InstanceExpand(VulkanContext& ctx, uint32_t framesInFlight,
-                       RetireBufferFn retireFn = {});
+        // retireFn: where a grown-out SHARED buffer (the world-matrix output)
+        // goes — a sibling frame in flight may still read the old one.
+        InstanceExpand(VulkanContext& ctx, uint32_t framesInFlight, RetireBufferFn retireFn);
         ~InstanceExpand();
         InstanceExpand(const InstanceExpand&) = delete;
         InstanceExpand& operator=(const InstanceExpand&) = delete;

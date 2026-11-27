@@ -185,11 +185,6 @@ namespace threepp::vulkan {
             // frees it once its last referencing frame's fence has signaled.
             // retireFn_ zeroes b so the reallocation below can't double-free.
             retireFn_(std::move(b));
-        } else {
-            // No queue wired (defensive fallback): a full device drain makes the
-            // inline free safe. Impl always wires the callback in practice.
-            vkDeviceWaitIdle(ctx_.device());
-            destroyBuffer(ctx_.allocator(), b);
         }
     }
 

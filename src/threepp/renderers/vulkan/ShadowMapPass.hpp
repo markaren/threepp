@@ -69,7 +69,7 @@ namespace threepp::vulkan {
         // retire queue, which a reallocated static cache is handed to (both
         // slots read it, so the other one may still have it in flight).
         ShadowMapPass(VulkanContext& ctx, uint32_t framesInFlight, VkDescriptorSetLayout rasterLayout,
-                      TransientPool* pool, uint32_t view, std::function<void(Image2D&&)> retireImage);
+                      TransientPool* pool, uint32_t view, RetireImageFn retireImage);
         ~ShadowMapPass();
         ShadowMapPass(const ShadowMapPass&)            = delete;
         ShadowMapPass& operator=(const ShadowMapPass&) = delete;
@@ -213,7 +213,7 @@ namespace threepp::vulkan {
         VulkanContext&        ctx_;
         TransientPool*        transient_ = nullptr;
         uint32_t              view_      = 0;
-        std::function<void(Image2D&&)> retireImage_;
+        RetireImageFn retireImage_;
         VkDescriptorPool      pool_ = VK_NULL_HANDLE;
         std::vector<Slot>     slots_;
         uint64_t              genCounter_ = 0;

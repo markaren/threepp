@@ -133,12 +133,7 @@ OverlayPass::OverlayPass(VulkanContext& ctx, uint32_t framesInFlight,
 
 void OverlayPass::retireBuffer(Buffer& b) {
     if (b.handle == VK_NULL_HANDLE) return;
-    if (retireBufferFn_) {
-        retireBufferFn_(std::move(b));// zeroes b (RetireQueue::retire)
-    } else {
-        vkDeviceWaitIdle(ctx_.device());
-        destroyBuffer(ctx_.allocator(), b);
-    }
+    retireBufferFn_(std::move(b));// zeroes b (RetireQueue::retire)
     b = {};
 }
 
@@ -887,12 +882,7 @@ void OverlayPass::ensurePaneDepth(VkCommandBuffer cb) {
     // Extent changed (or first use). The old image may be referenced by
     // in-flight command buffers — retire it on the frame-serial queue.
     if (paneDepth_.image != VK_NULL_HANDLE) {
-        if (retireFn_) {
-            retireFn_(std::move(paneDepth_));
-        } else {
-            vkDeviceWaitIdle(ctx_.device());
-            destroyImage2D(ctx_.allocator(), ctx_.device(), paneDepth_);
-        }
+        retireFn_(std::move(paneDepth_));
         paneDepth_ = {};
     }
 
@@ -1137,13 +1127,8 @@ OverlayPass::ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp,
         // frame-serial queue rather than draining the whole device: sprite
         // descriptor sets are allocated per-frame from reset pools, so the only
         // hazard is the image being sampled by an in-flight frame, which the
-        // retire delay covers. Fallback drains only if no callback was wired.
-        if (retireFn_) {
-            retireFn_(std::move(rec.image));
-        } else {
-            vkDeviceWaitIdle(ctx_.device());
-            destroyImage2D(ctx_.allocator(), ctx_.device(), rec.image);
-        }
+        // retire delay covers.
+        retireFn_(std::move(rec.image));
         spriteAtlasCache_.erase(it);
     } else if (cb == VK_NULL_HANDLE) {
         return nullptr;// lookup-only, never uploaded
@@ -1518,12 +1503,7 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     // this its image would live until the renderer is destroyed.
     for (auto it = spriteAtlasCache_.begin(); it != spriteAtlasCache_.end();) {
         if (it->second.liveCheck.expired()) {
-            if (retireFn_) {
-                retireFn_(std::move(it->second.image));
-            } else {
-                vkDeviceWaitIdle(ctx_.device());
-                destroyImage2D(ctx_.allocator(), ctx_.device(), it->second.image);
-            }
+            retireFn_(std::move(it->second.image));
             it = spriteAtlasCache_.erase(it);
         } else {
             ++it;

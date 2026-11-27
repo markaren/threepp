@@ -319,16 +319,14 @@ ParticleFieldPass::~ParticleFieldPass() {
 void ParticleFieldPass::retireOrDestroy(Buffer& b) {
 
     if (b.handle == VK_NULL_HANDLE) return;
-    if (retireFn_) retireFn_(std::move(b));
-    else destroyBuffer(ctx_.allocator(), b);
+    retireFn_(std::move(b));
     b = Buffer{};
 }
 
 void ParticleFieldPass::retireOrDestroy(Image2D& img) {
 
     if (img.image == VK_NULL_HANDLE) return;
-    if (retireImageFn_) retireImageFn_(std::move(img));
-    else destroyImage2D(ctx_.allocator(), ctx_.device(), img);
+    retireImageFn_(std::move(img));
     img = Image2D{};
 }
 

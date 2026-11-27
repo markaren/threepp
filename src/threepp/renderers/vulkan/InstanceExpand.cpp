@@ -102,12 +102,7 @@ namespace threepp::vulkan {
 
     void InstanceExpand::retireBuffer(Buffer& b) {
         if (b.handle == VK_NULL_HANDLE) return;
-        if (retireFn_) {
-            retireFn_(std::move(b));// zeroes b; the reallocation can't double-free
-        } else {
-            vkDeviceWaitIdle(ctx_.device());
-            destroyBuffer(ctx_.allocator(), b);
-        }
+        retireFn_(std::move(b));// zeroes b; the reallocation can't double-free
     }
 
     void InstanceExpand::ensureCapacity(uint32_t frame, uint32_t spanCount,

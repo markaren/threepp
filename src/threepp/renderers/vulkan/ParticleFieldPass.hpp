@@ -508,16 +508,13 @@ namespace threepp::vulkan {
             float           glowThreshold = 0.f;// bright-pass knee, linear HDR
         };
 
-        // Same contract and same reason as InstanceExpand::RetireBufferFn: a
-        // field that leaves the scene may still be named by an in-flight frame,
-        // so its buffers go to the renderer's frame-serial retire queue rather
-        // than being destroyed inline.
-        using RetireBufferFn = std::function<void(Buffer&&)>;
-        // Same contract for the density volume, which is an IMAGE and is named
-        // by descriptor SETS as well as by command buffers — so it goes through
-        // the frame-serial queue too, and the sets that name it are refreshed
-        // through the renderer's per-frame dirty flags (see densityGeneration).
-        using RetireImageFn = std::function<void(Image2D&&)>;
+        // retireFn: a field that leaves the scene may still be named by an
+        // in-flight frame, so its buffers go to the renderer's frame-serial
+        // retire queue rather than being destroyed inline. retireImageFn: the
+        // same for the density volume, which is an IMAGE and is named by
+        // descriptor SETS as well as by command buffers; the sets that name it
+        // are refreshed through the renderer's per-frame dirty flags (see
+        // densityGeneration).
         // 3D-image factory. The renderer already owns one (Impl::createImage3D,
         // the froxel grids' own constructor); handing it in keeps a second copy
         // of the VkImageCreateInfo/VkImageViewCreateInfo pair out of the tree.

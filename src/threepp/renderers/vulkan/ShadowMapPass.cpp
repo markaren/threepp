@@ -143,10 +143,6 @@ namespace threepp::vulkan {
     // A cache has no per-layer views and its own allocation, so it is an
     // Image2D as far as the retire queue's destroy goes.
     void ShadowMapPass::retireCache(ShadowDepthArray& c) {
-        if (!retireImage_) {
-            destroyShadowDepthArray(ctx_, c);
-            return;
-        }
         Image2D img;
         img.image = c.image;
         img.alloc = c.alloc;

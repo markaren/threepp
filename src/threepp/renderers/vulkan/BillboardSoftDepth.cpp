@@ -108,8 +108,7 @@ namespace threepp::vulkan {
     void BillboardSoftDepth::release(ViewSlots& v) {
         for (auto& s : v.slots) {
             if (s.buf.handle != VK_NULL_HANDLE) {
-                if (retireFn_) retireFn_(std::move(s.buf));
-                else destroyBuffer(ctx_.allocator(), s.buf);
+                retireFn_(std::move(s.buf));
                 s.buf = Buffer{};
             }
             if (s.set != VK_NULL_HANDLE) vkFreeDescriptorSets(ctx_.device(), pool_, 1, &s.set);
@@ -159,8 +158,7 @@ namespace threepp::vulkan {
         // retire queue is the rule here and costs nothing.
         if (s.buf.handle == VK_NULL_HANDLE || s.width != ext.width || s.height != ext.height) {
             if (s.buf.handle != VK_NULL_HANDLE) {
-                if (retireFn_) retireFn_(std::move(s.buf));
-                else destroyBuffer(ctx_.allocator(), s.buf);
+                retireFn_(std::move(s.buf));
                 s.buf = Buffer{};
             }
             s.buf = createBuffer(ctx_.allocator(), ctx_.device(),

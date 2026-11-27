@@ -57,17 +57,12 @@ namespace threepp::vulkan {
             uint32_t flags;// bit 0 = always draw (deformers / missing bounds)
         };
 
-        // Hands a stale shared phase/visBits Buffer to the renderer's frame-serial
-        // retire queue instead of an immediate vmaDestroyBuffer. ensureCapacity
-        // grows these SINGLE (non-per-fif) buffers mid-record, when the sibling
-        // frame-in-flight may still reference the old handle on the GPU; retiring
-        // defers the free until its fence has provably signaled (VulkanRetireQueue).
-        // The lambda captures Impl and forwards to Impl::retire. Optional:
-        // if unset, ensureCapacity falls back to vkDeviceWaitIdle + destroy.
-        using RetireBufferFn = std::function<void(Buffer&&)>;
-
+        // retireFn: where a stale shared phase/visBits buffer goes instead of
+        // an immediate vmaDestroyBuffer. ensureCapacity grows these SINGLE
+        // (non-per-fif) buffers mid-record, when the sibling frame in flight may
+        // still reference the old handle on the GPU.
         OcclusionCull(VulkanContext& ctx, VkCommandPool cmdPool, uint32_t framesInFlight,
-                      RetireBufferFn retireFn = {});
+                      RetireBufferFn retireFn);
         ~OcclusionCull();
         OcclusionCull(const OcclusionCull&) = delete;
         OcclusionCull& operator=(const OcclusionCull&) = delete;

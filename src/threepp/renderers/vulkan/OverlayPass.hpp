@@ -61,22 +61,15 @@ namespace threepp::vulkan {
                 VkSamplerAddressMode addrV,
                 const char* debugName)>;
 
-        // Hands a stale sprite-atlas Image2D back to the renderer's frame-serial
-        // retire queue instead of a per-swap vkDeviceWaitIdle. The lambda
-        // captures Impl and forwards to Impl::retire. Optional: if unset,
-        // ensureSpriteAtlasTexture falls back to drain+destroy.
-        using RetireImageFn = std::function<void(Image2D&&)>;
-
-        // Same contract for the geometry caches' vertex/index/color/normal
-        // buffers. The overlay re-uploads and evicts these MID-FRAME (a
-        // detection-box overlay rebuilds its line geometry every frame), while
-        // command buffers from the previous frames-in-flight can still be
-        // reading them — freeing inline is a use-after-free with zero margin.
-        // Optional: if unset, the buffer paths fall back to drain+destroy.
-        using RetireBufferFn = std::function<void(Buffer&&)>;
-
+        // retireFn: where stale sprite atlases and the pane depth go, instead
+        // of a per-swap vkDeviceWaitIdle. retireBufferFn: the same for the
+        // geometry caches' vertex/index/color/normal buffers, which the overlay
+        // re-uploads and evicts MID-FRAME (a detection-box overlay rebuilds its
+        // line geometry every frame) while command buffers from the previous
+        // frames in flight can still be reading them — freeing inline is a
+        // use-after-free with zero margin.
         OverlayPass(VulkanContext& ctx, uint32_t framesInFlight, SampledImageCreator uploadFn,
-                    RetireImageFn retireFn = {}, RetireBufferFn retireBufferFn = {});
+                    RetireImageFn retireFn, RetireBufferFn retireBufferFn);
         ~OverlayPass();
         OverlayPass(const OverlayPass&)            = delete;
         OverlayPass& operator=(const OverlayPass&) = delete;

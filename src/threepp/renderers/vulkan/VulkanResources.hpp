@@ -217,6 +217,14 @@ namespace threepp::vulkan {
     // order and zeroes the struct.
     void destroyImage2D(VmaAllocator alloc, VkDevice device, Image2D& img);
 
+    // The renderer's frame-serial retire queue (RetireQueue, through
+    // Impl::retire) as the passes that free resources mid-record see it: the
+    // resource is destroyed once every frame in flight that may still name it
+    // has finished, with no device-wide wait. It zeroes what it takes. The
+    // passes that take one require it.
+    using RetireBufferFn = std::function<void(Buffer&&)>;
+    using RetireImageFn  = std::function<void(Image2D&&)>;
+
     // vkCreateImageView, registering the view's image and subresource range
     // for the render graph's descriptor-derived declarations (see
     // DescriptorShadow.hpp). Every view the backend creates goes through this.
