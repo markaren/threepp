@@ -147,46 +147,34 @@ MaterialsInfo MaterialCreator::convert(const MaterialsInfo& mi) {
 
     if (!options) return mi;
 
-    MaterialsInfo converted = MaterialsInfo{};
+    // As three.js's MaterialCreator.convert: every property is kept, under its
+    // lower-cased name; Kd, Ka and Ks are divided by 255 under normalizeRGB and
+    // left out when all three are zero under ignoreZeroRGBs.
+    MaterialsInfo converted;
 
-    for (auto& [key, mat] : mi) {
+    for (const auto& [key, mat] : mi) {
 
-        auto covMat = std::unordered_map<std::string, MatVariant>{};
+        auto& covMat = converted[key];
 
-        converted[key] = covMat;
+        for (const auto& [prop, value] : mat) {
 
-    loop:
-        for (auto& [prop, value] : mat) {
+            const auto lprop = utils::toLower(prop);
+            MatVariant v = value;
 
-            bool save = true;
-            auto lprop = utils::toLower(prop);
+            if ((lprop == "kd" || lprop == "ka" || lprop == "ks") && std::holds_alternative<std::vector<float>>(v)) {
 
-            if (lprop == "kd" || lprop == "ka" || lprop == "ks") {
+                auto& rgb = std::get<std::vector<float>>(v);
 
                 if (options->normalizeRGB) {
-                    auto& v = const_cast<std::vector<float>&>(std::get<std::vector<float>>(value));
-
-                    v[0] /= 255;
-                    v[1] /= 255;
-                    v[2] /= 255;
+                    for (auto& c : rgb) c /= 255;
                 }
 
-                if (options->ignoreZeroRGBs) {
-
-                    auto& v = std::get<std::vector<float>>(value);
-
-                    if (v[0] == 0 && v[1] == 0 && v[2] == 0) {
-                        save = false;
-                    }
+                if (options->ignoreZeroRGBs && rgb.size() >= 3 && rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0) {
+                    continue;
                 }
-            } else {
-                goto loop;
             }
 
-            if (save) {
-
-                covMat[lprop] = value;
-            }
+            covMat[lprop] = std::move(v);
         }
     }
 

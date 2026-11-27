@@ -483,6 +483,35 @@ TEST_CASE("MTLLoader gives a material name its file does not define a default ma
     std::filesystem::remove(mtl);
 }
 
+TEST_CASE("MTLLoader's material options convert the colours as three.js does") {
+
+    // convert() restarted its loop at the first property that was not Kd, Ka or
+    // Ks (every material has a name), so any options hung the load.
+    const auto mtl = writeTempFile("threepp_mtl_options.mtl",
+                                   "newmtl orange\nKd 255 128 0\nKs 0 0 0\nNs 10\n");
+
+    MTLLoader loader;
+    MaterialOptions options;
+    options.normalizeRGB = true;
+    options.ignoreZeroRGBs = true;
+    options.side = Side::Double;
+    loader.materialOptions = options;
+    auto creator = loader.load(mtl);
+    REQUIRE(creator);
+
+    auto material = std::dynamic_pointer_cast<MeshPhongMaterial>(creator->create("orange"));
+    REQUIRE(material);
+    CHECK(material->color.r == 1.f);
+    CHECK(material->color.g == 128.f / 255.f);
+    CHECK(material->color.b == 0.f);
+    // Ks 0 0 0 was left out, so the default specular stays.
+    CHECK(material->specular.getHex() == MeshPhongMaterial::create()->specular.getHex());
+    CHECK(material->shininess == 10.f);
+    CHECK(material->side == Side::Double);
+
+    std::filesystem::remove(mtl);
+}
+
 TEST_CASE("MTLLoader tags colour maps sRGB and data maps linear") {
 
     // TextureLoader::load(path) tags NoColorSpace and the renderers decode only
