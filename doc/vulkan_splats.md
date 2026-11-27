@@ -627,9 +627,9 @@ Not implemented. Ordered by measured or estimated value.
    than this one: `recordScan` computes per-level counts AND scratch offsets on
    the host.
 
-   `THREEPP_VK_SPLAT_NOINDIRECT=1` restores the worst-case dispatches — the A/B
-   switch the numbers above came from, and the first thing to try if another
-   driver disagrees.
+   The numbers above came from an A/B switch that restored the worst-case
+   dispatches (`THREEPP_VK_SPLAT_NOINDIRECT`); it is gone, and the indirect
+   dispatches are the only path.
 
    Follow-up, ablated and REFUTED as written: the 8 per-pass histogram zero-fills
    cost ~0.5 ms of the 3.9 ms zoom sort (ablation: skip them, 3.43 vs 3.92–4.22),

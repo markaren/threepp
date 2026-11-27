@@ -148,8 +148,8 @@ namespace threepp::vulkan {
             // dispatch converts PER AXIS to (−jitterX, +jitterY) — the image-
             // content shift in y-down pixel space, same convention as FSR; a
             // scalar sign can't express the GL-y-up clip → y-down pixel
-            // conversion (see jitterSignX/Y in the .cpp for the measured 2×2
-            // matrix; THREEPP_DLSS_JITTER_SIGN_X/_Y=neg|pos override per axis).
+            // conversion (see kJitterSignX/Y in the .cpp for the measured 2×2
+            // matrix).
             float jitterX = 0.f, jitterY = 0.f;
             // NDC-delta → render-pixel conversion: {0.5*renderW, -0.5*renderH}.
             float motionScaleX = 0.f, motionScaleY = 0.f;

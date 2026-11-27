@@ -1620,22 +1620,13 @@ namespace threepp::vulkan {
             // One thread reads g.entryCount and writes the group counts the
             // radix and range dispatches below consume. Everything after the
             // expansion used to run over entryBudget_ instead, which measured
-            // 7.9 ms of sorting on a frame with nothing on screen.
-            // THREEPP_VK_SPLAT_NOINDIRECT restores the worst-case dispatches.
-            // Same escape-hatch shape as NOMOTION/NOFOG: it is how the
-            // indirect path was A/B'd for byte-identical output on a real
-            // scan, and it is the first thing to try if some other driver
-            // disagrees about vkCmdDispatchIndirect.
-            const bool indirectDispatch = !env::flag("THREEPP_VK_SPLAT_NOINDIRECT");
-
-            if (indirectDispatch) {
-
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, indirectPipe_);
-                pc = {entryBudget_, 0, 0, 0, 0, 0, 0, 0};
-                vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, 1, 1, 1);
-                barrierIndirect(cb);
-            }
+            // 7.9 ms of sorting on a frame with nothing on screen (the
+            // indirect sizing gave byte-identical output on a real scan).
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, indirectPipe_);
+            pc = {entryBudget_, 0, 0, 0, 0, 0, 0, 0};
+            vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatch(cb, 1, 1, 1);
+            barrierIndirect(cb);
 
             // ── 8 x 4-bit LSD radix, ping-ponging A <-> B ────────────────────
             // The histogram is indexed [bin][block] with pc.arg1 = the WORST-CASE
@@ -1659,8 +1650,7 @@ namespace threepp::vulkan {
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, histPipe_);
                 pc = {entryBudget_, 0, 0, 0, shift, radixBlocks, side, 0};
                 vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                if (indirectDispatch) vkCmdDispatchIndirect(cb, indirectBuf_.handle, 0);
-                else                  vkCmdDispatch(cb, radixBlocks, 1, 1);
+                vkCmdDispatchIndirect(cb, indirectBuf_.handle, 0);
                 barrier(cb);
 
                 recordScan(cb, kRadixBins * radixBlocks, 2);
@@ -1668,8 +1658,7 @@ namespace threepp::vulkan {
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, scatterPipe_);
                 pc = {entryBudget_, 0, 0, 0, shift, radixBlocks, side, 0};
                 vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                if (indirectDispatch) vkCmdDispatchIndirect(cb, indirectBuf_.handle, 0);
-                else                  vkCmdDispatch(cb, radixBlocks, 1, 1);
+                vkCmdDispatchIndirect(cb, indirectBuf_.handle, 0);
                 barrier(cb);
             }
 
@@ -1682,8 +1671,7 @@ namespace threepp::vulkan {
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             // rangeBuf_ was zero-filled at the top of this cloud, so the tiles
             // this dispatch no longer reaches are empty rather than stale.
-            if (indirectDispatch) vkCmdDispatchIndirect(cb, indirectBuf_.handle, 3 * sizeof(uint32_t));
-            else                  vkCmdDispatch(cb, divUp(entryBudget_, 256), 1, 1);
+            vkCmdDispatchIndirect(cb, indirectBuf_.handle, 3 * sizeof(uint32_t));
             barrier(cb);
 
             if (checksum) {

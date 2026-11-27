@@ -1764,9 +1764,8 @@ namespace threepp::vulkan {
                                                  uint32_t width, uint32_t height,
                                                  uint32_t gbufMsaaSamples, bool shadeBActive,
                                                  uint32_t preExpBits, uint32_t lightingView) {
-        // GI SVGF filter + recombine (the à-trous passes below; count via
-        // THREEPP_DENOISE_ATROUS_PASSES, default 4 — the wide passes
-        // self-gate per pixel, see deferred_gi_filter.comp).
+        // GI SVGF filter + recombine (the four à-trous passes below; the wide
+        // ones self-gate per pixel, see deferred_gi_filter.comp).
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, giFilterPipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
@@ -1785,18 +1784,15 @@ namespace threepp::vulkan {
         // pixels — the shade pass stored only the coverage-weighted dominant
         // surface there, so a full-weight add was a bright rim on every edge.
         const uint32_t msaaInfo = (gbufMsaaSamples & 0x7u) | (shadeBActive ? 0x10u : 0u);
-        // THREEPP_DENOISE_ATROUS_PASSES: 2..4, default 4 — the pass-count
-        // knob. Each pass filters at a widening step (1,2,4,8), so dropping
-        // tail passes halves the filter's reach each time: 4 passes cover
-        // ±~30 px, 3 cover ±~14, 2 cover ±~6. The table derives from the
-        // count instead of being hand-written: pass 0 always reads the raw
-        // indirect (srcMode 0) and the LAST pass recombines into sceneHdr
-        // (dstMode 2). No pass writes its output back as temporal history
-        // (deferred_gi_filter's NO HISTORY FEEDBACK note: fed back, the
-        // filter's one-sided pull compounded into darker GI and shadows).
-        //   4 (default): {1,0,0} {2,1,1} {4,2,0} {8,1,2}
-        //   3:           {1,0,0} {2,1,1} {4,2,2}
-        //   2:           {1,0,0} {2,1,2}
+        // Each pass filters at a widening step (1,2,4,8): four passes cover
+        // ±~30 px. The table derives from the count instead of being
+        // hand-written: pass 0 always reads the raw indirect (srcMode 0) and
+        // the LAST pass recombines into sceneHdr (dstMode 2). No pass writes
+        // its output back as temporal history (deferred_gi_filter's NO
+        // HISTORY FEEDBACK note: fed back, the filter's one-sided pull
+        // compounded into darker GI and shadows).
+        //   4:                          {1,0,0} {2,1,1} {4,2,0} {8,1,2}
+        //   1 (temporal-only views):    {1,0,2}
         //
         // History (2026-08-19): the pass bench put this chain at 2.09 ms —
         // 37% of the ocean scene's GPU frame — and each dropped pass is
@@ -1808,10 +1804,8 @@ namespace threepp::vulkan {
         // loop at step ≥ 4 wherever both channels' propagated variance says
         // the filter would be a near-identity, and passes the center
         // through. Sky-lit converged scenes pay ~2 real passes; lamp-lit
-        // noise keeps the full ±30 px reach. The knob remains for A/B and
-        // for forcing the old global behavior.
-        static const int kAtrousPasses =
-                static_cast<int>(std::clamp(env::integer("THREEPP_DENOISE_ATROUS_PASSES").value_or(4), 2LL, 4LL));
+        // noise keeps the full ±30 px reach.
+        constexpr int kAtrousPasses = 4;
         struct Pass { uint32_t step, srcMode, dstMode; };
         Pass passes[4]{};
         // Lighting views 2, 4 and 7 show terms before spatial filtering: one

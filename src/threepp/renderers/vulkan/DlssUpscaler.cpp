@@ -126,22 +126,8 @@ namespace threepp::vulkan {
         // 0.019/0.061 · (−,+) 0.014/0.019 ← only (−,+) passes the < 0.05 px
         // acceptance on both axes. Same seam as the motion vectors, which
         // already y-flip via motionScaleY = -0.5H.
-        // Debug overrides: THREEPP_DLSS_JITTER_SIGN_X / _Y = "neg"/"pos"
-        // force an axis.
-        float axisSign(const char* env, float dflt) {
-            const char* v = std::getenv(env);
-            if (v && std::strcmp(v, "neg") == 0) return -1.f;
-            if (v && std::strcmp(v, "pos") == 0) return 1.f;
-            return dflt;
-        }
-        float jitterSignX() {
-            static const float s = axisSign("THREEPP_DLSS_JITTER_SIGN_X", -1.f);
-            return s;
-        }
-        float jitterSignY() {
-            static const float s = axisSign("THREEPP_DLSS_JITTER_SIGN_Y", 1.f);
-            return s;
-        }
+        constexpr float kJitterSignX = -1.f;
+        constexpr float kJitterSignY = 1.f;
 
     }// namespace
 
@@ -488,8 +474,8 @@ namespace threepp::vulkan {
         ev.Feature.InSharpness = 0.f;// the renderer keeps its own display RCAS
         ev.pInDepth          = &depth;
         ev.pInMotionVectors  = &motion;
-        ev.InJitterOffsetX   = jitterSignX() * in.jitterX;
-        ev.InJitterOffsetY   = jitterSignY() * in.jitterY;
+        ev.InJitterOffsetX   = kJitterSignX * in.jitterX;
+        ev.InJitterOffsetY   = kJitterSignY * in.jitterY;
         ev.InRenderSubrectDimensions = {in.renderWidth, in.renderHeight};
         ev.InReset           = in.reset ? 1 : 0;
         ev.InMVScaleX        = in.motionScaleX;
@@ -565,8 +551,8 @@ namespace threepp::vulkan {
         ev.pInOutput         = &output;
         ev.pInDepth          = &depth;
         ev.pInMotionVectors  = &motion;
-        ev.InJitterOffsetX   = jitterSignX() * in.jitterX;
-        ev.InJitterOffsetY   = jitterSignY() * in.jitterY;
+        ev.InJitterOffsetX   = kJitterSignX * in.jitterX;
+        ev.InJitterOffsetY   = kJitterSignY * in.jitterY;
         ev.InRenderSubrectDimensions = {in.renderWidth, in.renderHeight};
         ev.InReset           = in.reset ? 1 : 0;
         ev.InMVScaleX        = in.motionScaleX;

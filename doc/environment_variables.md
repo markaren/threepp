@@ -143,11 +143,8 @@ These variables were replaced by categories and are no longer read:
 
 | Variable | Kind | Default | Effect | Read | Notes |
 |---|---|---|---|---|---|
-| `THREEPP_DLSS_JITTER_SIGN_X` | string | negative | `neg` or `pos` forces the sign of the X jitter handed to DLSS; anything else keeps the default. | once | diagnostic |
-| `THREEPP_DLSS_JITTER_SIGN_Y` | string | positive | `neg` or `pos` forces the sign of the Y jitter handed to DLSS; anything else keeps the default. | once | diagnostic |
 | `THREEPP_DLSS_LOG` | flag | off | Turns on NGX's own verbose log, written to `vulkan.upscale` at info, each line with the time since the previous one. | per NGX init | diagnostic |
 | `THREEPP_DENOISE` | flag | on | `0` turns off the deferred SVGF denoiser, to tell a shading artifact from a temporal or denoise one. | per renderer | A/B hatch |
-| `THREEPP_DENOISE_ATROUS_PASSES` | integer | 4 | Number of a-trous passes of the deferred GI denoise filter, clamped to 2..4 (fewer passes forces the old global cut). | once | A/B hatch |
 
 ## Deferred shading and probe GI
 
@@ -239,7 +236,6 @@ These four are parsed by hand: on unless the value is exactly `0`.
 | `THREEPP_VK_SPLAT_CHECKSUM` | flag | off | Hashes the sorted splat key and payload arrays, prints the entry count and checks the scan and sort invariants. | per call | diagnostic |
 | `THREEPP_VK_SPLAT_NOMOTION` | flag | off | Splats skip the motion vector write. | once | A/B hatch |
 | `THREEPP_VK_SPLAT_NOFOG` | flag | off | Splats skip the per-splat fog. | once | A/B hatch |
-| `THREEPP_VK_SPLAT_NOINDIRECT` | flag | off | Restores the worst-case sort dispatches instead of indirect dispatches sized from the data. | per call | A/B hatch |
 | `THREEPP_VK_SPLAT_RANGESPLIT` | integer | unset: the app's submit ranges | Values above 1 submit each cloud as that many contiguous ranges covering all of it (an identity, for proving the range path). | per call (each frame) | diagnostic |
 | `THREEPP_VK_SPLATVOL_OFF` | flag | off | Never bakes the splat reflection volume: no image, no dispatch, no VRAM. | per renderer | A/B hatch |
 | `THREEPP_VK_SPLATVOL_RES` | integer | 128 | Longest-axis voxel budget of the reflection volume bake, clamped to 16..256. | per renderer | |
