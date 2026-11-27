@@ -13,7 +13,7 @@
 // per-sample shading phase.
 //
 // Depth needs a second, tiny fullscreen-triangle rasterization pass
-// (gbuf_resolve_depth.vert/.frag) because compute shaders cannot target a
+// (overlay_fullscreen.vert + gbuf_resolve_depth.frag) because compute shaders cannot target a
 // depth-aspect image; it re-derives the same winning sample index from the
 // ids.w metadata gbuf_resolve.comp already wrote, so the two resolves can
 // never disagree.

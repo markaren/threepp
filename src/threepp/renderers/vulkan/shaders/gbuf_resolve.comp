@@ -35,7 +35,7 @@
 // Simple (non-edge) pixels: mask = all K bits set, complex = 0.
 //
 // Depth cannot be written here (compute shaders cannot target a depth-
-// aspect image) — see gbuf_resolve_depth.vert/.frag, a tiny fullscreen pass
+// aspect image) — see gbuf_resolve_depth.frag, a tiny fullscreen pass
 // that resolves depth by re-deriving the same dominant-sample pick from the
 // ALREADY-RESOLVED ids.w metadata (dominant sample index in bits 4..5), so
 // the two passes never disagree on which sample won.

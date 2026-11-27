@@ -1549,11 +1549,10 @@ if (THREEPP_WITH_VULKAN)
     # opt-in, default off). gbuf_resolve.comp picks the majority-covering
     # instance per pixel from the K raster samples and writes it into the
     # single-sample resolve targets every existing consumer already reads;
-    # gbuf_resolve_depth.{vert,frag} is a companion fullscreen pass that
-    # resolves depth (compute can't target a depth-aspect image). See
-    # GbufResolve.{hpp,cpp}.
+    # gbuf_resolve_depth.frag (over overlay_fullscreen.vert) is a companion
+    # fullscreen pass that resolves depth (compute can't target a depth-aspect
+    # image). See GbufResolve.{hpp,cpp}.
     compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve.comp" kGbufResolveCompSpv)
-    compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve_depth.vert" kGbufResolveDepthVertSpv)
     compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve_depth.frag" kGbufResolveDepthFragSpv)
     # Hybrid raster TAA: post-denoise temporal resolve. Reads taaInput +
     # history + gbufMotion → writes swapchain + new history.
@@ -1617,8 +1616,8 @@ if (THREEPP_WITH_VULKAN)
     compile_vulkan_shader(threepp "${_vk_shaders}/overlay_mesh_lit.vert" kOverlayMeshLitVertSpv)
     compile_vulkan_shader(threepp "${_vk_shaders}/overlay_mesh_lit.frag" kOverlayMeshLitFragSpv)
     # Lit pane sky — fullscreen equirect background for the lit pane, sampling
-    # the same envImage the deferred primary miss shows.
-    compile_vulkan_shader(threepp "${_vk_shaders}/overlay_pane_sky.vert" kOverlayPaneSkyVertSpv)
+    # the same envImage the deferred primary miss shows (over
+    # overlay_fullscreen.vert).
     compile_vulkan_shader(threepp "${_vk_shaders}/overlay_pane_sky.frag" kOverlayPaneSkyFragSpv)
     # HUD sprite (TextSprite + Sprite) — alpha-blended quad with per-sprite
     # combined-image-sampler binding. Walked from the user's HUD scene during

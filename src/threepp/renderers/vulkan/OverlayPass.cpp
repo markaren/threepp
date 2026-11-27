@@ -34,10 +34,10 @@
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_fullscreen.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_mesh_lit.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_mesh_lit.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_pane_sky.frag.spv.h"
-#include "threepp/renderers/vulkan/shaders/overlay_pane_sky.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
@@ -765,7 +765,7 @@ void OverlayPass::createPaneSkyPipeline() {
               "vkCreatePipelineLayout(paneSky)");
     }
 
-    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayPaneSkyVertSpv, sizeof(kOverlayPaneSkyVertSpv), "vkCreateShaderModule(overlay_pane_sky.vert)");
+    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert)");
     VkShaderModule fragModule = createShaderModule(ctx_.device(), kOverlayPaneSkyFragSpv, sizeof(kOverlayPaneSkyFragSpv), "vkCreateShaderModule(overlay_pane_sky.frag)");
 
     VkPipelineShaderStageCreateInfo stages[2]{};

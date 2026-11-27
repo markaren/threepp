@@ -2,7 +2,7 @@
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/shaders/gbuf_resolve.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuf_resolve_depth.frag.spv.h"
-#include "threepp/renderers/vulkan/shaders/gbuf_resolve_depth.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_fullscreen.vert.spv.h"
 
 namespace threepp::vulkan {
 
@@ -119,7 +119,7 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &depthPipeLayout_),
               "vkCreatePipelineLayout(gbufResolveDepth)");
 
-        VkShaderModule vm = createShaderModule(d, kGbufResolveDepthVertSpv, sizeof(kGbufResolveDepthVertSpv), "vkCreateShaderModule(gbuf_resolve_depth.vert)");
+        VkShaderModule vm = createShaderModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert)");
         VkShaderModule fm = createShaderModule(d, kGbufResolveDepthFragSpv, sizeof(kGbufResolveDepthFragSpv), "vkCreateShaderModule(gbuf_resolve_depth.frag)");
 
         VkPipelineShaderStageCreateInfo stages[2]{};
@@ -133,7 +133,7 @@ namespace threepp::vulkan {
         stages[1].pName  = "main";
 
         // No vertex input — fullscreen triangle derives positions from
-        // gl_VertexIndex (see gbuf_resolve_depth.vert).
+        // gl_VertexIndex (see overlay_fullscreen.vert).
         VkPipelineVertexInputStateCreateInfo vi{};
         vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
