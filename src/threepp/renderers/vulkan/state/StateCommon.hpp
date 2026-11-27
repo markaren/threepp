@@ -1,8 +1,8 @@
 // StateCommon: the shared prelude of the VulkanRenderer::Impl state groups (state/*.hpp).
 //
-// The headers the state groups' member types come from. The same list
-// VulkanCoreImpl.hpp includes (it includes this one first), spelled from this
-// folder, so each state header compiles on its own.
+// The headers the state groups' member types come from, spelled from this
+// folder, so each state header compiles on its own. VulkanCoreImpl.hpp
+// includes this one first rather than a list of its own.
 #ifndef THREEPP_VULKAN_STATE_STATECOMMON_HPP
 #define THREEPP_VULKAN_STATE_STATECOMMON_HPP
 
