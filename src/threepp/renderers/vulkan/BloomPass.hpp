@@ -25,6 +25,7 @@
 #define THREEPP_VULKAN_BLOOM_PASS_HPP
 
 #include "threepp/renderers/vulkan/AliasPacker.hpp"
+#include "threepp/renderers/vulkan/BloomPyramid.hpp"
 #include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
@@ -132,25 +133,15 @@ namespace threepp::vulkan {
         uint32_t levels_ = 0;// actual count for the current extent
         std::vector<Image2D> sceneHdr_;// [framesInFlight] full res rgba16f
         std::vector<Image2D> pyr_;     // [framesInFlight × kMaxLevels], [f*kMaxLevels+l]
-        VkSampler sampler_ = VK_NULL_HANDLE;
 
-        // Down + up share a layout (sampler in @0, storage out @1; 28B PC).
-        VkDescriptorSetLayout bloomDsLayout_   = VK_NULL_HANDLE;
-        VkPipelineLayout      bloomPipeLayout_ = VK_NULL_HANDLE;
-        VkPipeline            downPipe_        = VK_NULL_HANDLE;
-        VkPipeline            upPipe_          = VK_NULL_HANDLE;
-
-        VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-        std::vector<VkDescriptorSet> downSets_;// [f×kMaxLevels]: (sceneHdr|pyr[l-1]) -> pyr[l]
-        std::vector<VkDescriptorSet> upSets_;  // [f×kMaxLevels]: pyr[l+1] -> pyr[l] (accumulate)
+        // The down/up pipelines and the per-level sets over sceneHdr_ and pyr_.
+        BloomPyramid pyramid_;
 
         // poolSlots != 0: in pool_, for those slots, live in `span` (0: the
         // post chain, TransientPhase::Post).
         Image2D createStorageSampledImage(uint32_t w, uint32_t h, const char* label, uint32_t poolSlots = 0,
                                           TransientSpan span = 0);
         void    transitionFreshImage(VkImage img);
-        void    createPipelines();
-        void    createDescriptorPool();
     };
 
 }// namespace threepp::vulkan

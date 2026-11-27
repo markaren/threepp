@@ -965,6 +965,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/AutoExposure.cpp"
             "threepp/renderers/vulkan/GbufResolve.cpp"
             "threepp/renderers/vulkan/BloomPass.cpp"
+            "threepp/renderers/vulkan/BloomPyramid.cpp"
             "threepp/renderers/vulkan/BillboardGlowPass.cpp"
             "threepp/renderers/vulkan/BillboardHdrLayer.cpp"
             "threepp/renderers/vulkan/BillboardSoftDepth.cpp"

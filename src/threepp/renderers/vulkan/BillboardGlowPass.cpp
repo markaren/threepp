@@ -3,13 +3,6 @@
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
-// The shared bloom shaders. This pass reuses the existing bloom_down/up
-// SPIR-V rather than carrying a second pyramid: the push block, the
-// descriptor shape and the Karis / soft-knee / 13-tap behaviour are all
-// identical, only the images differ.
-#include "threepp/renderers/vulkan/shaders/bloom_down.comp.spv.h"
-#include "threepp/renderers/vulkan/shaders/bloom_up.comp.spv.h"
-
 // The depth reduction that gives the source pass something to test against:
 // the shared fullscreen triangle, plus the two variants of the reduce itself.
 #include "threepp/renderers/vulkan/shaders/billboard_glow_depth.frag.ms.spv.h"
@@ -22,7 +15,8 @@ namespace threepp::vulkan {
 
     BillboardGlowPass::BillboardGlowPass(VulkanContext& ctx, VkCommandPool cmdPool,
                                          uint32_t framesInFlight)
-        : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight) {
+        : ctx_(ctx), cmdPool_(cmdPool), framesInFlight_(framesInFlight),
+          pyramid_(ctx, framesInFlight, kMaxLevels, "bbglow") {
         src_.resize(framesInFlight_);
         pyr_.resize(framesInFlight_ * kMaxLevels);
         depth_.resize(framesInFlight_);
@@ -32,17 +26,12 @@ namespace threepp::vulkan {
 
     BillboardGlowPass::~BillboardGlowPass() {
         const VkDevice d = ctx_.device();
-        if (downPipe_)          vkDestroyPipeline(d, downPipe_, nullptr);
-        if (upPipe_)            vkDestroyPipeline(d, upPipe_, nullptr);
         if (reducePipe_)        vkDestroyPipeline(d, reducePipe_, nullptr);
         if (reducePipeMs_)      vkDestroyPipeline(d, reducePipeMs_, nullptr);
-        if (bloomPipeLayout_)   vkDestroyPipelineLayout(d, bloomPipeLayout_, nullptr);
         if (reducePipeLayout_)  vkDestroyPipelineLayout(d, reducePipeLayout_, nullptr);
-        if (bloomDsLayout_)     vkDestroyDescriptorSetLayout(d, bloomDsLayout_, nullptr);
         if (compositeDsLayout_) vkDestroyDescriptorSetLayout(d, compositeDsLayout_, nullptr);
         if (reduceDsLayout_)    vkDestroyDescriptorSetLayout(d, reduceDsLayout_, nullptr);
         if (descPool_)          vkDestroyDescriptorPool(d, descPool_, nullptr);
-        if (sampler_)           vkDestroySampler(d, sampler_, nullptr);
         if (depthSampler_)      vkDestroySampler(d, depthSampler_, nullptr);
         destroyImages();
     }
@@ -188,11 +177,7 @@ namespace threepp::vulkan {
         srcW_  = std::max(displayWidth / 2u, 1u);
         srcH_  = std::max(displayHeight / 2u, 1u);
 
-        levels_ = 0;
-        while (levels_ < kMaxLevels &&
-               std::min(srcW_ >> (levels_ + 1u), srcH_ >> (levels_ + 1u)) >= 8u)
-            ++levels_;
-        if (levels_ == 0) levels_ = 1;
+        levels_ = BloomPyramid::levelCount(srcW_, srcH_, kMaxLevels);
 
         // All three are rewritten every frame (the reduce, a CLEAR, the
         // pyramid) and dead after the overlay composite: transient scratch.
@@ -202,11 +187,12 @@ namespace threepp::vulkan {
                                           VK_IMAGE_USAGE_STORAGE_BIT,
                                   "vmaCreateImage(bbglow.src)", f);
         for (uint32_t f = 0; f < framesInFlight_; ++f)
-            for (uint32_t l = 0; l < levels_; ++l)
-                pyr_[f * kMaxLevels + l] =
-                        createImage(std::max(srcW_ >> (l + 1u), 1u), std::max(srcH_ >> (l + 1u), 1u),
-                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                    "vmaCreateImage(bbglow.pyr)", f);
+            for (uint32_t l = 0; l < levels_; ++l) {
+                const VkExtent2D e = BloomPyramid::levelExtent(srcW_, srcH_, l);
+                pyr_[f * kMaxLevels + l] = createImage(e.width, e.height,
+                                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                       "vmaCreateImage(bbglow.pyr)", f);
+            }
         for (uint32_t f = 0; f < depth_.size(); ++f)
             depth_[f] = createDepthImage(srcW_, srcH_, "vmaCreateImage(bbglow.depth)", f);
         rewriteDescriptors();
@@ -216,51 +202,8 @@ namespace threepp::vulkan {
     void BillboardGlowPass::createPipelines() {
         const VkDevice d = ctx_.device();
 
-        VkSamplerCreateInfo sci{};
-        sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        sci.magFilter    = VK_FILTER_LINEAR;
-        sci.minFilter    = VK_FILTER_LINEAR;
-        sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.maxLod       = 0.f;
-        check(vkCreateSampler(d, &sci, nullptr, &sampler_), "vkCreateSampler(bbglow)");
-
-        // (sampler @0, storage @1) + 28 B push — byte for byte BloomPass's, and
-        // it has to be: the SPIR-V is the same module.
-        {
-            VkDescriptorSetLayoutBinding bnd[2]{};
-            bnd[0].binding         = 0;
-            bnd[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            bnd[0].descriptorCount = 1;
-            bnd[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-            bnd[1].binding         = 1;
-            bnd[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bnd[1].descriptorCount = 1;
-            bnd[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-            VkDescriptorSetLayoutCreateInfo dlci{};
-            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = 2;
-            dlci.pBindings    = bnd;
-            check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &bloomDsLayout_),
-                  "vkCreateDescriptorSetLayout(bbglow.bloom)");
-
-            VkPushConstantRange pc{};
-            pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            pc.size       = 28;
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount         = 1;
-            plci.pSetLayouts            = &bloomDsLayout_;
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges    = &pc;
-            check(vkCreatePipelineLayout(d, &plci, nullptr, &bloomPipeLayout_),
-                  "vkCreatePipelineLayout(bbglow.bloom)");
-        }
-
         // The composite's set: one sampled image, read by the FRAGMENT stage
-        // (BloomPass's sets are compute-only — this is the one shape difference).
+        // (the pyramid's sets are compute-only).
         {
             VkDescriptorSetLayoutBinding bnd{};
             bnd.binding         = 0;
@@ -274,11 +217,6 @@ namespace threepp::vulkan {
             check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &compositeDsLayout_),
                   "vkCreateDescriptorSetLayout(bbglow.composite)");
         }
-
-        downPipe_ = createComputePipeline(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomDownCompSpv,
-                                          sizeof(kBloomDownCompSpv), "bbglow_down");
-        upPipe_   = createComputePipeline(d, ctx_.pipelineCache(), bloomPipeLayout_, kBloomUpCompSpv,
-                                          sizeof(kBloomUpCompSpv), "bbglow_up");
 
         createReducePipelines();
     }
@@ -418,29 +356,24 @@ namespace threepp::vulkan {
         vkDestroyShaderModule(d, fragMs, nullptr);
     }
 
-    // One allocation of every set, at construction, sized for kMaxLevels
-    // regardless of the runtime chain depth. Sets are REWRITTEN on resize and
+    // One allocation of every set, at construction (the pyramid's own, sized
+    // for kMaxLevels, at its construction). Sets are REWRITTEN on resize and
     // never otherwise, which is what keeps this pass out of the VUID-03047 zone:
     // a descriptor here can only be updated at a point where the renderer has
     // already idled the device for the swapchain.
     void BillboardGlowPass::createDescriptors() {
-        const uint32_t down = framesInFlight_ * kMaxLevels;
-        const uint32_t up   = framesInFlight_ * kMaxLevels;
         const uint32_t comp = framesInFlight_;
-
         const uint32_t red  = framesInFlight_;
 
-        VkDescriptorPoolSize sizes[2]{};
-        sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = down + up + comp + red;
-        sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = down + up;
+        VkDescriptorPoolSize size{};
+        size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        size.descriptorCount = comp + red;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = down + up + comp + red;
-        dpci.poolSizeCount = 2;
-        dpci.pPoolSizes    = sizes;
+        dpci.maxSets       = comp + red;
+        dpci.poolSizeCount = 1;
+        dpci.pPoolSizes    = &size;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(bbglow)");
 
@@ -456,8 +389,6 @@ namespace threepp::vulkan {
             check(vkAllocateDescriptorSets(ctx_.device(), &ai, sets.data()),
                   "vkAllocateDescriptorSets(bbglow)");
         };
-        alloc(downSets_, bloomDsLayout_, down);
-        alloc(upSets_, bloomDsLayout_, up);
         alloc(compositeSets_, compositeDsLayout_, comp);
         alloc(reduceSets_, reduceDsLayout_, red);
         reduceSetSerials_.assign(red, uint64_t{0});
@@ -465,48 +396,12 @@ namespace threepp::vulkan {
 
     void BillboardGlowPass::rewriteDescriptors() {
         for (uint32_t f = 0; f < framesInFlight_; ++f) {
-            auto sampled = [&](VkImageView v) {
-                VkDescriptorImageInfo i{};
-                i.sampler     = sampler_;
-                i.imageView   = v;
-                i.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                return i;
-            };
-            auto storage = [&](VkImageView v) {
-                VkDescriptorImageInfo i{};
-                i.imageView   = v;
-                i.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                return i;
-            };
-            auto writePair = [&](VkDescriptorSet ds, const VkDescriptorImageInfo* s,
-                                 const VkDescriptorImageInfo* d) {
-                VkWriteDescriptorSet w[2]{};
-                for (int n = 0; n < 2; ++n) {
-                    w[n].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    w[n].dstSet          = ds;
-                    w[n].dstBinding      = static_cast<uint32_t>(n);
-                    w[n].descriptorCount = 1;
-                }
-                w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[0].pImageInfo     = s;
-                w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                w[1].pImageInfo     = d;
-                vulkan::updateDescriptorSets(ctx_.device(), 2, w, 0, nullptr);
-            };
+            pyramid_.writeSets(f, src_[f].view, &pyr_[f * kMaxLevels], levels_);
 
-            for (uint32_t l = 0; l < levels_; ++l) {
-                VkDescriptorImageInfo dIn = sampled(l == 0 ? src_[f].view
-                                                           : pyr_[f * kMaxLevels + l - 1].view);
-                VkDescriptorImageInfo dOut = storage(pyr_[f * kMaxLevels + l].view);
-                writePair(downSets_[f * kMaxLevels + l], &dIn, &dOut);
-                if (l + 1 < levels_) {
-                    VkDescriptorImageInfo uIn  = sampled(pyr_[f * kMaxLevels + l + 1].view);
-                    VkDescriptorImageInfo uOut = storage(pyr_[f * kMaxLevels + l].view);
-                    writePair(upSets_[f * kMaxLevels + l], &uIn, &uOut);
-                }
-            }
-
-            VkDescriptorImageInfo cIn = sampled(pyr_[f * kMaxLevels].view);
+            VkDescriptorImageInfo cIn{};
+            cIn.sampler     = pyramid_.sampler();
+            cIn.imageView   = pyr_[f * kMaxLevels].view;
+            cIn.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             VkWriteDescriptorSet w{};
             w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w.dstSet          = compositeSets_[f];
@@ -604,43 +499,19 @@ namespace threepp::vulkan {
 
         if (levels_ == 0) return;
 
-        auto barrier = [&](VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                           VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-            VkMemoryBarrier2 mb{};
-            mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            mb.srcStageMask  = srcStage;
-            mb.srcAccessMask = srcAccess;
-            mb.dstStageMask  = dstStage;
-            mb.dstAccessMask = dstAccess;
-            VkDependencyInfo di{};
-            di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            di.memoryBarrierCount = 1;
-            di.pMemoryBarriers    = &mb;
-            vkCmdPipelineBarrier2(cb, &di);
-        };
-        // Between levels: the next dispatch reads this level through a
-        // sampler2D (SHADER_SAMPLED_READ in synchronization2, not
-        // SHADER_STORAGE_READ), as BloomPass's pyramid does.
-        auto computeBarrier = [&] {
-            barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        };
-
         // The billboard draw wrote `src` as a COLOUR ATTACHMENT; make it visible
         // to the first downsample's sampled read.
-        barrier(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-        struct BloomPc {
-            uint32_t srcW, srcH, dstW, dstH;
-            float threshold, clampMax;
-            uint32_t firstLevel;
-        };
-        auto lw = [&](uint32_t l) { return std::max(srcW_ >> (l + 1u), 1u); };
-        auto lh = [&](uint32_t l) { return std::max(srcH_ >> (l + 1u), 1u); };
+        VkMemoryBarrier2 mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        mb.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        VkDependencyInfo di{};
+        di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers    = &mb;
+        vkCmdPipelineBarrier2(cb, &di);
 
         // ── firstLevel, and why it is normally OFF here ─────────────────────
         // bloom_down's `firstLevel` switches on two things that exist to protect
@@ -660,33 +531,19 @@ namespace threepp::vulkan {
         // 13-tap at every level. A field that DOES want only its brightest
         // particles to halo can still ask for a knee, and then the first level
         // behaves exactly as the scene pyramid's does.
-        const uint32_t firstLevel = (threshold > 0.f) ? 1u : 0u;
-
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, downPipe_);
-        for (uint32_t l = 0; l < levels_; ++l) {
-            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_, 0, 1,
-                                    &downSets_[frame * kMaxLevels + l], 0, nullptr);
-            // clampMax stays 0 (off): the scene pyramid clamps per tap to stop
-            // sub-pixel specular flicker pulsing the halo radius, and this input
-            // has no specular in it at all — it is a handful of authored
-            // emissive sprites whose radiance is a deliberate number.
-            BloomPc pc{l == 0 ? srcW_ : lw(l - 1), l == 0 ? srcH_ : lh(l - 1),
-                       lw(l), lh(l), threshold, 0.f, l == 0 ? firstLevel : 0u};
-            vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            vkCmdDispatch(cb, (lw(l) + 7u) / 8u, (lh(l) + 7u) / 8u, 1);
-            computeBarrier();
-        }
-
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, upPipe_);
-        for (uint32_t l = levels_ - 1; l > 0; --l) {
-            const uint32_t dst = l - 1;
-            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, bloomPipeLayout_, 0, 1,
-                                    &upSets_[frame * kMaxLevels + dst], 0, nullptr);
-            BloomPc pc{lw(l), lh(l), lw(dst), lh(dst), 0.f, 0.f, 0u};
-            vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            vkCmdDispatch(cb, (lw(dst) + 7u) / 8u, (lh(dst) + 7u) / 8u, 1);
-            computeBarrier();
-        }
+        //
+        // clampMax stays 0 (off): the scene pyramid clamps per tap to stop
+        // sub-pixel specular flicker pulsing the halo radius, and this input
+        // has no specular in it at all — it is a handful of authored emissive
+        // sprites whose radiance is a deliberate number.
+        BloomPyramid::Chain chain;
+        chain.input      = {srcW_, srcH_};
+        chain.base       = {srcW_, srcH_};
+        chain.levels     = levels_;
+        chain.threshold  = threshold;
+        chain.clampMax   = 0.f;
+        chain.firstLevel = (threshold > 0.f) ? 1u : 0u;
+        pyramid_.record(cb, frame, chain);
 
         // Level 0 is next read by the composite draw's FRAGMENT stage; the
         // render graph orders that read (declareComposite).

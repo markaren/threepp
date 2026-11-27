@@ -20,8 +20,8 @@
 //      half-display-extent linear-HDR colour target (the billboard fragment
 //      stage skips its display transform when it renders there);
 //   2. the SHARED bloom_down.comp / bloom_up.comp are run over `src` into a
-//      quarter-extent pyramid — the same Jimenez progressive chain, the same
-//      SPIR-V, no new shader;
+//      quarter-extent pyramid — the same Jimenez progressive chain as the
+//      scene's (BloomPyramid, which BloomPass also runs), no new shader;
 //   3. the renderer's fullscreen composite draw (particlefield_glow.frag) adds
 //      level 0 into the swapchain INSIDE the overlay render-pass instance, next
 //      to the field billboards' own composite. The composite point does not move.
@@ -54,6 +54,7 @@
 #ifndef THREEPP_VULKAN_BILLBOARD_GLOW_PASS_HPP
 #define THREEPP_VULKAN_BILLBOARD_GLOW_PASS_HPP
 
+#include "threepp/renderers/vulkan/BloomPyramid.hpp"
 #include "threepp/renderers/vulkan/RenderGraph.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
 
@@ -160,18 +161,13 @@ namespace threepp::vulkan {
         std::vector<Image2D> src_;// [framesInFlight]
         std::vector<Image2D> pyr_;// [framesInFlight × kMaxLevels]
         std::vector<Image2D> depth_;// [framesInFlight], half extent, kDepthFormat
-        VkSampler sampler_ = VK_NULL_HANDLE;
 
-        // The pyramid pipelines. Same SPIR-V, same 28 B push block and same
-        // (sampler @0, storage @1) layout as BloomPass — reuse of the shaders,
-        // not of the class, because BloomPass's images and descriptor sets are
-        // welded to sceneHdr and the scene extent.
-        VkDescriptorSetLayout bloomDsLayout_   = VK_NULL_HANDLE;
-        VkPipelineLayout      bloomPipeLayout_ = VK_NULL_HANDLE;
-        VkPipeline            downPipe_        = VK_NULL_HANDLE;
-        VkPipeline            upPipe_          = VK_NULL_HANDLE;
+        // The pyramid's pipelines and per-level sets over src_ and pyr_ — the
+        // same chain BloomPass runs over sceneHdr; the images stay this pass's.
+        BloomPyramid pyramid_;
 
-        // Composite: one combined image sampler on pyramid level 0.
+        // Composite: one combined image sampler on pyramid level 0, through the
+        // pyramid's sampler.
         VkDescriptorSetLayout compositeDsLayout_ = VK_NULL_HANDLE;
 
         // The depth reduction: one fullscreen draw, one combined image sampler
@@ -184,8 +180,6 @@ namespace threepp::vulkan {
         VkSampler             depthSampler_     = VK_NULL_HANDLE;
 
         VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-        std::vector<VkDescriptorSet> downSets_;
-        std::vector<VkDescriptorSet> upSets_;
         std::vector<VkDescriptorSet> compositeSets_;
         std::vector<VkDescriptorSet> reduceSets_;
         // The source view each reduceSets_ entry currently names. The overlay's
