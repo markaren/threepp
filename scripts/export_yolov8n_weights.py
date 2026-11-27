@@ -14,6 +14,7 @@ Binary format:
     Per tensor:
         name_len:u32  name:bytes  ndim:u32  shape[ndim]:u32[]
         data_bytes:u32  data:float32[]
+    The state dict's float tensors, plus "<module>.bn.eps" (shape [1]) per BatchNorm.
 """
 import struct
 import sys
@@ -33,6 +34,12 @@ sd = model.model.state_dict()
 # Filter to float tensors only (skip integer buffers like num_batches_tracked)
 tensors = {k: v for k, v in sd.items() if v.dtype in (
     __import__('torch').float32, __import__('torch').float16, __import__('torch').bfloat16)}
+
+# Each BatchNorm's eps as "<module>.eps" (Ultralytics uses 1e-3). YoloV8nVk folds
+# with it and falls back to 1e-3 for files without it.
+for name, m in model.model.named_modules():
+    if isinstance(m, __import__('torch').nn.BatchNorm2d):
+        tensors[name + ".eps"] = __import__('torch').tensor([m.eps], dtype=__import__('torch').float32)
 
 print(f"Exporting {len(tensors)} tensors → {output_path}")
 

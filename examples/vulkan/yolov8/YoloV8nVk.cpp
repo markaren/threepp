@@ -55,6 +55,12 @@ namespace {
 
     uint32_t divCeil(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
 
+    // Ultralytics sets every BatchNorm2d's eps to 1e-3 (initialize_weights in
+    // ultralytics/utils/torch_utils.py), not PyTorch's 1e-5. Folded with 1e-5,
+    // 3,498 of yolov8n.pt's 5,296 channels get a scale more than 1 % too large,
+    // up to 38 % in model.0.
+    constexpr float kBnEps = 1e-3f;
+
     uint16_t f32_to_f16(float f) {
         uint32_t x;
         std::memcpy(&x, &f, 4);
@@ -120,7 +126,6 @@ YoloV8nVk::~YoloV8nVk() {
 void YoloV8nVk::loadWeights(const std::string& path) {
     auto w = parseWeightBinary(path);
 
-    const float eps = 1e-5f;
     std::vector<std::string> convKeys;
     for (auto& kv : w.data)
         if (kv.first.size() > 12 && kv.first.compare(kv.first.size() - 12, 12, ".conv.weight") == 0)
@@ -140,6 +145,9 @@ void YoloV8nVk::loadWeights(const std::string& path) {
         const auto& sh    = w.shapes.at(convKey);
         uint32_t oc = sh[0];
         uint32_t per = wt.size() / oc;
+        // The BatchNorm's own eps when the exporter wrote it, else Ultralytics'.
+        auto epsIt = w.data.find(prefix + ".bn.eps");
+        const float eps = (epsIt != w.data.end() && !epsIt->second.empty()) ? epsIt->second[0] : kBnEps;
 
         std::vector<float> fw(wt.size());
         std::vector<float> fb(oc);
@@ -156,6 +164,7 @@ void YoloV8nVk::loadWeights(const std::string& path) {
 
     weights_.clear();
     for (auto& [name, data] : w.data) {
+        if (name.size() >= 7 && name.compare(name.size() - 7, 7, ".bn.eps") == 0) continue;
         auto& sh = w.shapes.at(name);
         bool isConvWeight = (sh.size() == 4 && name.size() >= 7 &&
                              name.compare(name.size() - 7, 7, ".weight") == 0);
@@ -226,7 +235,7 @@ Tensor YoloV8nVk::conv_(const Tensor& x, const std::string& weightKey, const std
 
 Tensor YoloV8nVk::bnSilu_(const Tensor& x, const std::string& bnPrefix) {
     uint32_t C = x.C(), H = x.H(), W = x.W();
-    BnParams bp{C, H, W, 1e-5f};
+    BnParams bp{C, H, W, kBnEps};
     Tensor out = vk_.createTensor({C, H, W});
     std::vector<VkBuffer> ssbos = {
         x.buffer,

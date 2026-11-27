@@ -34,8 +34,8 @@
 // Nothing here moves the vessel or knows how she is driven: the scene hands in
 // where she is, her velocity and what her propulsors are doing this frame.
 //
-// This is the model of python/examples/rigs/usv_rig.py's Wash (the boats of the
-// Nørvasundet twin), constant for constant; a change to one belongs in both.
+// This is the model of python/examples/rigs/usv_rig.py's Wash, constant for
+// constant; a change to one belongs in both.
 // VesselWash_test holds this to numbers taken from that class.
 //
 // ── ORDER IN A FRAME ────────────────────────────────────────────────────────

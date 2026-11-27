@@ -13714,7 +13714,7 @@ class VerticalAlignment:
         ...
 class VesselWash:
     """
-    What a vessel leaves ON the water behind her: one patch of an ocean's wake field (ocean.wake_field, on before the first render) and her sources in it. Her propulsors' races, the lane her hulls drag, and, where the field has ripples, the waves her weight makes. The model of the Norvasundet twin's boats (examples/rigs/usv_rig.py Wash). Clear the ocean's sources once a frame (ocean.clear_wake_sources()), then update() every vessel's wash.
+    What a vessel leaves ON the water behind her: one patch of an ocean's wake field (ocean.wake_field, on before the first render) and her sources in it. Her propulsors' races, the lane her hulls drag, and, where the field has ripples, the waves her weight makes. The same model as Wash in examples/rigs/usv_rig.py. Clear the ocean's sources once a frame (ocean.clear_wake_sources()), then update() every vessel's wash.
     """
     @staticmethod
     def race(thrust: typing.SupportsFloat | typing.SupportsIndex, advance: typing.SupportsFloat | typing.SupportsIndex, area: typing.SupportsFloat | typing.SupportsIndex, jet: bool = False, rho: typing.SupportsFloat | typing.SupportsIndex = 1025.0) -> float:

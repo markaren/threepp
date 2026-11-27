@@ -23,7 +23,7 @@ How the glass is made, all of it in this file:
   2. carve the glass: Snell's law gives the tilt each point of the surface needs to throw
      its ray at its pixel, and one more FFT turns the tilts into heights.
 
-    python magic_window.py                      # the Otter in Norvasundet, out of thin air
+    python magic_window.py                      # the README's Otter X screenshot, out of thin air
     python magic_window.py --image me.jpg       # any picture
     python magic_window.py --mono               # one white LED, one pane
     python magic_window.py --shot still.png     # no window: trace --spp samples and save

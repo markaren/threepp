@@ -7,7 +7,7 @@
 //     forest's canopy and the footpath's worn margin painted in. Rock, scree
 //     and grass structure are scanned bands (Poly Haven drone captures,
 //     threepp_data/models/fjord/terrain).
-//   • The forest is the Nørvasundet twin's card trees (Poly Haven spruce, pine
+//   • The forest is card trees (Poly Haven spruce, pine
 //     and a broadleaf, threepp_data/models/fjord/trees) planted by slope,
 //     altitude and clearing rules and drawn through CanopyForest's
 //     camera-following LOD; the meadow is tufts of painted blades on GrassMesh
@@ -1787,9 +1787,9 @@ int main(int argc, char** argv) {
         std::cout << "meadow: " << tufts.size() << " tufts in " << grassTiles.size() << " tiles" << std::endl;
     }
 
-    // ── forest: the twin's card trees over the whole valley ─────────────────
+    // ── forest: card trees over the whole valley ────────────────────────────
     // Poly Haven's scanned spruce, pine and broadleaf, rebuilt as card trees
-    // for the Nørvasundet twin (fjord_trees.hpp), planted by forestDensity and
+    // (fjord_trees.hpp), planted by forestDensity and
     // drawn through CanopyForest's camera-following LOD: one LOD node per
     // 128 m cell, card trees near, the lite rebuild of the same tree beyond,
     // a thinned lite tier past that.
