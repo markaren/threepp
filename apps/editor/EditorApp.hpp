@@ -225,13 +225,6 @@ namespace threepp::editor {
             std::optional<Resume> resume;
         };
 
-        // "px,py,pz@tx,ty,tz" -> two points. The format a document's
-        // userData["editorView"] and the command line's --shot both speak,
-        // parsed in one place so the two cannot drift. False on anything it
-        // cannot read, leaving both outputs untouched.
-        [[nodiscard]] static bool parseViewSpec(const std::string& text,
-                                                Vector3& position, Vector3& target);
-
         explicit EditorApp(const Options& options);
         ~EditorApp();
 

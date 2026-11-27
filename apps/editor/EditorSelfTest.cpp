@@ -35,6 +35,7 @@
 #include "threepp/extras/editor/PhysicsConfig.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/TerrainSculpt.hpp"
+#include "threepp/extras/editor/ViewSpec.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
@@ -9135,7 +9136,7 @@ int EditorApp::runSelfTest() {
                                       : std::string();
             Vector3 wantPosition;
             Vector3 wantTarget;
-            check(parseViewSpec(spec, wantPosition, wantTarget),
+            check(editor::parseViewSpec(spec, wantPosition, wantTarget),
                   "the example authors an editorView");
             check(camera_.position.distanceTo(wantPosition) < 1e-3f,
                   "and opening puts the camera where it says");

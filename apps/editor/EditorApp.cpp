@@ -1540,17 +1540,6 @@ void EditorApp::openExample(const std::string& slug) {
     log("opened example \"" + std::string(example->label) + "\" - " + std::string(example->summary));
 }
 
-bool EditorApp::parseViewSpec(const std::string& text, Vector3& position, Vector3& target) {
-
-    // The parse itself is in the library (extras/editor/ViewSpec.hpp), because
-    // the editor is no longer the only front end that places a camera from a
-    // document's authored vantage — threepp_player reads the same
-    // userData["editorView"] and --shot takes the same text. This stays as the
-    // editor's public spelling of it; main.cpp's --shot handling and every
-    // caller below are unchanged.
-    return editor::parseViewSpec(text, position, target);
-}
-
 bool EditorApp::applyDocumentView() {
 
     documentView_ = false;
@@ -1581,7 +1570,7 @@ bool EditorApp::applyDocumentView() {
 
     Vector3 position;
     Vector3 target;
-    if (!parseViewSpec(view, position, target)) {
+    if (!editor::parseViewSpec(view, position, target)) {
         logWarn("editorView is \"" + view + "\" - want px,py,pz@tx,ty,tz; ignored");
         return false;
     }

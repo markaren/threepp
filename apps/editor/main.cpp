@@ -1,6 +1,8 @@
 
 #include "EditorApp.hpp"
 
+#include "threepp/extras/editor/ViewSpec.hpp"
+
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -17,8 +19,9 @@ namespace {
     // pass over a loaded scene. Deliberately terse: this is iterated on from a
     // shell while looking at PNGs, not typed once.
     //
-    // The placement itself is EditorApp::parseViewSpec, which is also what a
-    // document's userData["editorView"] is read with: one format, one parser,
+    // The placement itself is editor::parseViewSpec (extras/editor/ViewSpec.hpp),
+    // which is also what a document's userData["editorView"] is read with, in the
+    // editor and in threepp_player: one format, one parser,
     // so a vantage can be copied from a shell into a scene and back.
     std::optional<threepp::editor::EditorApp::Options::Shot> parseShot(const std::string& text) {
 
@@ -32,7 +35,7 @@ namespace {
         }
 
         threepp::editor::EditorApp::Options::Shot shot;
-        if (!threepp::editor::EditorApp::parseViewSpec(placement, shot.position, shot.target)) {
+        if (!threepp::editor::parseViewSpec(placement, shot.position, shot.target)) {
             return std::nullopt;
         }
         shot.label = std::move(label);

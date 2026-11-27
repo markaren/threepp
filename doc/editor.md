@@ -474,7 +474,7 @@ userData["editorFollow"]  Drone                     (an object name)
 ```
 
 `editorView` is the same `px,py,pz@tx,ty,tz` the `--shot` command line speaks,
-parsed by the same function (`EditorApp::parseViewSpec`), so a vantage found by
+parsed by the same function (`editor::parseViewSpec`, which threepp_player uses too), so a vantage found by
 orbiting can be copied into a scene and back out again. It places the camera and
 the orbit target in a perspective view; a malformed value is a console line and
 is otherwise ignored. `editorFollow` names an object to select and
