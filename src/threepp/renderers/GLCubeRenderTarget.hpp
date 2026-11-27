@@ -85,7 +85,14 @@ namespace threepp {
 
                             vec2 sampleUV = equirectUv( direction );
 
-                            gl_FragColor = texture2D( tEquirect, sampleUV );
+                            // Level 0: near the poles the equirect's texel
+                            // footprint explodes and a mipmapped lookup would
+                            // blur them. three.js switches the texture's min
+                            // filter to Linear around this render instead; here
+                            // that would change how the texture uploads (with
+                            // no mips if this render is its first use), and
+                            // GLPMREM samples its mips.
+                            gl_FragColor = textureLod( tEquirect, sampleUV, 0.0 );
 
                         })"
 
@@ -107,8 +114,6 @@ namespace threepp {
 
             auto mesh = Mesh(geometry, material);
 
-            const auto currentMinFilter = texture.minFilter;
-
             const bool oldAutoClear = renderer.autoClear;
             renderer.autoClear = true;
 
@@ -117,27 +122,8 @@ namespace threepp {
 
             renderer.autoClear = oldAutoClear;
 
-            // Avoid blurred poles
-            if (texture.minFilter == Filter::LinearMipmapLinear) texture.minFilter = Filter::Linear;
-
-            texture.minFilter = currentMinFilter;
-
             mesh.geometry()->dispose();
             mesh.material()->dispose();
-        }
-
-        void clear(GLRenderer& renderer, bool color, bool depth, bool, bool stencil) {
-
-            const auto& currentRenderTarget = renderer.getRenderTarget();
-
-            for (int i = 0; i < 6; i++) {
-
-                renderer.setRenderTarget(this, i);
-
-                renderer.clear(color, depth, stencil);
-            }
-
-            renderer.setRenderTarget(currentRenderTarget);
         }
     };
 
