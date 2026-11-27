@@ -99,8 +99,8 @@ int main() {
 ```
 
 `"threepp/threepp.hpp"` is a convenience umbrella header pulling in the common types (canvas,
-scene, cameras, geometries, materials, lights, controls, loaders, helpers, `GLRenderer`).
-Anything outside that set — `AnimationMixer`, `Raycaster`, `VulkanRenderer`, `GLTFLoader`,
+scene, cameras, geometries, materials, lights, controls, loaders, helpers, `Raycaster`,
+`GLRenderer`). Anything outside that set — `AnimationMixer`, `VulkanRenderer`, `GLTFLoader`,
 everything under `extras/` — you include explicitly.
 
 ## The five nouns
