@@ -40,7 +40,9 @@ namespace threepp::editor {
         // clamped to [5 mm, 10 cm]) — SurfaceBakeOptions::voxelSize's default,
         // which is the right answer for a scan whose scale nobody has measured.
         // It is also the accuracy the whole bake is quoted against: a collider
-        // and a lidar return agree with the splats to within one voxel.
+        // and a lidar return agree with the splats to within one voxel. On the
+        // point route 0 means PointSurfaceOptions::voxelSize's default instead:
+        // twice the 90th percentile of the points' nearest-neighbour distances.
         float voxelSize = 0.f;
 
         // Islands smaller than this many surface CELLS are dropped — an area in

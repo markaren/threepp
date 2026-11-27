@@ -63,6 +63,14 @@ namespace threepp {
         [[nodiscard]] float medianNeighbourSpacing(const std::vector<Vector3>& points,
                                                    size_t sampleCount = 20000);
 
+        // The same nearest-neighbour distances, read at `quantile` (0..1, so
+        // 0.5 is medianNeighbourSpacing) rather than at the median. A cloud
+        // with one spacing (a regular grid) reports it at every quantile; an
+        // irregular one reports a longer distance the higher the quantile.
+        // buildPointSurface sizes its default voxel from the 90th percentile.
+        [[nodiscard]] float neighbourSpacingQuantile(const std::vector<Vector3>& points, float quantile,
+                                                     size_t sampleCount = 20000);
+
     }// namespace splats
 
     // A splat rotation: four plain floats in threepp order (x, y, z, w),

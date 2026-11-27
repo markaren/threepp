@@ -304,10 +304,8 @@ class Drawer:
     // A scanned slab, 2 m square and 4 cm thick, made solid through the point
     // route: the surface is built straight from the splat centres with no
     // renderer, so a headless run bakes it. A box is set down a little over it.
-    // There is no floor, so a box still near the slab after two seconds was
+    // There is no floor, so a box still on the slab after two seconds was
     // caught by the scan's collider; without one it has fallen about 20 m.
-    // (Set down, not dropped: a box falling 1 m onto this thin shell goes
-    // through it.)
     //
     // Saved as a FILE, not handed over as text: a document references its
     // splats, and a cloud with no source file gets a .ply sidecar beside the
@@ -763,8 +761,11 @@ TEST_CASE("a robot that names only its URDF is articulated under the player, as 
 
 TEST_CASE("an authored scan is solid under the player, as it is under Play", "[player]") {
 
-    // Asserted on the cargo, as the conveyor case is: the box is held by the
-    // scan. Without the scan's collider nothing stops it.
+    // Asserted on the cargo, as the conveyor case is: the box comes to rest ON
+    // the slab, its 0.2 m sitting above the scanned points (y <= 0.02) and
+    // within a voxel's offset of them. Without the scan's collider nothing
+    // stops it. A box that settles inside the slab means the baked surface
+    // has gaps: the voxel the point route picked does not cover the points.
     PlayerCore core;
     std::string log;
     core.setLogger([&](const std::string& message) { log += message + "\n"; });
@@ -778,8 +779,8 @@ TEST_CASE("an authored scan is solid under the player, as it is under Play", "[p
     for (int i = 0; i < 120; ++i) core.step(kFrame);
 
     INFO(log);
-    CHECK(cargo->position.y > -0.5f);
-    CHECK(cargo->position.y < 0.5f);
+    CHECK(cargo->position.y > 0.02f + 0.1f);
+    CHECK(cargo->position.y < 0.02f + 0.1f + 0.05f);
     // The sensor-only surface the session adds to the play copy.
     CHECK(core.scene().getObjectByName("Scan Surface") != nullptr);
 

@@ -41,6 +41,21 @@ namespace {
         return pts;
     }
 
+    // The same sheet moved a quarter pitch off the voxel lattice in x and z.
+    // The default voxel is twice the pitch, so a sheet at whole pitches puts
+    // every other row exactly on a voxel boundary, where the last bit of the
+    // measured spacing decides which voxel it falls in. A case that compares
+    // two bakes voxel for voxel needs its rows clear of the boundaries.
+    std::vector<Vector3> offLatticeSheet(int n, float pitch) {
+
+        auto pts = sheet(n, pitch);
+        for (auto& p : pts) {
+            p.x += 0.25f * pitch;
+            p.z += 0.25f * pitch;
+        }
+        return pts;
+    }
+
     // A Fibonacci sphere shell of `n` points at `radius`.
     std::vector<Vector3> shell(int n, float radius) {
 
@@ -106,6 +121,55 @@ TEST_CASE("PointSurface: a sheet of points becomes a slab that hugs it") {
     CHECK(mesh.stats.components == 1);
 }
 
+TEST_CASE("PointSurface: randomly placed samples still come back as one sheet that covers them") {
+
+    // 20 000 points at random over a 2 m square, from the LCG the jittered
+    // cases elsewhere use. With the voxel sized from the MEDIAN neighbour
+    // distance (0.013 m here) the field covers about half of such a sheet:
+    // 121 of the 361 columns below, in 158 pieces left by the island cull,
+    // and a body set on it falls through or settles into it. The default,
+    // from the 90th percentile (0.024 m), covers 353 in one piece.
+    std::vector<Vector3> pts;
+    uint32_t s = 7u;
+    auto next = [&] {
+        s = s * 1664525u + 1013904223u;
+        return static_cast<float>(s >> 8) / 16777216.f;
+    };
+    for (int i = 0; i < 20000; ++i) pts.emplace_back(2.f * next() - 1.f, 0.f, 2.f * next() - 1.f);
+
+    const auto mesh = splats::buildPointSurface(fromPoints(pts), Matrix4{});
+    REQUIRE_FALSE(mesh.empty());
+    CHECK(mesh.stats.components - mesh.stats.culledComponents == 1);
+    CHECK(openEdges(mesh) == 0);
+
+    // A 19 x 19 grid of vertical columns over the middle of the square; a
+    // column is covered when some triangle's footprint holds it.
+    const auto& p = mesh.positions;
+    const auto holds = [&](size_t t, float x, float z) {
+        const uint32_t a = mesh.indices[t], b = mesh.indices[t + 1], c = mesh.indices[t + 2];
+        const auto edge = [&](uint32_t u, uint32_t v) {
+            return (x - p[3 * v]) * (p[3 * u + 2] - p[3 * v + 2]) - (p[3 * u] - p[3 * v]) * (z - p[3 * v + 2]);
+        };
+        const float e0 = edge(a, b), e1 = edge(b, c), e2 = edge(c, a);
+        return (e0 >= 0.f && e1 >= 0.f && e2 >= 0.f) || (e0 <= 0.f && e1 <= 0.f && e2 <= 0.f);
+    };
+    int covered = 0, columns = 0;
+    for (int ix = -9; ix <= 9; ++ix) {
+        for (int iz = -9; iz <= 9; ++iz, ++columns) {
+            const float x = static_cast<float>(ix) * 0.1f + 0.013f;
+            const float z = static_cast<float>(iz) * 0.1f + 0.007f;
+            for (size_t t = 0; t < mesh.indices.size(); t += 3) {
+                if (holds(t, x, z)) {
+                    ++covered;
+                    break;
+                }
+            }
+        }
+    }
+    INFO(covered << " of " << columns << " columns covered, voxel " << mesh.stats.voxelSize);
+    CHECK(covered * 10 >= columns * 9);
+}
+
 TEST_CASE("PointSurface: a shell of points reconstructs at its radius, closed") {
 
     const auto data = fromPoints(shell(6000, 1.f));
@@ -141,7 +205,7 @@ TEST_CASE("PointSurface: the same points give the same mesh, bit for bit") {
 
 TEST_CASE("PointSurface: the transform is applied before anything else") {
 
-    const auto data = fromPoints(sheet(20, 0.05f));
+    const auto data = fromPoints(offLatticeSheet(20, 0.05f));
     Matrix4 m;
     m.makeTranslation(10.f, -2.f, 3.f);
 
@@ -211,8 +275,9 @@ TEST_CASE("PointSurface: options - voxel, isolevel, opacity floor, the voxel cei
 
         // The first half of the sheet goes faint: a contiguous half, so the
         // spacing of what remains (and the voxel derived from it) stays put
-        // and the occupied-voxel count halves.
-        auto faint = data;
+        // and the occupied-voxel count halves. Off the lattice, so that count
+        // does not depend on which side of a boundary a row rounds to.
+        auto faint = fromPoints(offLatticeSheet(20, 0.05f));
         for (size_t i = 0; i < faint.count() / 2; ++i) faint.opacities[i] = 0.1f;
         splats::PointSurfaceOptions o;
         o.opacityFloor = 0.5f;

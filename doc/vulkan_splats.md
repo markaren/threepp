@@ -438,8 +438,11 @@ point mode, `--point-size` sets the disc, and P dissolves between the looks.
 
 **A point cloud gets its collider straight from its points.**
 `splats::buildPointSurface` (`threepp/splats/PointSurface.hpp`, CPU, every
-backend) voxel-hashes the transformed means at `2 ×` their median spacing,
-evaluates the union-of-balls field `max(0, 1 - d / voxel)` on the nodes
+backend) voxel-hashes the transformed means at `2 ×` the 90th percentile
+of their nearest-neighbour distances (`splats::neighbourSpacingQuantile`;
+the median would cover only about half of a randomly sampled sheet, which
+then comes back in pieces that bodies fall through), evaluates the
+union-of-balls field `max(0, 1 - d / voxel)` on the nodes
 around occupied voxels, runs marching cubes at `0.5` with welded vertices
 and outward winding, and drops islands under 64 cells. It returns the same
 `SurfaceMesh` the depth-fusion bake does, so PhysX cooking, the sensor mesh
@@ -450,8 +453,9 @@ it is the wrong tool for a Gaussian scan — every fog splat's centre is a
 point to it — and why the editor's Surface section routes by `Method`: Auto
 takes the point route for a cloud imported as a point cloud and the fusion
 bake otherwise, and the other two force one. `PointSurface_test` pins the
-slab-around-a-sheet geometry, a closed manifold shell at its radius,
-determinism, the transform, the island filter and the voxel ceiling.
+slab-around-a-sheet geometry, a randomly sampled sheet coming back as one
+covering piece, a closed manifold shell at its radius, determinism, the
+transform, the island filter and the voxel ceiling.
 
 **A scan can be a moving body.** The Surface section's `Body` is Static,
 Dynamic or Kinematic (`SplatSurfaceConfig::body`, with `mass` and a V-HACD
