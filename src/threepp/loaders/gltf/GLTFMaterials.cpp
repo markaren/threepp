@@ -20,8 +20,9 @@ namespace threepp::gltf {
         } else if (imgDef.contains("uri")) {
             std::string uri = imgDef["uri"].get<std::string>();
             if (uri.rfind("data:", 0) == 0) {
-                auto comma = uri.find(',');
-                raw = base64Decode(uri.substr(comma + 1));
+                auto bytes = utils::decodeDataUri(uri);
+                if (!bytes) throw std::runtime_error("Image " + std::to_string(imageIdx) + " has a data: URI without a payload");
+                raw = std::move(*bytes);
             } else {
                 fs::path p = basePath / percentDecode(uri);
                 std::ifstream f(p, std::ios::binary);

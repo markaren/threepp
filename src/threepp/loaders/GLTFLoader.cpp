@@ -29,9 +29,9 @@ namespace threepp::gltf {
         if (uri.empty()) throw std::runtime_error("Buffer " + std::to_string(idx) + " has no URI");
 
         if (uri.rfind("data:", 0) == 0) {
-            // data URI — find the comma
-            auto comma = uri.find(',');
-            buffers[idx] = base64Decode(uri.substr(comma + 1));
+            auto bytes = utils::decodeDataUri(uri);
+            if (!bytes) throw std::runtime_error("Buffer " + std::to_string(idx) + " has a data: URI without a payload");
+            buffers[idx] = std::move(*bytes);
         } else {
             fs::path p = basePath / percentDecode(uri);
             std::ifstream f(p, std::ios::binary);

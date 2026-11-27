@@ -16,3 +16,28 @@ TEST_CASE("base64 round trip") {
     // Padding is optional on the way in.
     CHECK(utils::base64Decode("AAEC+vv8/f7/Kg") == bytes);
 }
+
+TEST_CASE("decodeDataUri") {
+
+    SECTION("a base64 payload") {
+        const auto bytes = utils::decodeDataUri("data:application/octet-stream;base64,AAEC");
+        REQUIRE(bytes.has_value());
+        CHECK(*bytes == std::vector<uint8_t>{0, 1, 2});
+    }
+
+    SECTION("no media type, empty payload") {
+        const auto bytes = utils::decodeDataUri("data:,");
+        REQUIRE(bytes.has_value());
+        CHECK(bytes->empty());
+    }
+
+    SECTION("no comma: not a payload") {
+        // Decoding from the start would have read "data" as base64.
+        CHECK_FALSE(utils::decodeDataUri("data:application/octet-stream;base64").has_value());
+    }
+
+    SECTION("not a data: URI") {
+        CHECK_FALSE(utils::decodeDataUri("textures/albedo.png").has_value());
+        CHECK_FALSE(utils::decodeDataUri("").has_value());
+    }
+}

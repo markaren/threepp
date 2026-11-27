@@ -3,6 +3,7 @@
 #define THREEPP_BASE64_HPP
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,11 @@ namespace threepp::utils {
     std::vector<uint8_t> base64Decode(const std::string& encoded);
 
     std::string base64Encode(const uint8_t* data, size_t size);
+
+    // The payload of a data: URI ("data:[<mediatype>][;base64],<data>"),
+    // base64-decoded: the only encoding the loaders meet. nullopt when `uri`
+    // is not a data: URI or has no comma before its payload.
+    std::optional<std::vector<uint8_t>> decodeDataUri(const std::string& uri);
 
     inline std::string base64Encode(const std::vector<uint8_t>& data) {
 

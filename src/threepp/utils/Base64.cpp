@@ -45,6 +45,14 @@ std::vector<uint8_t> threepp::utils::base64Decode(const std::string& encoded) {
     return out;
 }
 
+std::optional<std::vector<uint8_t>> threepp::utils::decodeDataUri(const std::string& uri) {
+
+    if (uri.rfind("data:", 0) != 0) return std::nullopt;
+    const auto comma = uri.find(',');
+    if (comma == std::string::npos) return std::nullopt;
+    return base64Decode(uri.substr(comma + 1));
+}
+
 std::string threepp::utils::base64Encode(const uint8_t* data, size_t size) {
 
     std::string out;

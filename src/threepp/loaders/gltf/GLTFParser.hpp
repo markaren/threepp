@@ -57,8 +57,6 @@ namespace threepp::gltf {
     using json = nlohmann::json;
     namespace fs = std::filesystem;
 
-    using utils::base64Decode;
-
     // Percent-decode a glTF URI (RFC 3986). glTF texture URIs with spaces or
     // other reserved chars arrive as e.g. "Base%20Color.jpg"; we must decode
     // before using them as filesystem paths. Data URIs are handled separately

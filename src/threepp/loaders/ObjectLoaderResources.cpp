@@ -159,10 +159,9 @@ namespace {
 
         const auto decodeOne = [&](const std::string& u) -> std::optional<Image> {
             if (u.rfind("data:", 0) == 0) {
-                const auto comma = u.find(',');
-                if (comma == std::string::npos) return std::nullopt;
-                const auto bytes = utils::base64Decode(u.substr(comma + 1));
-                return loader.load(bytes, channels, hasOverride ? override : false);
+                const auto bytes = utils::decodeDataUri(u);
+                if (!bytes) return std::nullopt;
+                return loader.load(*bytes, channels, hasOverride ? override : false);
             }
             // Falls through to the path when the archive does not hold the
             // name: a document inside an archive may still reference a file
