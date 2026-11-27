@@ -84,11 +84,6 @@ namespace threepp::vulkan::impl {
         float    rayShadowStep_         = 0.f;            // 5 % of the smallest distance; 0: none set
         bool     rayShadowClassified_   = false;
 
-        // TLAS refit instance staging, swapped with pendingTlasInstances_ so
-        // both vectors keep their capacity across frames (a fresh 4.8 MB
-        // allocation per moving frame at 100k instances otherwise).
-        std::vector<VkAccelerationStructureInstanceKHR> tlasInstanceScratch_;
-
         // buildShadowDrawData's scratch: the view's own
         // (ViewPrepScratch::shadowChunks). Definition moved to
         // VulkanViewContext.hpp.

@@ -956,7 +956,6 @@ namespace threepp::vulkan::impl {
     struct LodLandingBatch {
         uint64_t id = 0;
         uint64_t landAt = 0;
-        bool compactStage = false;
         VkFence fence = VK_NULL_HANDLE;
         VkCommandBuffer cb = VK_NULL_HANDLE;
         // Build stage with compaction on: query k is the compacted size of

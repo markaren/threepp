@@ -1748,7 +1748,6 @@ void VulkanRenderer::Impl::landLodBatches() {
                     b.queries = VK_NULL_HANDLE;
                     LodLandingBatch c;
                     c.id = ++lodBatchSerial_;
-                    c.compactStage = true;
                     VkCommandBuffer cb = VK_NULL_HANDLE;
                     for (uint32_t k = 0; k < n; ++k) {
                         BlasRecord* rec = carried(b.queryLevels[k].first, b.id);

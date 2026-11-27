@@ -86,30 +86,6 @@ namespace threepp::vulkan::impl {
         // (render pass + pipelines + MS images) is render-extent-resource work,
         // so it reuses the exact same idle-gate as renderScale.
         uint32_t gbufMsaaSamples_        = 1;
-
-        // MSAA dispatch B (per-sample shading at complex/edge pixels) master
-        // switch. OFF by default: measured on rock_flicker (msaa=4), dispatch
-        // B's fallback variant (single largest non-dominant cluster, cheap
-        // env-only diffuse — no RT gather/reflections/ReSTIR, to keep cost
-        // proportional to edge-pixel count) made the static-camera flicker
-        // metric WORSE (mean ~4600-4800 px/frame) than Phase 1 (dominant-
-        // sample resolve) alone (~3700-3900), which was itself already below
-        // the msaa=1 baseline (~4000-4030). Root cause: dispatch B's cheap
-        // shading model disagrees with dispatch A's full model enough that
-        // the disagreement is itself a new, comparably-sized noise source at
-        // every edge pixel — trading one flicker mechanism for another
-        // instead of removing it. The code compiles, is wired end-to-end,
-        // and is architecturally sound (see deferred_shade.comp's shadeMode
-        // branches) for a future attempt with a closer-matching per-sample
-        // shading model; it just isn't a net win yet, so it stays off.
-        // ON by default: under the UNJITTERED msaa raster (see
-        // uploadRasterCameraUbo) dispatch B no longer regresses temporal
-        // stability (static 23 vs 11 px/frame on the rock harness), and with
-        // the corrected coverage accounting (dispatch A blends sky-minority
-        // coverage itself; B fills the geometry-minority weight it reserves)
-        // it supplies the spatial edge AA the dominant-pick resolve alone
-        // lacks. Only consulted when gbufMsaaSamples_ > 1.
-        bool gbufShadeBEnabled_ = true;
     };
 
 }// namespace threepp::vulkan::impl

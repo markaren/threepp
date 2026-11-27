@@ -1093,7 +1093,6 @@ void VulkanRenderer::Impl::deltaWalkCheck(Object3D& scene, Camera& camera) {
                 else if (lastVisibleEntries_[sb.first].mesh != sb.mesh || lastVisibleEntries_[sb.first].hidden != sb.hidden)
                     mismatch("span's first row", k);
             }
-            walkCheckMismatches_ += bad;
         }
 
 bool VulkanRenderer::Impl::versionsDisabled() {
@@ -2302,7 +2301,6 @@ void VulkanRenderer::Impl::expandSceneEntries(Object3D& scene, Camera& camera) {
                 if (skyA != skySeen_) mismatch("sky", 0);
                 if (rootsA != manualLodLevelRoots_) mismatch("manual LOD roots", rootsA.size());
                 if (deferredA != anyRowsDeferred) mismatch("deferred rows", 0);
-                walkCheckMismatches_ += bad;
                 sceneSnapshot_ = std::move(snapA);
                 built = std::move(builtA);
                 builtSpans = std::move(spansA);
@@ -4539,23 +4537,18 @@ void VulkanRenderer::Impl::refitTlasInPlace(SceneBuildFrame& sb) {
                 } else {
                     for (const auto& r : tlasInstDirty_[currentFrame].ranges) drawStats_.tlasRewritten += r.second - r.first;
                 }
-                if (lodChangedThisFrame_ && !geomDescsCached_.empty()) {
-                    // geomDescsCached_ was patched in place above; the
-                    // per-frame-in-flight ring carries it to the GPU
-                    // stall-free — renderFrame flushes THIS frame's
-                    // slot right after its fence signals (before any
-                    // recording that consumes it), the other slot when
-                    // its frame comes around. Same model as the material table;
-                    // this replaced a vkDeviceWaitIdle per switch
-                    // frame, which hitched exactly when the camera
-                    // was moving.
-                    //
-                    // The fill above marks each entry whose level moved
-                    // its index address (markGeomDescsDirty, CPU rows and
-                    // GPU spans alike); a span whose LOD state changed is
-                    // rewritten whole there (spanTlasSig). The whole
-                    // array (15 MB at 237k entries) is no longer sent.
-                }
+                // On an LOD switch geomDescsCached_ was patched in place
+                // above, and the per-frame-in-flight ring carries it to the
+                // GPU stall-free: renderFrame flushes THIS frame's slot right
+                // after its fence signals (before any recording that consumes
+                // it), the other slot when its frame comes around. Same model
+                // as the material table; it replaced a vkDeviceWaitIdle per
+                // switch frame, which hitched exactly when the camera was
+                // moving. The fill above marks each entry whose level moved its
+                // index address (markGeomDescsDirty, CPU rows and GPU spans
+                // alike); a span whose LOD state changed is rewritten whole
+                // there (spanTlasSig), so the whole array (15 MB at 237k
+                // entries) is no longer sent.
                 const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
                 // Stage the refit; recordCommandBuffer records it into the
                 // frame cb after the deformable BLAS rebuilds (no drain).

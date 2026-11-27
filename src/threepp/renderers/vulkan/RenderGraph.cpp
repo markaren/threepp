@@ -98,13 +98,6 @@ namespace threepp::vulkan::rg {
     Access storageReadWrite(VkPipelineStageFlags2 stages, VkImageLayout layout) {
         return {stages, VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, layout, true};
     }
-    Access generalRead(VkPipelineStageFlags2 stages) {
-        return {stages, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, false};
-    }
-    Access uniformRead(VkPipelineStageFlags2 stages) {
-        return {stages, VK_ACCESS_2_UNIFORM_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED, false};
-    }
     Access indirectRead() {
         return {VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, false};

@@ -953,57 +953,6 @@ namespace threepp {
             data[39] = fz;
         }
 
-        // Build camera basis-vector buffer matching PrevCameraUbo layout.
-        // matrixWorld column-major: col0=right, col1=up, col2=backward(-fwd), col3=pos.
-        const auto& wm = camera.matrixWorld->elements;
-        const auto& pm = camera.projectionMatrix.elements;
-        float curBuf[16];
-        curBuf[0] = wm[12]; curBuf[1] = wm[13]; curBuf[2] = wm[14]; curBuf[3] = pm[0];
-        curBuf[4] =-wm[ 8]; curBuf[5] =-wm[ 9]; curBuf[6] =-wm[10]; curBuf[7] = pm[5];
-        curBuf[8] = wm[ 0]; curBuf[9] = wm[ 1]; curBuf[10]= wm[ 2]; curBuf[11]= 0.0f;
-        curBuf[12]= wm[ 4]; curBuf[13]= wm[ 5]; curBuf[14]= wm[ 6]; curBuf[15]= 0.0f;
-
-        // Camera-motion detection: position [0..2], forward [4..6], and
-        // projection scale [3]=projScaleX / [7]=projScaleY. The projection
-        // terms catch FOV and aspect-ratio changes that don't move the camera.
-        if (view().prevCameraValid) {
-            const float dx = curBuf[0] - view().prevCamBufData_[0];
-            const float dy = curBuf[1] - view().prevCamBufData_[1];
-            const float dz = curBuf[2] - view().prevCamBufData_[2];
-            const float fx = curBuf[4] - view().prevCamBufData_[4];
-            const float fy = curBuf[5] - view().prevCamBufData_[5];
-            const float fz = curBuf[6] - view().prevCamBufData_[6];
-            const float sx = curBuf[3] - view().prevCamBufData_[3];// projScaleX
-            const float sy = curBuf[7] - view().prevCamBufData_[7];// projScaleY
-            // Position threshold lowered 1e-6 → 1e-10 (|Δpos| 1e-3 → 1e-5
-            // world units). The old 1e-3 was far too coarse for PURE
-            // TRANSLATION: a slow pan moves the camera only ~1e-4 units/frame,
-            // which fell under 1e-3 → cameraMoved stayed false → the
-            // accumulator took the SELF-TAP path (reuse prev accum at the
-            // SAME pixel, full FC). But the camera HAD moved, so that reused
-            // image sat slightly off and dragged with the camera — the "old
-            // image follows the camera" smear, textured-surface-only because
-            // uniform albedo hides a misplaced reuse. Orbit never hit this:
-            // rotation moves the forward vector, which trips the far more
-            // sensitive 1e-8 rotation threshold, so orbit always took the
-            // correct reproject path. 1e-5 units is still well above static
-            // float noise (an untouched camera has an identical matrix →
-            // exactly zero delta) but catches the slowest deliberate pan.
-            if (dx*dx + dy*dy + dz*dz > 1e-10f ||
-                fx*fx + fy*fy + fz*fz > 1e-8f ||
-                sx*sx + sy*sy > 1e-10f) {
-                // sampleIndex must keep advancing — see comment in
-                // ensureSceneBuilt's matrix-changed path. Per-pixel FC
-                // halving handles convergence; freezing the seed kills
-                // Monte Carlo variance reduction.
-            }
-        }
-
-        // Update prev camera data (CPU-side only — read by the live
-        // prev-camera path via prevCamBufData_, not a GPU buffer).
-        std::memcpy(view().prevCamBufData_.data(), curBuf, 16 * sizeof(float));
-        view().prevCameraValid = true;
-
         uploadHostVisible(ctx->allocator(), view().cameraUbos[frame], data, sizeof(data));
     }
 
@@ -1040,10 +989,9 @@ namespace threepp {
         // rejection) to suppress it. Static views converge to clean AA over
         // the jitter cycle (jitterPhaseCount_: 8 phases at native resolution,
         // more when upscaling).
-        constexpr bool kRasterJitterEnabled = true;
-        // The rest of the gate (MSAA, the event camera, FSR/DLSS, setViewTaa)
-        // is shared with updateCameraUbo: see cameraJitterOn.
-        const bool rasterJitterOn = kRasterJitterEnabled && cameraJitterOn();
+        // The gate (MSAA, the event camera, FSR/DLSS, setViewTaa) is shared
+        // with updateCameraUbo: see cameraJitterOn.
+        const bool rasterJitterOn = cameraJitterOn();
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
         // Stash the raw texel-unit jitter for the TAA resolve's current-
@@ -1904,11 +1852,6 @@ namespace threepp {
         ubo.murkSigma[1]  = murkSigma_[1];
         ubo.murkSigma[2]  = murkSigma_[2];
         ubo.murkAmbientK  = murkAmbientFalloff_;
-
-        // Froxel-volumetrics gate: the deferred leaf records the froxel
-        // passes only when a medium exists this frame (fog, or the
-        // explicit clear-air beam density).
-        fogEnabledThisFrame_ = ubo.enabled > 0.5f;
 
         uploadHostVisible(ctx->allocator(), fogUbos[frame], &ubo, sizeof(ubo));
     }

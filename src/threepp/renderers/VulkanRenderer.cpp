@@ -236,7 +236,13 @@ namespace threepp {
         // shadeBActive (flags bit 7) tells it whether to additionally
         // reserve the geometry-minority weight for dispatch B or fold
         // it into the dominant surface.
-        const bool shadeBActive = viewMsaaSamples > 1 && gbufShadeBEnabled_;
+        // Dispatch B runs whenever the G-buffer is multisampled: under the
+        // unjittered MSAA raster (uploadRasterCameraUbo) it does not regress
+        // temporal stability (static 23 vs 11 px/frame on the rock harness),
+        // and with the coverage accounting (A blends the sky-minority
+        // coverage, B fills the geometry-minority weight A reserves) it gives
+        // the edge AA the dominant-sample resolve alone lacks.
+        const bool shadeBActive = viewMsaaSamples > 1;
         // Clustered light culling: per-cell light lists for the shade's
         // analytic split (all point/spot lights, no 8-per-type cap).
         if (clusterLightCountThisFrame_ > 0) {
@@ -428,8 +434,7 @@ namespace threepp {
         view().shadeHistoryStale = false;
 
         // ── MSAA dispatch B: per-sample shading at complex (edge) pixels ──
-        // Opt-in (gbufShadeBEnabled_, default false) and only when
-        // setGbufferMsaa(2|4) is active. Reads dispatch A's outImage write
+        // Only when setGbufferMsaa(2|4) is active. Reads dispatch A's outImage write
         // (imageLoad accumulate) and the raw MS G-buffer.
         if (shadeBActive) {
             // Dispatch B reuses dispatch A's params verbatim — only the mode
@@ -2577,7 +2582,6 @@ namespace threepp {
         impl.forEachLiveView([&] {
             auto& v = impl.view();
             if (v.taa_) v.taa_->invalidateHistory();
-            v.prevCameraValid        = false;
             v.rasterPrevVPValid_     = false;
             v.rasterPrevJitterValid_ = false;
             v.deferredCamPrevValid_  = false;

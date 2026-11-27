@@ -12,7 +12,6 @@
 namespace threepp::vulkan::impl {
 
     struct AtmosphereState {
-        bool     fogEnabledThisFrame_ = false;// scene.fog present (froxel-volumetrics gate)
 
         // Layout (and its doc comment) moved to VulkanGpuLayouts.hpp.
         using GpuFogUbo = vulkan::impl::GpuFogUbo;

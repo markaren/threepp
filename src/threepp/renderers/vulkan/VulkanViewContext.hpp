@@ -561,13 +561,6 @@ namespace threepp::vulkan::impl {
         // (parallel-ray packing, jitter placement) and by DoF, which has no
         // meaning without a lens.
         bool orthoFrame_ = false;
-        // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
-        //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
-        //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
-        //   [8..11] = vec4(rgt.xyz,  0)             → prevCamRgt
-        //   [12..15]= vec4(up.xyz,   0)             → prevCamUp
-        std::array<float, 16> prevCamBufData_{};
-        bool prevCameraValid = false;
         // The deferred shade's temporal histories were just cleared
         // (clearGbufImages: init, reset, env swap), so the PREVIOUS G-buffer
         // slot describes a frame those histories never saw. The next shade

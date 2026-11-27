@@ -629,8 +629,6 @@ namespace threepp {
             }
         }
 
-        // (prevCamBufData_ / prevCameraValid moved to ViewContext.)
-
         [[nodiscard]] bool entryPlaced(size_t i) const {
             const size_t w = i >> 5;
             return w < entryPlacedBits_.size() && (entryPlacedBits_[w] & (1u << (i & 31u))) != 0u;
@@ -735,7 +733,7 @@ namespace threepp {
         void diffSceneRemoved(SceneDelta& d, size_t first, size_t end);
         bool trySlotDelta(SceneDelta& d);
         // THREEPP_VULKAN_WALK_CHECK=1: after a delta, a full recording compared
-        // node for node (mismatches to walkCheckMismatches_ and stderr).
+        // node for node (mismatches to stderr).
         void deltaWalkCheck(Object3D& scene, Camera& camera);
         // Hide or show span `spanIndex`'s entries in place (MeshEntry::hidden),
         // flag their pixels' history and set hiddenFlippedThisFrame_.

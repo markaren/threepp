@@ -399,18 +399,15 @@ void VulkanRenderer::Impl::compactAsync(const AsyncCompaction& c) {
         }
 
 void VulkanRenderer::Impl::resetViewSampling() {
-            // A view's render extent was (re)made: its sample sequence, the
-            // reprojection's previous camera and the motion history start over.
-            // (The tail of the ReSTIR DI reservoir allocation it used to be part
-            // of; its callers rely on the reset.)
+            // A view's render extent was (re)made: its sample sequence and the
+            // motion history start over. (The tail of the ReSTIR DI reservoir
+            // allocation it used to be part of; its callers rely on the reset.)
             sampleIndex = 0;
-            view().prevCameraValid = false;
             seedMotionState(lastVisibleEntries_);// forget motion history (identity next frame)
         }
 
 void VulkanRenderer::Impl::resetAccumulation() {
             sampleIndex = 0;
-            view().prevCameraValid = false;
             seedMotionState(lastVisibleEntries_);// forget motion history (identity next frame)
 #if defined(THREEPP_WITH_FSR)
             fsrResetNext_ = true;// FSR treats the next dispatch as a camera cut
@@ -2237,7 +2234,6 @@ bool VulkanRenderer::Impl::setViewCameraImpl(uint32_t handle, Camera& camera) {
             // pointers get recycled here, and a recycled Camera* landing on the
             // same address would inherit the previous camera's history.
             if (v->cameraUuid != camera.uuid) {
-                v->prevCameraValid        = false;
                 v->rasterPrevVPValid_     = false;
                 v->rasterPrevJitterValid_ = false;
                 v->deferredCamPrevValid_  = false;

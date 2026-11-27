@@ -89,9 +89,6 @@ namespace threepp::vulkan::rg {
                         VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL);
     Access storageReadWrite(VkPipelineStageFlags2 stages = kCompute,
                             VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL);
-    // A GENERAL-layout image read both by sampler and as a storage image.
-    Access generalRead(VkPipelineStageFlags2 stages = kCompute);
-    Access uniformRead(VkPipelineStageFlags2 stages = kCompute);
     Access indirectRead();
     Access transferSrc(VkImageLayout layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     Access transferDst(VkImageLayout layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
