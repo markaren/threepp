@@ -27,8 +27,8 @@
 
 namespace fjord {
 
-    // How a species' kit is drawn. The numbers are the twin's materials
-    // (norvasundet kit manifest): alpha cutoff, translucency, bark tiling.
+    // How a species' kit is drawn. The numbers are the materials the trees
+    // were built with (their kit manifest): alpha cutoff, translucency, bark tiling.
     struct KitLook {
         std::string name;                 // file stem in threepp_data/models/fjord/trees
         threepp::Vector2 barkRepeat{1, 1};// the trunk material's base_color_tiling

@@ -17,7 +17,7 @@
 //       validation layer sees none of it, the reads go through buffer device
 //       addresses.
 //
-// The second was found on the Norvasundet twin (2026-10-09): a bench that
+// The second was found on a large coastal scene (2026-10-09): a bench that
 // switched every emitter to glow-only and back lost the device three times out
 // of three.
 //

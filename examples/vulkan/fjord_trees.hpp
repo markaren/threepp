@@ -1,7 +1,7 @@
-// FJORD TREES — the card trees of the Nørvasundet twin, read from threepp_data.
+// FJORD TREES — card trees read from threepp_data (models/fjord/trees).
 //
 // The procedural TreeGenerator trees this demo used to grow were judged
-// "pretty bad" next to the twin's, which are Poly Haven's scanned models
+// "pretty bad" next to these, which are Poly Haven's scanned models
 // (fir_tree_01, pine_tree_01, tree_small_02, all CC0) rebuilt in Blender as
 // card trees: the trunk and the thick limbs kept as decimated wood, the
 // foliage gathered into clusters, each cluster a card showing a rendered

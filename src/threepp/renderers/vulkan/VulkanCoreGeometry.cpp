@@ -5499,7 +5499,7 @@ VulkanRenderer::Impl::DisplacedMeshState* VulkanRenderer::Impl::ensureDisplacedS
             // side, with the last grid line always kept so the proxy spans the
             // whole sheet. Same vertex buffer, same winding as PlaneGeometry:
             // (a, b, d), (b, c, d) per cell. The raster draws the full grid.
-            // Measured on the Nørvasundet twin (RTX 4070, 1024 x 1024 grid,
+            // Measured on a large coastal scene (RTX 4070, 1024 x 1024 grid,
             // 2.09 M triangles): the per-frame MODE_UPDATE refit of the full
             // grid costs 5.0 ms, a 512-cell grid's 0.36 ms — the cost is not
             // linear in the triangle count, the full grid sits past a cliff.

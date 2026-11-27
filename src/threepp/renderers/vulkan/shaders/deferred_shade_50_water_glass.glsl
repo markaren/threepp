@@ -122,7 +122,7 @@ float waterGlint(vec3 N, vec3 V, vec3 L, float NdotV, float ndl, float r0,
 // (a cloud deck's 5 degrees) are blots that overlap, and where they cover the
 // water the glitter is a sheen (the pixel's spread as a Boolean model of
 // blots has it, waterSunGlints).
-// kGlintPoints is set by eye (2026-11-25, Norvasundet and an open sea from a
+// kGlintPoints is set by eye (2026-11-25, a sheltered bay and an open sea from a
 // deck, a USV and a drone, 3 to 14 m/s): Longuet-Higgins' count for
 // capillaries is some 10^3 to 10^4 per m^2 per unit of D, which no pixel
 // resolves; 240 keeps a few points in a near pixel, where a camera does see

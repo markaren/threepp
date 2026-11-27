@@ -2,7 +2,7 @@
 // round the meadow, so the course reads as a clearing rather than a bowl of
 // bare hills against the sky.
 //
-// The trees are the Nørvasundet twin's card trees from threepp_data
+// The trees are the card trees from threepp_data
 // (models/fjord/trees): Poly Haven's scanned fir_tree_01, pine_tree_01 and
 // tree_small_02 (CC0), rebuilt as trunks and leaf cards of the real needles
 // and leaves, read by examples/vulkan/fjord_forest.hpp. They are visual only:

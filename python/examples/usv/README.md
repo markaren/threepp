@@ -354,8 +354,8 @@ imparts, a radius, and how much of each quantity it puts in. `Wash` makes the so
 each propulsor's race from its thrust by momentum theory (`race()`; `Drive.thrusts(u)` names a
 drive's propulsors), run to where it has widened to the surface, with air by how hard it is for the
 water over it, and the lane her hull drags from each stern. Each frame: `ocean.clear_wake_sources()`
-once, then every boat's `wash.update(dt)`. Anything else puts its own with `wash.put(...)`, as the
-Nørvasundet scene does for a kayak's paddle blades (`Wash(hull, None, ...)` is a hull with no
+once, then every boat's `wash.update(dt)`. Anything else puts its own with `wash.put(...)`, such as
+a kayak's paddle blades (`Wash(hull, None, ...)` is a hull with no
 propulsor).
 
 Her waves are the field's ripples (`wake_field.ripple_resolution`). Each patch holds the spectrum of
