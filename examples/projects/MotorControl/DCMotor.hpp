@@ -23,7 +23,12 @@ public:
         double maxVoltage = 12.0;   // supply limit [V]
     };
 
-    explicit DCMotor(const Parameters& params = {}): params_(params) {}
+    // Two constructors, not `const Parameters& params = {}`: GCC cannot use a
+    // nested struct's default member initializers in a default argument
+    // inside the enclosing class.
+    DCMotor() = default;
+
+    explicit DCMotor(const Parameters& params): params_(params) {}
 
     // Advance by `dt` seconds with `voltage` applied (clamped to the supply)
     // and a `loadTorque` acting against positive rotation. Semi-implicit Euler:
