@@ -36,34 +36,11 @@ layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;// .x = Vulkan NDC 
 layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;  // .x = instanceId+1 (0 = sky)
 layout(set = 0, binding = 35) uniform sampler2D blueNoiseTex;
 
-layout(set = 0, binding = 57) uniform RasterCamUbo {
-    mat4 currVPjittered;
-    mat4 currVPunjittered;
-    mat4 prevVP;
-    vec4 jitter;
-    vec4 prevJitter;
-} rcam;
+#define RASTER_CAM_BINDING 57
+#define RASTER_CAM_NAME rcam
+#include "raster_camera_ubo.glsl"
 
-// cloud_ubo.glsl's block plus the trailing epoch only this pass reads: keep
-// the two in step.
-layout(set = 0, binding = 58, scalar) uniform CloudUbo {
-    float enabled;
-    float coverage;
-    float density;
-    float bottomY;
-    float topY;
-    float evolveSpeed;
-    float timeSec;
-    float heteroActive;
-    vec3  wind;
-    float hfDensity;
-    float hfBaseY;
-    float hfFalloff;
-    float hfNoiseAmount;
-    float shadowActive;
-    float epoch;             // history generation — bumped on enable/reconfigure
-    float hfAir;             // uniform air σ_t under the height fog (cloud_density.glsl reads it)
-} clouds;
+#include "cloud_ubo.glsl"// .epoch: the history generation, bumped on enable/reconfigure
 
 // Cloud march outputs (half-res) + temporal history (other FIF).
 layout(set = 0, binding = 59, rgba16f) uniform writeonly image2D cloudColorImage;// rgb=in-scatter, a=transmittance

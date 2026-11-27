@@ -70,13 +70,9 @@ layout(set = 0, binding = 53) uniform sampler3D froxelLutTex;
 
 // Forward (unjittered) view-projection — projects the particle center to the
 // screen uv the cluster grid and froxel LUT are indexed by.
-layout(set = 0, binding = 57) uniform RasterCamUbo {
-    mat4 currVPjittered;
-    mat4 currVPunjittered;
-    mat4 prevVP;
-    vec4 jitter;
-    vec4 prevJitter;
-} rcam;
+#define RASTER_CAM_BINDING 57
+#define RASTER_CAM_NAME rcam
+#include "raster_camera_ubo.glsl"
 
 #include "cloud_ubo.glsl"
 

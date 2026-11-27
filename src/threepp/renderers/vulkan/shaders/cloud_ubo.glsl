@@ -2,11 +2,9 @@
 // cloud layer (VulkanRenderer::setClouds) and the near-field heterogeneous
 // height fog (setHeightFog) ride one scalar UBO, since they share wind and
 // timeSec. The deferred shade, cloud_shadow.comp, froxel_inject.comp,
-// froxel_integrate.comp and particle_light.comp bind it at 58 of the deferred
-// set; splat_common.glsl defines CLOUD_UBO_BINDING 19 before the include.
-//
-// cloud_march.comp, the one reader of the host's trailing `epoch`, declares
-// its own copy with that member.
+// froxel_integrate.comp, particle_light.comp and cloud_march.comp (the one
+// reader of `epoch`) bind it at 58 of the deferred set; splat_common.glsl
+// defines CLOUD_UBO_BINDING 19 before the include.
 
 #ifndef CLOUD_UBO_GLSL
 #define CLOUD_UBO_GLSL
@@ -30,7 +28,7 @@ layout(set = 0, binding = CLOUD_UBO_BINDING, scalar) uniform CloudUbo {
     float hfFalloff;    // height-fog exponential height scale (m)
     float hfNoiseAmount;// 0 = smooth analytic .. 1 = fully noise-modulated
     float shadowActive; // 1.0 = cloud shadow map valid this frame
-    float epoch;        // cloud_march's history generation (declared to reach hfAir)
+    float epoch;        // cloud_march's history generation
     float hfAir;        // uniform air σ_t under the height fog (0 = none; only with hfDensity > 0)
 } clouds;
 
