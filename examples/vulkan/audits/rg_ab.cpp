@@ -132,6 +132,11 @@
 //               on timing.
 //   deform      diverges run to run under CPU load (other processes busy);
 //               unloaded runs are bit-exact.
+//   room_fx     the first runs of a newly linked rg_ab.exe: final.rgb only
+//               (188 to 11,641 bytes, <= 9/255), every AOV identical. Seen on
+//               runs 1-2 of a fresh build and on run 2 of the baseline exe with
+//               only bytes appended to the file; later runs bit-exact, also
+//               under full CPU load. Rerun it after a link before reading it.
 //
 // Sync validation: THREEPP_VULKAN_VALIDATION=1 and VK_LAYER_SETTINGS_PATH
 // pointing at a vk_layer_settings.txt (or its directory) that contains
