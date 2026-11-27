@@ -24,6 +24,7 @@
 
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
+#include "OverlayLines.hpp"
 
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 #include "threepp/extras/editor/EditorCommands.hpp"
@@ -50,40 +51,7 @@ namespace {
     // Drawn over scene geometry but under the marker icons, which are UI.
     constexpr int kCurveRenderOrder = 3000;
 
-    void hashBytes(std::size_t& seed, const void* data, std::size_t size) {
-
-        const auto* bytes = static_cast<const unsigned char*>(data);
-        for (std::size_t i = 0; i < size; ++i) {
-            seed ^= static_cast<std::size_t>(bytes[i]) + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
-        }
-    }
-
-    // In-place sample writes, same contract as SplineOverlay's writeSamples
-    // (the renderer caches GPU buffers by attribute identity; replacing the
-    // attribute each rebuild can hand it a recycled pointer that reads as
-    // already uploaded). The attribute is only replaced when outgrown.
-    // Takes Line by reference — LineSegments IS one, so the aids buffer fits
-    // through the same door (a template here tripped clang's dependent-name
-    // rules on the CI runners; MSVC was merely permissive).
-    void writePoints(Line& line, int& capacity, const std::vector<Vector3>& points) {
-
-        const auto count = static_cast<int>(points.size());
-        if (count > capacity) {
-            const auto old = line.geometry();
-            auto geometry = BufferGeometry::create();
-            geometry->setAttribute("position", FloatBufferAttribute::create(
-                                                       std::vector<float>(points.size() * 3), 3));
-            line.setGeometry(geometry);
-            if (old) old->dispose();
-            capacity = count;
-        }
-        auto* position = line.geometry()->getAttribute<float>("position");
-        for (int i = 0; i < count; ++i) {
-            position->setXYZ(i, points[i].x, points[i].y, points[i].z);
-        }
-        position->needsUpdate();
-        line.geometry()->drawRange = {0, count};
-    }
+    using overlay::hashBytes;
 
     // Everything the sampled line and the generated content are a function of.
     // Waypoints only — the generated group is an OUTPUT of this hash.
@@ -298,7 +266,7 @@ void EditorApp::syncConveyorOverlays() {
 
             const auto sampled = conveyor::resamplePath(spec.waypoints, spec.smooth, spec.samples);
             it->line->visible = sampled.size() >= 2;
-            if (sampled.size() >= 2) writePoints(*it->line, it->capacity, sampled);
+            if (sampled.size() >= 2) overlay::writeLinePoints(*it->line, it->capacity, sampled);
 
             config.syncDerived(*owner);
         } else if (!ConveyorConfig::derivedGroup(*owner)) {
@@ -335,7 +303,7 @@ void EditorApp::syncConveyorOverlays() {
                 }
             }
             it->aids->visible = !segments.empty();
-            if (!segments.empty()) writePoints(*it->aids, it->aidsCapacity, segments);
+            if (!segments.empty()) overlay::writeLinePoints(*it->aids, it->aidsCapacity, segments);
         }
 
         // --- the radius handle ----------------------------------------------

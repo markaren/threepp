@@ -23,6 +23,7 @@
 
 #include "EditorApp.hpp"
 #include "EditorTheme.hpp"
+#include "OverlayLines.hpp"
 
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/SplineConfig.hpp"
@@ -49,43 +50,7 @@ namespace {
     // Drawn over scene geometry but under the marker icons, which are UI.
     constexpr int kCurveRenderOrder = 3000;
 
-    void hashBytes(std::size_t& seed, const void* data, std::size_t size) {
-
-        const auto* bytes = static_cast<const unsigned char*>(data);
-        for (std::size_t i = 0; i < size; ++i) {
-            seed ^= static_cast<std::size_t>(bytes[i]) + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
-        }
-    }
-
-    // Writes the samples into the line IN PLACE, the way
-    // examples/extras/curves/spline_editor.cpp always has: the renderer caches
-    // GPU buffers by attribute identity, so replacing the attribute on every
-    // rebuild (what setFromPoints does) can hand it a recycled pointer with the
-    // same fresh version count — which reads as already uploaded, and the drawn
-    // curve freezes at its first shape until something destroys the whole line.
-    // The attribute is only replaced when the curve OUTGROWS it, and then the
-    // whole geometry is swapped and the old one disposed, so the renderer
-    // provably lets go of the stale buffers.
-    void writeSamples(Line& line, int& capacity, const std::vector<Vector3>& sampled) {
-
-        const auto count = static_cast<int>(sampled.size());
-        if (count > capacity) {
-            const auto old = line.geometry();
-            auto geometry = BufferGeometry::create();
-            geometry->setAttribute("position", FloatBufferAttribute::create(
-                                                       std::vector<float>(sampled.size() * 3), 3));
-            line.setGeometry(geometry);
-            if (old) old->dispose();
-            capacity = count;
-        }
-        auto* position = line.geometry()->getAttribute<float>("position");
-        for (int i = 0; i < count; ++i) {
-            position->setXYZ(i, sampled[i].x, sampled[i].y, sampled[i].z);
-        }
-        position->needsUpdate();
-        // The tail beyond `count` still holds whatever a longer curve left there.
-        line.geometry()->drawRange = {0, count};
-    }
+    using overlay::hashBytes;
 
     // Everything the sampled line and the generated mesh are a function of.
     // Float bytes rather than values: a position that did not move hashes
@@ -270,7 +235,7 @@ void EditorApp::syncSplineOverlays() {
             // A spline down to one point is legal while it is being authored;
             // it just has no curve to draw yet.
             it->line->visible = !sampled.empty();
-            if (!sampled.empty()) writeSamples(*it->line, it->capacity, sampled);
+            if (!sampled.empty()) overlay::writeLinePoints(*it->line, it->capacity, sampled);
 
             syncDerivedMesh(*owner, config);
         } else {
