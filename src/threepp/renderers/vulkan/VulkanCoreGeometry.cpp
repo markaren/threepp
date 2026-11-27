@@ -2597,13 +2597,15 @@ void VulkanRenderer::Impl::refreshGeomBlasBatch(const std::vector<VulkanRenderer
                 // against a different primitive count is invalid — as does a
                 // flags-lineage change (an update must carry its source
                 // build's flags; a record that just left the interop route
-                // was last built with PREFER_FAST_BUILD).
+                // was last built with PREFER_FAST_BUILD). So does a geometry
+                // without stable vertex correspondence (interopWorldStatic),
+                // every frame: see the interop refit's fullRebuild below.
                 const VkBuildAccelerationStructureFlagsKHR wantFlags =
                         VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
                         VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
                 const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
                         wantFlags != rec.blasBuiltFlags || blasRebuildThisFrame_ ||
-                        indexChanged[k] ||
+                        indexChanged[k] || rec.interopWorldStatic ||
                         rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                 rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
                 rec.blasBuiltPrims = primitiveCount;
@@ -3173,16 +3175,27 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
                             VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
                     // A count change forces MODE_BUILD: refitting against a
                     // different primitive count than the AS was built with is
-                    // invalid. For a marching-cubes surface whose triangle
-                    // count moves every frame this makes most frames full
-                    // builds — of the LIVE count, which is cheaper than
-                    // refitting a padded capacity worth of degenerates. A
-                    // flags-lineage change (a record entering or leaving the
-                    // interop route) forces BUILD for the same
+                    // invalid. A flags-lineage change (a record entering or
+                    // leaving the interop route) forces BUILD for the same
                     // update-must-match-its-source reason.
+                    //
+                    // A geometry without stable vertex correspondence
+                    // (interopWorldStatic: a marching-cubes soup re-triangulated
+                    // every frame) is BUILT every frame whatever its count. A
+                    // refit keeps the tree's grouping of triangle slots and
+                    // only moves its boxes, and in a re-triangulated soup slot
+                    // i is a different triangle each frame, so the boxes grow
+                    // over the whole surface. The count did not save it: a
+                    // producer that sizes its draw range in blocks keeps the
+                    // same count for frames on end (a liquid surface meshed on
+                    // the device, blocks of 4096 triangles: refit 117 frames
+                    // of 146). Its glass water in a dam break, 1600x900, RTX
+                    // 5080: the shade 16.3 ms with the refits, 6.9 ms building
+                    // every frame, the whole frame 29.5 -> 20.3 ms; the builds
+                    // cost 0.4 ms; the picture is the same, byte for byte.
                     const bool fullRebuild = primitiveCount != rec.blasBuiltPrims ||
                             wantFlags != rec.blasBuiltFlags || blasRebuildThisFrame_ ||
-                            indexChanged[asOps[kk]] != 0u ||
+                            indexChanged[asOps[kk]] != 0u || rec.interopWorldStatic ||
                             rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
                     rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
                     rec.blasBuiltPrims = primitiveCount;
