@@ -5,7 +5,7 @@
 // the separate opt-in that turns the same robot into a PhysX reduced-coordinate
 // articulation while playing: the joints become real DOFs, gravity and contact
 // act on the links, and the joint sensors (Encoder, Force/Torque) have something
-// to measure. Stop restores the pre-play snapshot, so nothing the simulation did
+// to measure. Stop drops the play copy, so nothing the simulation did
 // survives — exactly like the rigid bodies PhysicsConfig authors.
 //
 // WHY THIS IS SEPARATE FROM RobotConfig. RobotConfig's fields are a filesystem

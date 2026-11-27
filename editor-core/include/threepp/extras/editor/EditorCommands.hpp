@@ -50,8 +50,8 @@ namespace threepp::editor {
     [[nodiscard]] bool isDescendantOf(const Object3D& candidate, const Object3D& object);
 
     // Depth-first search for the node carrying `uuid`, or nullptr. Uuids are
-    // stable across the play snapshot round trip, which makes them the one
-    // usable identity after a scene replace.
+    // stable across a scene replace (and the play copy keeps them), which makes
+    // them the one usable identity after one.
     [[nodiscard]] Object3D* findByUuid(Object3D& root, const std::string& uuid);
 
 

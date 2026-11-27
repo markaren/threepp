@@ -36,8 +36,8 @@
 // push them in unmodified, so the node they hang from must have an identity
 // world matrix. A chute node has a transform by construction (it stands over
 // something), and a child of it would carry that transform twice. They are
-// scene content either way — the play snapshot was taken before start(), so
-// Stop restores a document that never saw them.
+// scene content either way — they are added to the play copy, which Stop drops,
+// so the authored document never sees them.
 
 #ifndef THREEPP_EDITOR_GRANULARPLAYSESSION_HPP
 #define THREEPP_EDITOR_GRANULARPLAYSESSION_HPP

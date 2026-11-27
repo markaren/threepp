@@ -657,10 +657,10 @@ namespace threepp::editor {
             world_->step(dt);
             // Mirror each articulation's solved state back onto the visual robot,
             // AFTER the step, so the inspector and any sensor read the pose the
-            // frame ended on. The play snapshot undoes all of it on Stop.
+            // frame ended on. Stop drops the play copy, and all of it with it.
             for (const auto& played : articulations_) mirrorArticulation(*played);
             // And each vehicle's chassis + wheel poses onto the model, same
-            // timing, same snapshot rule.
+            // timing, same rule.
             for (const auto& played : vehicles_) mirrorVehicle(*played);
         }
 

@@ -310,7 +310,8 @@ namespace threepp::editor {
         void setRenderer(Renderer* renderer) { renderer_ = renderer; }
 
         // Where the sensor nodes are parented: an editor-only Group, so they are
-        // excluded from every export and snapshot and never picked. MUST NOT be
+        // excluded from every export and from the copy Play builds, and never
+        // picked. MUST NOT be
         // inside the subtree passed to setHiddenDuringScan.
         void setRig(Object3D* rig) { rig_ = rig; }
 

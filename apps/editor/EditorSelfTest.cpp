@@ -729,8 +729,8 @@ int EditorApp::runScreenshot() {
     drop(Primitive::Box, {-1.f, 4.5f, 13.5f}, "Box near the crest");
 
     // A LIDAR on a mast, authored exactly as the inspector authors one. Added
-    // BEFORE play, because the pre-play snapshot is what Stop restores — an
-    // object added while playing is not in the document at all.
+    // BEFORE play, because Play runs on a copy that Stop drops — an object
+    // added while playing is not in the document at all.
     //
     // This is the shot the sensor feature is judged on. A count in a panel says
     // a scan happened; only the cloud says the beams, the sensor pose and the
@@ -781,7 +781,7 @@ int EditorApp::runScreenshot() {
 
     const auto shoot = [&](const std::filesystem::path& path) { return shootTo(path); };
 
-    // Two shots, because one cannot answer both questions. A road drawn under
+    // Two shots, because one cannot answer both questions. A tube drawn under
     // its own collider overlay is a wall of lines — good for asking whether the
     // shapes hug the surface, useless for asking whether the surface is faceted.
     const auto sibling = [&](const char* suffix) {
@@ -793,7 +793,7 @@ int EditorApp::runScreenshot() {
 
     bool wrote = shoot(options_.screenshot);
 
-    // And a third, low and near, along the graded road. A crease in a grade is
+    // And a third, low and near, along the graded tube. A crease in a grade is
     // invisible from overhead — it is a shading break, and shading breaks want
     // a glancing angle and the surface filling the frame.
     camera_.position.set(1.f, 3.2f, 34.f);
@@ -847,7 +847,7 @@ int EditorApp::runScreenshot() {
     // And the axis views, for the same reason the rest of this function exists:
     // a projection is a claim about what the image does to parallel lines, and
     // the only way to check it is to look. Top wants the grid flat under the
-    // road; Front wants it stood up behind it.
+    // tubes; Front wants it stood up behind them.
     physicsDebug_ = false;
     // Stopped and with something selected: the gizmo is rebuilt against the
     // ortho camera when the projection changes, and a gizmo that draws at the
@@ -3674,7 +3674,7 @@ int EditorApp::runSelfTest() {
             step();
             check(pumpUntilSync(syncsBefore + 1), "the parked save applies after Stop");
             check(stored().source.find("speed = 4.5") != std::string::npos,
-                  "on the object the snapshot restore rebuilt, found by uuid");
+                  "on the authored object, found by uuid");
             check(externalEdit_.active, "and the session is still live after the round trip");
 
             // Clearing the script is the end of it: nothing to watch, and the
@@ -4837,7 +4837,7 @@ int EditorApp::runSelfTest() {
             step();
             check(fieldsInDocument() == 0 &&
                           (!particleSession_ || particleSession_->liveFieldCount() == 0),
-                  "Stop takes the session's fields with the snapshot restore");
+                  "Stop takes the session's fields with the play copy");
             if (previewable) {
                 check(!particlePreviews_.empty() &&
                               particlePreviews_.begin()->second.field->liveCount() > 0,

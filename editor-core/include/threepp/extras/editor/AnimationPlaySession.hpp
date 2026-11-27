@@ -1,9 +1,9 @@
 // Plays each object's authored animation during a play session.
 //
 // Any object whose `animations` vector is non-empty gets a mixer, unless its
-// AnimationConfig (userData["animation"]) switched autoplay off. The editor's
-// snapshot/restore puts every pose back on stop, so this session never has to
-// undo anything itself.
+// AnimationConfig (userData["animation"]) switched autoplay off. Play runs on a
+// copy of the scene that Stop drops, so the authored poses are never touched and
+// this session never has to undo anything itself.
 
 #ifndef THREEPP_EDITOR_ANIMATIONPLAYSESSION_HPP
 #define THREEPP_EDITOR_ANIMATIONPLAYSESSION_HPP

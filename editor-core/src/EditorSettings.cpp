@@ -41,8 +41,8 @@ namespace {
         if (text == "reference") return ImageStorage::Reference;
         if (text == "embed") return ImageStorage::Embed;
         // "omit" is deliberately not accepted: it produces a document that
-        // cannot render on its own, which is a play-snapshot concern and never
-        // something a user should be able to pick for File ▸ Save.
+        // cannot render on its own, never something a user should be able to
+        // pick for File ▸ Save.
         return fallback;
     }
 

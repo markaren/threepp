@@ -104,7 +104,7 @@ namespace {
 
         Object3D* marker(const char* name) { return scene().getObjectByName(name); }
 
-        // What the editor's snapshot restore does on Stop, by hand: a script's
+        // What dropping the play copy does on Stop, by hand: a script's
         // markers are play-time litter, and a second Play must not find the
         // first one's. Nothing about the clock — this rig just drives the
         // sessions, it does not snapshot the document around them.

@@ -10,8 +10,8 @@
 // mesh wants an identity parent (Flock.hpp: "THE FLOCK NODE SHOULD STAY AT
 // IDENTITY"). The authored node's transform contributes exactly one thing —
 // its world position becomes the territory's `home`. The birds are scene
-// content either way: the play snapshot was taken before start(), so Stop
-// restores a document that never saw them.
+// content either way: they are added to the play copy, which Stop drops, so the
+// authored document never sees them.
 //
 // PERCHES BAKE AGAINST THE SCENE AS PLAY FINDS IT, amortised. bakePerches()
 // starts the work-unit-budgeted bake and Flock::update() advances it, so a

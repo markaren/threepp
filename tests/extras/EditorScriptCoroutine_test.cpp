@@ -141,7 +141,7 @@ namespace {
         Object3D* marker(const char* name) { return scene().getObjectByName(name); }
 
         // Markers are play-time litter, exactly as they are in
-        // EditorScriptClock_test: what the editor's snapshot restore drops on
+        // EditorScriptClock_test: what dropping the play copy takes away on
         // Stop, done by hand so a second Play does not find the first's.
         void dropMarkers(std::initializer_list<const char*> names) {
             for (const char* name : names) {

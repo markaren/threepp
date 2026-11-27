@@ -7,7 +7,7 @@
 //
 // The birds themselves are never document nodes: FlockPlaySession builds a
 // Flock from this entry when Play starts (baking perches against the scene as
-// it stands), and the Stop snapshot restores a document that never saw them.
+// it stands) into the play copy, which Stop drops: the document never sees them.
 // A saved scene therefore carries a dozen scalars, not 2 256 vertices of bird.
 //
 // What makes a Group a flock is the presence of the entry — no enabled flag,

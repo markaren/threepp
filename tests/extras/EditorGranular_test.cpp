@@ -202,7 +202,7 @@ TEST_CASE("an authored granular chute pours grains that land on the floor", "[ph
     physics.stop();
 
     // The visuals are the session's, not the document's — a Stop takes them
-    // even without the play snapshot doing it (which is what the apps rely on).
+    // even without dropping a play copy (which is what the apps rely on).
     CHECK(grainMesh(scene) == nullptr);
     CHECK(granular.activeGrainCount() == 0);
     CHECK(granular.granularNodeCount() == 1);// kept for the status readout

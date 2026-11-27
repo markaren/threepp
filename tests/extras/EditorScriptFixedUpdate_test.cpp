@@ -543,8 +543,8 @@ TEST_CASE("play, stop, play again re-registers cleanly", "[editor][scripting][ph
     // the handle past that has to be harmless.
     rig.stop();
 
-    // The markers from the first run are still in the scene (the editor's
-    // snapshot restore is what removes them, and there is none here); the second
+    // The markers from the first run are still in the scene (dropping the
+    // editor's play copy is what removes them, and there is none here); the second
     // run adds its own, so find the fresh one by counting instead.
     rig.start();
     rig.run(15);

@@ -1317,7 +1317,7 @@ closes its loop on the noisy reading instead of on the solver's truth.
 
 Attach a script to any object and it becomes a behaviour, MonoBehaviour style.
 On Play the editor instantiates the class and drives it; on Stop it calls
-`stop()` and throws the instance away, and the usual snapshot restore puts the
+`stop()` and throws the instance away, and dropping the play copy puts the
 scene back.
 
 The code comes in one of two forms, never both: a `.py` **file** referenced by
@@ -2050,8 +2050,8 @@ least one script is.
 * **Revert** reloads the committed text; **Clear** in the inspector removes the
   script and closes the tab (one `Ctrl+Z` away, and the buffer is still there
   if you reopen the object).
-* It is read-only while playing, like the inspector: the snapshot restore on Stop
-  would throw the edit away.
+* It is read-only while playing, like the inspector: an edit would land in the
+  play copy, which Stop throws away.
 
 Inline source is compiled **fresh on every Play** — it is inherently hot, with no
 file, no cache and no stamp anywhere in the path. Each object's source gets its
@@ -2100,9 +2100,9 @@ Details that are not incidental:
   underneath it and external editing simply carries on. Iterating on Play with
   VS Code open is the point of the whole feature.
 * **A save that arrives while playing is parked.** Committing then would be
-  swallowed by the snapshot restore on Stop, so nothing is consumed, the banner
+  dropped with the play copy at Stop, so nothing is consumed, the banner
   says the save applies on Stop, and the poll after Stop applies that same file
-  to the restored object. (An async import that lands during Play is parked the
+  to the authored object. (An async import that lands during Play is parked the
   same way.)
 * It ends on **Stop external edit**, on the script being cleared, on the object
   leaving the scene, on the file being deleted, or when the editor closes — and
@@ -2847,8 +2847,8 @@ pose to write back, and would otherwise be invisible to a script.
 
 The play scene is an ordinary threepp graph, so a script builds and parents
 objects into it with the ordinary calls — `scene.add(mesh)`, `remove`, `clear`.
-There is no editor verb for this and none is needed. Stop restores the scene
-from the snapshot it took at Play, so whatever a script spawned simply is not
+There is no editor verb for this and none is needed. Stop drops the copy Play
+ran on, so whatever a script spawned simply is not
 there afterwards; nothing has to be cleaned up.
 
 `threepp.editor.world()` is the other half — the `PhysxWorld` the session is
@@ -3096,7 +3096,7 @@ unchanged.
 a worker thread, with a spinner toast (bottom-left) showing the file and queue
 depth. Success selects the new group and flashes a summary in the status bar;
 failure opens a dialog with the loader's error. An import that finishes during
-Play is parked until Stop, so it cannot be swallowed by the snapshot restore.
+Play is parked until Stop, so it does not land in the play copy and vanish with it.
 Passing a model path on the command line (`threepp_editor model.glb`) imports
 it into a fresh template scene.
 

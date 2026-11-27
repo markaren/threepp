@@ -18,13 +18,13 @@
 // The baked vertices are WORLD SPACE (splats::bakeSurface's contract), so the
 // collider is cooked at identity and the sensor mesh goes to the SCENE ROOT —
 // the granular visuals' rule, for the granular visuals' reason: a node with a
-// transform would apply it twice. Both are scene/world content created after the
-// play snapshot was taken, so Stop restores a document that never saw them.
+// transform would apply it twice. Both are scene/world content created in the
+// play copy, which Stop drops, so the authored document never sees them.
 //
 // The sensor half is a SCENE-WIDE master (VulkanRenderer::setSensorOnlySurfaces)
 // plus a per-mesh layer, so one enabled scan grants perception to every baked
-// surface in the scene; turning it off is stop()'s job and not the snapshot's,
-// because it is renderer state and the snapshot only restores the graph.
+// surface in the scene; turning it off is stop()'s job, because it is renderer
+// state and dropping the play copy only drops the graph.
 
 #ifndef THREEPP_EDITOR_SPLATSURFACEPLAYSESSION_HPP
 #define THREEPP_EDITOR_SPLATSURFACEPLAYSESSION_HPP

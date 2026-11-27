@@ -13,9 +13,10 @@
 // PhysicsPlaySession's lifetime token — when the token is dead the sim is
 // abandoned rather than asked to release actors in a destroyed world.
 //
-// Everything visual this session touches (texture offsets, roller quaternions,
-// hidden preview bars, its own travelling bars added to the scene) is undone by
-// the play snapshot on Stop, like any other session mutation.
+// The nodes this session touches (roller quaternions, hidden preview bars, its
+// own travelling bars added to the scene) are the play copy's, which Stop drops
+// like any other session mutation. The belt textures are shared with the
+// authored scene, so stop() puts their offsets back itself (BeltVisual).
 
 #ifndef THREEPP_EDITOR_CONVEYORPLAYSESSION_HPP
 #define THREEPP_EDITOR_CONVEYORPLAYSESSION_HPP

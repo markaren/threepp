@@ -2,7 +2,7 @@
 //
 // Mirrors PhysicsConfig: one flat `key=value;key=value` string in
 // `object.userData["animation"]`, so it travels through
-// ObjectExporter/ObjectLoader (and the play snapshot) with no sidecar file.
+// ObjectExporter/ObjectLoader (and the play copy) with no sidecar file.
 // Unknown keys are ignored on read, which keeps the format extensible.
 
 #ifndef THREEPP_EDITOR_ANIMATIONCONFIG_HPP

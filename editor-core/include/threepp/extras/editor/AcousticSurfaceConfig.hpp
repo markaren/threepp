@@ -2,7 +2,7 @@
 //
 // One flat `key=value;…` string under userData["acousticSurface"], the
 // PhysicsConfig/SplatSurfaceConfig format, so it travels through
-// ObjectExporter/ObjectLoader and the play snapshot with no sidecar file.
+// ObjectExporter/ObjectLoader and the play copy with no sidecar file.
 //
 // A mesh nobody flagged leaves NO entry (write() erases at enabled=false), which
 // is what keeps a scene without acoustics byte-identical to one authored before

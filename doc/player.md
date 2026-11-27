@@ -80,8 +80,8 @@ never loaded is worse than no gate.
 
 ## Episodes
 
-Each episode is a full `PlayController` play → step → stop cycle. Stop restores
-the snapshot taken at play, so **episodes are independent by construction** —
+Each episode is a full `PlayController` play → step → stop cycle. Stop drops
+the copy the episode played on, so **episodes are independent by construction** —
 not by anybody remembering to reset something. A body that fell in episode 0
 starts episode 1 back where it was authored, and the seeded sensor streams
 replay identically:
@@ -150,7 +150,7 @@ their draw calls, because a draw must not behave differently just because nobody
 is looking; the segments just go nowhere.
 
 The overlay group is registered with the document as editor-only, so it never
-enters a snapshot or an export, and it is handed to the sensor session as
+enters the play copy or an export, and it is handed to the sensor session as
 hidden-during-scan, so a lidar cannot range against somebody's debug arrow.
 
 ## Layout

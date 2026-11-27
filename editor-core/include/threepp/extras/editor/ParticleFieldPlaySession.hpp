@@ -27,8 +27,8 @@
 // world matrix (see ParticleFieldBuild::setWorldMatrix, which also re-anchors
 // the density volume — the emitter is field-local but DensityRepr::center is
 // world), and a parent with a transform of its own would multiply that matrix a
-// second time. They are scene content either way: the play snapshot was taken
-// before start(), so Stop restores a document that never saw them.
+// second time. They are scene content either way: they are added to the play
+// copy, which Stop drops, so the authored document never sees them.
 
 #ifndef THREEPP_EDITOR_PARTICLEFIELDPLAYSESSION_HPP
 #define THREEPP_EDITOR_PARTICLEFIELDPLAYSESSION_HPP
@@ -212,8 +212,8 @@ namespace threepp::editor {
             bool follow = false;
         };
 
-        // Let go of the fields. The snapshot restore drops the whole scene they
-        // were added to, so this is not what cleans the document up — it is what
+        // Let go of the fields. Stop drops the play copy they were added to, so
+        // this is not what cleans the document up — it is what
         // keeps this session from holding the last reference to a field after
         // the graph around it is gone.
         void release() {
