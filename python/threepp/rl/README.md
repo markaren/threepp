@@ -250,9 +250,9 @@ Warp shares torch's CUDA primary context — the same one `GpuSim` hands PhysX �
 the sim's state tensors and writes its answer with no copy and no context switch. Warp is imported
 lazily on the first `TerrainRays`, so `import threepp.rl` still works without it.
 
-`examples/spot/spot_scan_ab.py` is the acceptance test: it runs both arms through the env's own
-`_terrain_h` and reports agreement and cost. Where a formula is exact — the stairs env inside a
-lane — the two match to 0.000000 m over 436 730 probes.
+The acceptance test ran both arms through the env's own `_terrain_h`
+(`examples/spot/spot_scan_ab.py`, since removed; in git history). Where a formula is exact — the
+stairs env inside a lane — the two matched to 0.000000 m over 436 730 probes.
 
 `heights()` returns a **fresh** tensor. It used to hand back a view of one reused buffer, which
 aliased the moment a caller held two results at once — `h_here = heights(x, y)` followed by

@@ -11,7 +11,8 @@ tile with `Mesh.scale.z = amp[lane]`, so amplitude is graded across lanes (the d
 from one geometry per shape. Tiles are edge-tapered to z~0 so they blend into the surrounding flat
 ground. The obs scan + reward read the EXACT same height grids by bilinear interpolation -> ground-truth
 matches the collision mesh. Same warm-start + velocity-tracking + imitation-anchor machinery as the rest
-of spotv2 (identical 96-d clock obs), so train_spot_heightfield.py / play_spot_heightfield.py reuse it.
+of spotv2 (identical 96-d clock obs). It has no trainer or viewer of its own: spot_course.py takes
+make_hf_grids, and the selftests here and in spot_symmetry.py build the env.
 """
 import os
 import sys

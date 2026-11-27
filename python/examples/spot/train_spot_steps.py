@@ -136,8 +136,7 @@ def main():
     ap.add_argument("--warmstart", default=os.path.join(_HERE, "scratch_distillation", "scratch_flat_best.pt"),
                     help="what to start the fine-tune from. A 50-d clock base gait is expanded into "
                          "96-d (default = scratch_flat_best.pt); a checkpoint that is ALREADY 96-d — "
-                         "spot_hf.pt, say — is continued whole, which is how you chain "
-                         "heightfield -> stairs.")
+                         "an earlier spot_steps.pt, say — is continued whole.")
     ap.add_argument("--fell_max", type=float, default=0.006)
     ap.add_argument("--sym_coef", type=float, default=1.0)   # left-right symmetry augmentation (kills the veer)
     ap.add_argument("--push-vel", dest="push_vel", type=float, default=0.0,
@@ -591,10 +590,8 @@ def main():
             print(f"continued from {os.path.basename(args.warmstart)} widened {OBS_DIM} -> {env.obs_dim} inputs "
                   f"({n_wide} first layers, zero weights on the jump channels; actor+critic+log_std+norm)")
         elif src_meta.get("obs_dim") == env.obs_dim:
-            # Already a terrain policy, not the 50-d base gait: continue it whole. This is what a
-            # heightfield -> stairs chain needs, and until now it could not be run at all — the
-            # expander below asserts on anything that is not 50-d, so handing it spot_hf.pt
-            # stopped the trainer dead.
+            # Already a terrain policy, not the 50-d base gait: continue it whole (the expander
+            # below takes only a 50-d checkpoint).
             ppo.ac.load_state_dict(src.state_dict())
             if ppo.norm is not None and src_norm is not None:
                 ppo.norm.load(src_norm.state())
