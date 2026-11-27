@@ -21,7 +21,8 @@
 //   [7] the sky guide: a dark room lit by the sky through a small window
 //       comes out the same traced in one pass (which only learns) as in
 //       many (guided from the second on), and the guided one is far less
-//       noisy for the same samples;
+//       noisy for the same samples; and a one-pass pathTrace() reads its own
+//       samples (its pass sits in the frame render() leaves open);
 //   [8] no validation errors.
 //
 // Exit 42 (SKIP) without a Vulkan device; a device without ray query checks
@@ -720,14 +721,7 @@ int main() {
             q.maxBounces      = 2;
             int iw = 0, ih = 0;
             for (int i = 0; i < 2; ++i) renderer.render(room, *cam8);
-            // The session form with one frame after the last pass: read at
-            // once, the accumulator can miss the frame that holds the last
-            // pass, which for a one-pass session is all of it.
-            renderer.pathTraceBegin(q);
-            while (renderer.pathTraceSamples() < samples) renderer.render(room, *cam8);
-            renderer.pathTraceStop();
-            renderer.render(room, *cam8);
-            return renderer.pathTraceRead(img, iw, ih) && iw == kW && ih == kH;
+            return renderer.pathTrace(room, *cam8, samples, img, iw, ih, q) && iw == kW && ih == kH;
         };
         std::vector<float> ref, once, guided;
         const bool ok = trace(16, 4096, ref) && trace(128, 128, once) && trace(8, 128, guided);
@@ -752,6 +746,10 @@ int main() {
             std::printf("  floor: reference %.5f, one pass %.5f, guided %.5f; noise (MSE) one pass %.3g, guided %.3g "
                         "(%.1fx)\n", mRef, mOne, mGui, eOne, eGui, eGui > 0 ? eOne / eGui : 0.0);
             check(mRef > 0.002, "the window lights the floor");
+            // The one pass sits in the frame render() leaves open; read without
+            // finishing it, it came back as the session before (the reference,
+            // to within a 30th of its own noise).
+            check(eOne > 1e-3 * mRef * mRef, "a one-pass trace reads its own samples, not the session before it");
             check(std::abs(mOne - mRef) < 0.05 * mRef, "one pass (no guide) comes to the reference's floor");
             check(std::abs(mGui - mRef) < 0.05 * mRef, "the guided passes come to the same floor");
             check(eGui < 0.5 * eOne, "and the guide takes away more than half the noise");

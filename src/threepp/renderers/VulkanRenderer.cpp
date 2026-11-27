@@ -828,21 +828,21 @@ namespace threepp {
         }
     }
 
-    std::vector<unsigned char> VulkanRenderer::readRGBPixels() {
-        auto& impl = *core();
-        auto* ctx  = impl.ctx.get();
-        if (!ctx || ctx->swapchainImages().empty()) return {};
+    namespace {
 
         // render() only RECORDS a frame. Its submit and present run from the
-        // Canvas frame-end callback, after the animate body returns, so a
-        // readback inside that body (render(), then writeFramebuffer()) finds
-        // the frame still open, and the image acquired for it still holding
-        // what its previous use left there: the picture from three frames ago
-        // on a three-image swapchain, from two frames ago with presents
-        // suppressed, or nothing at all on a first frame. The wait below does
-        // not help, there is nothing in flight to wait for. Finish the frame
-        // first, so the pixels read are the ones just rendered. Before the
-        // extent is sampled: the present can recreate the swapchain.
+        // Canvas frame-end callback, after the animate body returns (or from
+        // the next render() where no canvas loop drives it), so a readback
+        // right after render() finds the frame still open: the image acquired
+        // for it still holds what its previous use left there (the picture
+        // from three frames ago on a three-image swapchain, from two frames
+        // ago with presents suppressed, or nothing at all on a first frame),
+        // and a path-trace pass recorded in it has not run, so the
+        // accumulator misses it (all of a one-pass session, which then read
+        // back the session before it). A device wait does not help, there is
+        // nothing in flight to wait for. Finish the frame first, so what is
+        // read is what was just rendered. Before the extent is sampled: the
+        // present can recreate the swapchain.
         //
         // The frame is then over for this canvas iteration, which is what the
         // caller's order asked for (pixels as of this point). An overlay pass
@@ -855,7 +855,9 @@ namespace threepp {
         // now would destroy the image the frame was just rendered into, and the
         // caller sizes these pixels by framebufferSize(), which has to stay the
         // old extent until then.
-        if (impl.frameState_ != Impl::FrameState::Idle) {
+        template<class Impl>
+        void finishOpenFrameForReadback(Impl& impl) {
+            if (impl.frameState_ == Impl::FrameState::Idle) return;
             impl.holdResizeForReadback_ = true;
             try {
                 impl.endFrame();
@@ -867,6 +869,15 @@ namespace threepp {
             if (impl.needsResize) impl.resizeHeldByReadback_ = true;
             impl.frameEndedByReadback_ = impl.canvas.isInsideAnimateLoop();
         }
+
+    }// namespace
+
+    std::vector<unsigned char> VulkanRenderer::readRGBPixels() {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx || ctx->swapchainImages().empty()) return {};
+
+        finishOpenFrameForReadback(impl);
 
         // No frame since the images were made (before the first render(), or
         // after a resize): they hold nothing, and are not in presentLayout().
@@ -3606,8 +3617,11 @@ namespace threepp {
         auto& impl = *core();
         auto* pt   = impl.pathTracer_.get();
         if (!pt || !pt->available() || !impl.ctx) return false;
-        // Every dispatch that wrote the accumulator is queued behind frames in
-        // flight; the read copies after all of them.
+        // The frame render() left open holds the last pass: submit it
+        // (finishOpenFrameForReadback). Every dispatch that wrote the
+        // accumulator is then queued behind frames in flight; the read copies
+        // after all of them.
+        finishOpenFrameForReadback(impl);
         vkDeviceWaitIdle(impl.ctx->device());
         uint32_t uw = 0, uh = 0;
         if (!pt->read(rgb, uw, uh)) return false;
@@ -3621,6 +3635,7 @@ namespace threepp {
         auto& impl = *core();
         auto* pt   = impl.pathTracer_.get();
         if (!pt || !pt->available() || !impl.ctx) return false;
+        finishOpenFrameForReadback(impl);// the open frame holds the last pass
         vkDeviceWaitIdle(impl.ctx->device());
         // The primary view's white balance and colour grade, as its
         // PostComposite applies them to a frame.
