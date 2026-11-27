@@ -476,7 +476,7 @@ class StripHull:
 
 # --------------------------------------------------------------------------- #
 #  The drives: the boat's own half. Propulsion and the manoeuvring terms, the
-#  helm, the actuator nodes, the foam she throws.
+#  helm, the actuator nodes. What her propulsors leave on the water is her Wash's.
 #
 #  loads() returns the vessel-frame force and the moment about the CoG from
 #  everything but buoyancy and gravity, damping included. The hydrostatics are

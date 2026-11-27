@@ -11,7 +11,7 @@ is built from a model NTNU publishes, which the generator fetches. See
 | `mariner_spec.json` | every number: brochure figures, the lines fitted to the vendor's renders and photo, the sensor tower, the waterjet, the mass budget, the materials |
 | `build_mariner_blender.py` | builds the geometry (numpy), exports `mariner.glb` through Blender, and integrates the hydrostatics into `mariner_hydro.json` |
 | `../build_common.py` | what every generator shares: the mesh accumulator and its primitives, the hydrostatic integrator, the Blender export |
-| `../rigs/usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes, foam), `Wake` (her footprint and wake on the ocean) and `Wash` (her propulsors' races, her hull's lane and her waves on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
+| `../rigs/usv_rig.py` | the boat for any scene: `StripHull` (her buoyancy tables and the rigid body), her drive (`Waterjet`, `AzimuthPods`, `FixedPods`: thrust, resistance, helm, actuator nodes), `Footprint` (the water her hull displaces) and `Wash` (her propulsors' races, her hull's lane and her waves on the water, in the ocean's wake field); see [In another scene](#in-another-scene) |
 | `usv_ocean.py` | the demo on `usv_rig.py`: she floats on the FFT ocean on her own buoyancy tables and runs on a steerable jet (`--boat otterx`: the Otter X on her pods; `--boat otter`: the Otter) |
 | `usv_radar_sonar.py` | her radar and her forward-looking sonar in Alesund harbour on the real terrain: see [Radar and sonar](#radar-and-sonar) |
 | `mariner.glb`, `mariner_hydro.json` | generated, not committed |
@@ -332,14 +332,14 @@ the hull on its ocean, and steps her after each render (`sample_height` reads th
 field):
 
 ```python
-from usv_rig import StripHull, Wake, Wash, drive_for
+from usv_rig import Footprint, StripHull, Wash, drive_for
 
 ocean.wake_field.resolution = 1024          # before the first render; .patches = one for each boat
 ocean.wake_field.ripple_resolution = 512    # and the waves she makes (0, the default: none)
 boat = tp.GLTFLoader().load("usv/otter.glb").scene
 hull = StripHull("otter", ocean)             # spec_dir=... for a boat kept elsewhere
 hull.seat(x, z, heading)
-wake = Wake(hull, ocean)                    # ocean.vessel(i) where several boats share the sea
+footprint = Footprint(hull, ocean)          # ocean.vessel(i) where several boats share the sea
 drive = drive_for(hull).bind(boat)
 wash = Wash(hull, drive, ocean, 0)          # patch 0 of the wake field is hers
 ```
@@ -371,7 +371,8 @@ are slope on the water's normal, not height: they do not move a boat, and they m
 
 Under her own power, `hull.drive = drive`: the scene writes `drive.throttle_cmd` and
 `drive.steer_cmd`, and each frame calls `drive.tick(dt)`, `hull.advance(dt, substeps)`,
-`wake.update(dt)`, `hull.place(boat)`, `drive.pose()`. That is `usv_ocean.py`.
+`footprint.update()`, `ocean.clear_wake_sources()`, `wash.update(dt)`, `hull.place(boat)`,
+`drive.pose()`. That is `usv_ocean.py`.
 
 On a route, `hull.drive` stays `None` and a soft DP holds her to `hull.set_target(...)`; the
 drive then only shows the motion: `drive.follow(u, yaw_rate, dt)` turns the nozzle or pods and
