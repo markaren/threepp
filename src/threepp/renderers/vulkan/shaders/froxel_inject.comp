@@ -1,8 +1,5 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
-#ifndef THREEPP_NO_RAY_QUERY
-#extension GL_EXT_ray_query : require
-#endif
 #extension GL_GOOGLE_include_directive : enable
 
 #include "vulkan_shared.h"// ShadePush
@@ -29,20 +26,14 @@
 // shade pass samples with one trilinear fetch per pixel. The LUT's .a channel
 // also carries the medium-extinction transmittance the surface path reads.
 //
-// Shares the DeferredShade set (bindings 0/1/8/33/48/49/50/51) + push block.
+// Shares the DeferredShade set (bindings 0/33/48/49/50/51/58/67/68) + push
+// block. It traces no rays (the sun is the per-pixel march's), so one blob
+// serves both the ray-traced and the no-ray-tracing renderer.
 
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 #include "camera_ubo.glsl"
 #include "camera_ray.glsl"// camViewPointAtDist / camRayOrigin — perspective AND ortho
-
-#include "lights_ubo.glsl"
-
-#ifndef THREEPP_NO_RAY_QUERY
-layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
-#else
-#include "ray_query_stub.glsl"
-#endif
 
 #define FOG_UBO_HEAD_ONLY
 #include "fog_ubo.glsl"
@@ -57,9 +48,6 @@ layout(set = 0, binding = 51) uniform sampler3D froxelScatterPrevTex;// prev fif
 
 // Cloud + height-fog UBO (heterogeneous near-field medium).
 #include "cloud_ubo.glsl"
-
-layout(set = 0, binding = 65) uniform sampler2D cloudShadowTex;// top-down cloud transmittance
-#include "cloud_shadow_sample.glsl"
 
 // Shared ShadePush block (vulkan_shared.h) — this pass reads only the
 // fields it names; the host zero-fills the rest.
@@ -80,8 +68,6 @@ float rnd(inout uint seed) {
     seed = pcgHash(seed);
     return float(seed) * (1.0 / 4294967296.0);
 }
-
-#include "medium_shadow_vis.glsl"// shadowVis: opaque-only binary occlusion toward a light
 
 #include "cloud_density.glsl"// heightFogDensity + mediumExtinction (hetero mode)
 

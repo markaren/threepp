@@ -1333,11 +1333,10 @@ if (THREEPP_WITH_VULKAN)
     # Clustered light culling (deferred): per-cell light index lists consumed
     # by deferred_shade's analytic direct split. See DeferredShade::recordClusterBuild.
     compile_vulkan_shader(threepp "${_vk_shaders}/cluster_build.comp" kClusterBuildCompSpv)
-    # Froxel volumetric lighting (deferred): inject (per-froxel in-scatter,
-    # RT sun shafts + clustered lights) + integrate (front-to-back LUT).
+    # Froxel volumetric lighting (deferred): inject (per-froxel in-scatter of
+    # the clustered point lights; no rays, so one blob for both modes) +
+    # integrate (front-to-back LUT).
     compile_vulkan_shader(threepp "${_vk_shaders}/froxel_inject.comp" kFroxelInjectCompSpv)
-    compile_vulkan_shader(threepp "${_vk_shaders}/froxel_inject.comp" kFroxelInjectNoRtCompSpv
-        VARIANT_SUFFIX nort DEFINES THREEPP_NO_RAY_QUERY)
     compile_vulkan_shader(threepp "${_vk_shaders}/froxel_integrate.comp" kFroxelIntegrateCompSpv)
     # Particle billboard lighting (deferred): per-particle light field (sun ×
     # RT shadow, clustered lights, probe/env ambient) + camera→particle fog leg

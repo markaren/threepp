@@ -21,7 +21,6 @@
 #include "threepp/renderers/vulkan/shaders/fog_march.comp.spv.h"
 // No-ray-query variants (ray_query_stub.glsl): every ray misses.
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.nort.spv.h"
-#include "threepp/renderers/vulkan/shaders/froxel_inject.comp.nort.spv.h"
 #include "threepp/renderers/vulkan/shaders/particle_light.comp.nort.spv.h"
 
 #include <algorithm>
@@ -361,8 +360,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &pipeLayout_),
               "vkCreatePipelineLayout(deferred)");
 
-        // The three traced stages' SPIR-V: the ray-query blobs, or their
-        // no-ray-query variants.
+        // The two traced stages' SPIR-V: the ray-query blobs, or their
+        // no-ray-query variants (froxel_inject traces nothing: one blob).
         struct Spv {
             const uint32_t* words;
             size_t count;
@@ -370,7 +369,7 @@ namespace threepp::vulkan {
         const auto spv = [](const auto& blob) { return Spv{blob, std::size(blob)}; };
         const Spv shadeSpv    = rt ? spv(kDeferredShadeCompSpv) : spv(kDeferredShadeNoRtCompSpv);
         shadeModuleRt_        = rt;
-        const Spv froxelSpv   = rt ? spv(kFroxelInjectCompSpv) : spv(kFroxelInjectNoRtCompSpv);
+        const Spv froxelSpv   = spv(kFroxelInjectCompSpv);
         const Spv particleSpv = rt ? spv(kParticleLightCompSpv) : spv(kParticleLightNoRtCompSpv);
 
         VkShaderModuleCreateInfo smci{};
