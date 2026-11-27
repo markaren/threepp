@@ -367,12 +367,5 @@ vec3 oceanShoreGainWith(uint64_t addr, vec2 xz, vec3 amp) {
     const vec3 gF = wF > 0.0 ? mix(a3, oceanShoreGainAt(dF, hs, km, a3), wF) : a3;
     return wN > 0.0 ? mix(gF, oceanShoreGainAt(dN, hs, km, a3), wN) : gF;
 }
-vec3 oceanShoreGain(uint64_t addr, vec2 xz) {
-    vec3  dP, A;
-    vec2  w;
-    float h;
-    oceanShoreBendAt(addr, xz, dP, A, w, h);
-    return oceanShoreGainWith(addr, xz, A);
-}
 
 #endif// THREEPP_OCEAN_SHORE_DEPTH_GLSL
