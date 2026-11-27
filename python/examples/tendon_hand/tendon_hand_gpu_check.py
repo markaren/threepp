@@ -276,9 +276,11 @@ def gate_a1(g, c):
               f"{'ok' if rel < 2.0 else '**'}")
     print(f"      GATE A1b, torch vs the C++ cable at the same pose: worst {worst:.2f} % "
           f"-> {'PASS' if ok else 'FAIL'}")
-    print(f"      for reference, vs the --selftest values: worst {worst_ref:.2f} % "
-          f"-> {'within 2 %' if ok_ref else 'outside 2 %, and the C++ column shows the '
-                                           'same offset, so it is the pose, not the port'}")
+    # The verdict is built outside the f-string: before Python 3.12 a string literal inside a
+    # replacement field may not span lines, and the wheels start at Python 3.10.
+    ref_note = ("within 2 %" if ok_ref else
+                "outside 2 %, and the C++ column shows the same offset, so it is the pose, not the port")
+    print(f"      for reference, vs the --selftest values: worst {worst_ref:.2f} % -> {ref_note}")
     return a1a and ok
 
 
