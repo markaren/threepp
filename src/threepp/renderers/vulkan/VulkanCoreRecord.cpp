@@ -267,9 +267,8 @@ void VulkanRenderer::Impl::recordSkinnedDeforms(VkCommandBuffer cb) {
             // ── Step 1: snapshot current vertex → prevVertex ──────────
             // Before the skinning compute overwrites vertex with frame
             // N's deformed positions, copy what's there (frame N-1's
-            // positions) into prevVertex. The chit's per-vertex motion-
-            // vector interpolation in step 1 reads prevVertex via
-            // gdesc.prevVertexAddress for the reprojection.
+            // positions) into prevVertex, which the raster G-buffer's motion
+            // vectors read (DrawInfo::prevPosAddr).
             for (auto* st : pendingSkinnedRebuilds_) {
                 if (st->blas->prevVertex.handle == VK_NULL_HANDLE) continue;
                 VkBufferCopy region{};
@@ -278,9 +277,10 @@ void VulkanRenderer::Impl::recordSkinnedDeforms(VkCommandBuffer cb) {
                                 st->blas->prevVertex.handle, 1, &region);
             }
             // Transfer write → compute storage write (for vertex, which
-            // the skinning dispatch will now overwrite) and transfer
-            // write → ray-tracing shader read (for prevVertex, which
-            // chit reads via gdesc.prevVertexAddress later this frame).
+            // the skinning dispatch will now overwrite). The ray-tracing
+            // stages in the destination served a closest-hit reader of
+            // prevVertex that no longer exists; its reader now is the raster
+            // G-buffer, which the frame graph orders.
             {
                 VkMemoryBarrier2 mb{};
                 mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;

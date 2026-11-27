@@ -5516,30 +5516,6 @@ VulkanRenderer::Impl::GeometryDesc VulkanRenderer::Impl::buildGeometryDesc(const
             gdesc.foamAddress   = rec.isOceanSurface
                                           ? (rec.oceanWakeTable ? rec.oceanWakeTable : 1ull)
                                           : 0ull;
-            // prevVertexAddress: skinned + displaced meshes have a real
-            // prev-vertex buffer (different from current). Static meshes
-            // get vertex.address as a fallback — the chit reads the same
-            // buffer for both, prevHitWorldPos ends up equal to current.
-            //
-            // A warp-enabled DisplacedMesh is the exception: its vertices
-            // reflow every frame as the adaptive grid re-centres on the
-            // vessel, so prevVertex (indexed by vertex id) doesn't track a
-            // stable world point — using it corrupts motion vectors. Fall
-            // back to the current buffer so the chit's prevWorldPos
-            // resolves to hitWorldPos: the ocean reprojects as world-
-            // static (camera-parallax only), matching the foam texture.
-            // An interop record whose producer declared unstable vertex
-            // correspondence (interopWorldStatic — marching-cubes soups)
-            // gets the same world-static fallback.
-            bool warpReproject = rec.interopWorldStatic;
-            if (en.isDisplaced) {
-                warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f &&
-                                static_cast<DisplacedMesh*>(en.mesh)->lod.slots == 0u;
-            }
-            gdesc.prevVertexAddress =
-                    (rec.prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
-                            ? rec.prevVertex.address
-                            : rec.vertex.address;
             // Per-vertex color only when the material opts in (three.js
             // semantics: vertexColors == true) AND the geometry uploaded a
             // color buffer (kGeomFlagVertexColor below).

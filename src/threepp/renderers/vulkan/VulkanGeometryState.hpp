@@ -340,8 +340,8 @@ namespace threepp::vulkan::impl {
         // and per-vertex motion is noise, so the motion-vector consumers are
         // pointed at the current buffer instead and the geometry reprojects
         // as world-static — the same treatment (and rationale) as the ocean's
-        // adaptive warp; see the prevVertexAddress / prevPosAddr selection
-        // sites. The per-frame vertex→prevVertex snapshot is skipped as dead
+        // adaptive warp; see the DrawInfo::prevPosAddr selection in the draw
+        // build. The per-frame vertex→prevVertex snapshot is skipped as dead
         // work.
         bool interopWorldStatic = false;
         // W4: run the GPU sanitize dispatch over posExt before the copy into
@@ -828,24 +828,17 @@ namespace threepp::vulkan::impl {
         bool downwashBent = false;
     };
 
-    // Per-instance descriptor tables the closest-hit shader indexes by
-    // gl_InstanceCustomIndexEXT. Layout matches the matching shader
-    // structs in closest_hit.rchit.
+    // One record per BLAS entry: a ray hit indexes it by
+    // gl_InstanceCustomIndexEXT, the raster passes by the draw's instance.
+    // Layout matches GeometryDesc in shaders/geometry_desc.glsl (scalar), and
+    // the word offsets in shaders/vulkan_shared.h (kGeomDesc*), which
+    // VulkanCoreImpl.hpp pins to this struct.
     struct GeometryDesc {
         VkDeviceAddress vertexAddress;// positions, used for per-pixel tangent derivation
         VkDeviceAddress normalAddress;
         VkDeviceAddress indexAddress;
         VkDeviceAddress uvAddress;// 0 == no UV attribute
         VkDeviceAddress foamAddress;// 0 == no foam attribute (per-vertex float, written by water_displace.comp)
-        // Previous-frame deformed vertex positions. For SkinnedMesh (or any
-        // mesh that re-deforms per frame): a separate buffer holding the
-        // previous frame's vertex data. The deferred shade's ray-query hit
-        // handling interpolates these to give a per-vertex "previous world
-        // position" so reprojection tracks the same surface point across
-        // deformation. For static / rigid-only meshes: set equal to
-        // vertexAddress, in which case the hit handling reads the same
-        // data twice (no harm; equals current pos).
-        VkDeviceAddress prevVertexAddress;
         // The entry's InstancedMesh::instanceColor, (1,1,1) for a plain mesh
         // or an instanced one that never set a colour. Every shader reads an
         // entry's material through entryMat, which multiplies the record's

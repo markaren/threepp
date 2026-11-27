@@ -13,7 +13,6 @@ struct GeometryDesc {
     uint64_t indexAddress;
     uint64_t uvAddress;
     uint64_t foamAddress;
-    uint64_t prevVertexAddress;
     vec3     instanceColor;// the entry's InstancedMesh colour, (1,1,1) without one: multiplies its
                            // material's albedo (entryMat), which the table record leaves bare
     uint     flags;// the kGeomFlag* bits of vulkan_shared.h, which the shaders that read this word include;

@@ -931,11 +931,12 @@ namespace threepp {
             di.nrmAddr     = rec->normal.address;
             di.uvAddr      = (rec->uv.handle != VK_NULL_HANDLE) ? rec->uv.address : 0ull;
             di.uv2Addr     = (rec->uv2.handle != VK_NULL_HANDLE) ? rec->uv2.address : 0ull;
-            // Warp-enabled DisplacedMesh: vertices reflow every frame, so
-            // prevVertex can't track a stable world point — point the
-            // motion-vector source at the current buffer so the ocean
-            // reprojects as world-static (see prevVertexAddress in the
-            // GeometryDesc build for the full rationale). An interop record
+            // Warp-enabled DisplacedMesh: vertices reflow every frame as the
+            // adaptive grid re-centres on the vessel, so prevVertex (indexed
+            // by vertex id) can't track a stable world point and would corrupt
+            // the motion vectors — point the motion-vector source at the
+            // current buffer so the ocean reprojects as world-static (camera
+            // parallax only, matching the foam texture). An interop record
             // whose producer declared unstable vertex correspondence
             // (interopWorldStatic — marching-cubes soups) is the same case.
             bool warpReproject = rec->interopWorldStatic;

@@ -201,9 +201,9 @@
 // shadow_depth.frag, event_shade.comp, the deferred filters) and so declare
 // the buffer as a plain uint array rather than pull in the 64-bit addresses.
 // VulkanCoreImpl.hpp pins these numbers to the host struct.
-#define kGeomDescWords         18u// sizeof(GeometryDesc) / 4
-#define kGeomDescColorWord     12u// offsetof(GeometryDesc, instanceColor) / 4, three floats
-#define kGeomDescFlagsWord     15u// offsetof(GeometryDesc, flags) / 4
+#define kGeomDescWords         16u// sizeof(GeometryDesc) / 4
+#define kGeomDescColorWord     10u// offsetof(GeometryDesc, instanceColor) / 4, three floats
+#define kGeomDescFlagsWord     13u// offsetof(GeometryDesc, flags) / 4
 
 #ifdef __cplusplus
 // Disjoint names sum to their union; a shared bit makes the sum larger.

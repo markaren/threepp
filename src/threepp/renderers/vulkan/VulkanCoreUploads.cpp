@@ -683,8 +683,7 @@ namespace threepp {
         ++glowOnlyVersion_;// the emitter list is rebuilt on the next frame
         // The scene build stamps kGeomFlagGlowOnly from the set, but the
         // entries-indexed GeometryDesc mirror is only rewritten on a structural
-        // rebuild, so republish the bit in place for an object already drawn
-        // (the way setStableCorrespondence republishes prevVertexAddress).
+        // rebuild, so republish the bit in place for an object already drawn.
         // Matched by the span's meshId, never through the entry's Mesh*: this
         // runs between frames, when the entries may name a mesh that has been
         // freed since (see lastVisibleEntries_).

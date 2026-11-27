@@ -945,16 +945,16 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
                 blasBuild.dstAccelerationStructure = rec->as;
                 blasBuild.scratchData.deviceAddress = scratch.address;
 
-                // Per-vertex previous-pose buffer for the chit's per-vertex motion
-                // vector path. Skinned / displaced / morphed meshes own their own
-                // prev buffer in their state struct; plain meshes that go through
-                // refreshGeomBlasBatch (PhysX soft bodies, ParticleSystems updating
-                // vertices in place) need one here too — without it, the chit reads
-                // gdesc.prevVertexAddress == vertexAddress, motion is zero, and
-                // freshly-spawned dynamic bodies look noisy because the temporal
-                // accumulator blends mismatched history. Static meshes get a free
-                // copy (prev == current forever) — chit motion vector resolves to
-                // zero, matching the previous fallback behavior.
+                // Per-vertex previous-pose buffer, the raster motion vectors'
+                // source (DrawInfo::prevPosAddr). Skinned / displaced / morphed
+                // meshes own their own prev buffer in their state struct; plain
+                // meshes that go through refreshGeomBlasBatch (PhysX soft bodies,
+                // ParticleSystems updating vertices in place) need one here too —
+                // without it the draw reads the current positions twice, motion
+                // is zero, and freshly-spawned dynamic bodies look noisy because
+                // the temporal accumulator blends mismatched history. Static
+                // meshes get a free copy (prev == current forever), so their
+                // motion resolves to zero.
                 rec->prevVertex = createBuffer(
                         ctx->allocator(), ctx->device(), vbBytes,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
@@ -2129,13 +2129,6 @@ VulkanRenderer::Impl::enableVertexInterop(const Mesh& mesh, std::function<void()
                     gd.foamAddress   = recPtr->isOceanSurface
                                                ? (recPtr->oceanWakeTable ? recPtr->oceanWakeTable : 1ull)
                                                : 0ull;
-                    // interopWorldStatic is not set on the fresh record yet;
-                    // the caller's flag is what it is about to become.
-                    gd.prevVertexAddress =
-                            (recPtr->prevVertex.handle != VK_NULL_HANDLE &&
-                             stableCorrespondence)
-                                    ? recPtr->prevVertex.address
-                                    : recPtr->vertex.address;
                     // The slot keeps the vertex-colour decision the structural
                     // rebuild made from the material (a colour buffer exists for
                     // the same geometry packed or not), so the material is not
@@ -2338,23 +2331,8 @@ void VulkanRenderer::Impl::setStableCorrespondence(const Mesh& mesh, bool stable
             if (rec.interopWorldStatic == !stable) return;
             rec.interopWorldStatic = !stable;
             // The raster DrawInfo re-reads the flag from the record whenever the
-            // draw inputs are rebuilt; the RT side reads the entries-indexed
-            // GeometryDesc mirror, which is only rewritten on a structural
-            // rebuild -- so republish prevVertexAddress in place, the same way
-            // enableVertexInterop's unpacked swap does. By lodGeomKey, not
-            // through the entry's Mesh*, which may be freed by now (see
-            // lastVisibleEntries_); a dead mesh's slot that matches is rewritten
-            // harmlessly, the next frame is a structural rebuild without it.
-            for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
-                const MeshEntry& en = lastVisibleEntries_[i];
-                if (en.isOverlay || en.lodGeomKey != geomSp.get()) continue;
-                if (i >= geomDescsCached_.size()) continue;
-                geomDescsCached_[i].prevVertexAddress =
-                        (rec.prevVertex.handle != VK_NULL_HANDLE && stable)
-                                ? rec.prevVertex.address
-                                : rec.vertex.address;
-                markGeomDescsDirty(static_cast<uint32_t>(i));
-            }
+            // draw inputs are rebuilt (DrawInfo::prevPosAddr, the motion vectors'
+            // source).
             ++drawInputsVersion_;
             ++drawFactsEpoch_;
         }
@@ -3808,7 +3786,7 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
             // world point each frame and prevVertex (indexed by vertex id)
             // can't track a stable surface point. The motion-vector consumers
             // are pointed at the current vertex buffer instead (see the
-            // prevVertexAddress / prevPosAddr selection sites), making the
+            // DrawInfo::prevPosAddr selection in the draw build), making the
             // ocean reproject as world-static — so the copy is dead work and
             // skipping it also saves a full vertex-buffer transfer per frame.
             // The patch mesh keeps each vertex on its world point (save in the
@@ -5162,14 +5140,10 @@ VulkanRenderer::Impl::SkinnedMeshState* VulkanRenderer::Impl::ensureSkinnedBlas(
             if (!rec) return nullptr;
             rec->liveCheck = sm.geometry();
 
-            // Per-vertex previous-pose buffer. Used for two purposes:
-            // (1) Hybrid raster motion-vector source (existing).
-            // (2) Per-vertex prev-world-position reproject (2026-05-13):
-            //     the deferred shade's ray-query hit handling reads via
-            //     gdesc.prevVertexAddress, interpolates, and derives the
-            //     hit's prevWorldPos, which feeds the motionMat reproject.
-            //     The per-frame vkCmdCopyBuffer pushes current→prev before
-            //     the skinning compute writes new positions.
+            // Per-vertex previous-pose buffer: the raster motion vectors'
+            // source (DrawInfo::prevPosAddr). The per-frame vkCmdCopyBuffer
+            // pushes current→prev before the skinning compute writes new
+            // positions.
             // buildBlasFor already allocated + seeded rec->prevVertex with
             // exactly the size/usage this path needs — re-creating it here
             // orphaned that buffer (VUID 05137 leak at device destroy).
