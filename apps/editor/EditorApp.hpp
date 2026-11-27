@@ -28,6 +28,7 @@
 #include "threepp/extras/editor/EditorSettings.hpp"
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/PlaySession.hpp"
+#include "threepp/extras/editor/PlaySessions.hpp"
 #include "threepp/extras/editor/RenderConfig.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/extras/editor/Selection.hpp"
@@ -87,35 +88,11 @@ namespace threepp {
 
 namespace threepp::editor {
 
-    // Held by the app so the collider overlay can reach its PhysX world.
-    // Forward-declared: PhysicsPlaySession pulls in the whole PhysX SDK, and
-    // every panel includes this header.
-    class PhysicsPlaySession;
-    // Forward-declared for the same reason (it includes PhysicsPlaySession).
-    class ConveyorPlaySession;
-    // The play-mode particle fields. PhysX-free, but it includes the
-    // renderer-facing particle type and the Vulkan renderer — neither of which
-    // a panel has any business recompiling against.
-    class ParticleFieldPlaySession;
-    // The play-mode grain piles. Forward-declared for both reasons at once: it
-    // includes PhysicsPlaySession (the whole PhysX SDK) and the particle types.
-    class GranularPlaySession;
-    // The play-mode character controllers. Forward-declared for the first
-    // reason (it includes PhysicsPlaySession, hence the whole PhysX SDK).
-    class CharacterPlaySession;
-    // PhysX-free (the PhysX half is PhysxSensorPlaySession, constructed in
-    // EditorApp.cpp), but still heavy — it pulls in the depth/lidar sensors and
-    // the renderer, which the panels have no business recompiling against.
-    class SensorPlaySession;
-    // Baked scan surfaces during Play. Forward-declared for both reasons at
-    // once (PhysX SDK + the Vulkan renderer), and the memo beside it because it
-    // carries SplatCloud and the bake.
-    class SplatSurfacePlaySession;
+    // The splat-surface bake memo. Forward-declared because it carries
+    // SplatCloud and the bake, which no panel needs to compile against. The
+    // play sessions are forward-declared in PlaySessions.hpp for the same kind
+    // of reason (the PhysX SDK, the Vulkan renderer, the sensors).
     class SplatSurfaceCache;
-    // Sounds during Play. Only exists in a THREEPP_WITH_AUDIO build — that
-    // macro is PUBLIC on the threepp target, so every TU that includes this
-    // header agrees on whether the member below is there.
-    class AudioPlaySession;
 
     class EditorApp {
 
@@ -693,10 +670,6 @@ namespace threepp::editor {
         // --- viewport markers ----------------------------------------------
         // Billboarded SVG icons standing in for objects that draw nothing
         // (cameras, lights), plus the frustum helper for a selected camera.
-        // Re-drives loaded Robots from their saved joint values, and revives the
-        // frozen placeholders a pre-articulation-block document leaves behind.
-        // See RobotConfig.
-        void rearticulateRobots(Scene& scene);
         // Drives one joint and records the new pose in userData, so the scene
         // carries the pose it is showing.
         void setJointValue(Robot& robot, std::size_t index, float radians);
@@ -1190,6 +1163,10 @@ namespace threepp::editor {
         Selection selection_;
         CommandStack commands_;
         PlayController play_;
+        // Every play session, built by buildPlaySessions() (PlayRuntime.hpp),
+        // the definition threepp_player shares. The handles are what the status
+        // readouts, the overlays, the inspector and the self-test read.
+        PlaySessions sessions_;
         EditorSettings settings_;
         std::filesystem::path settingsPath_;
 
@@ -1355,41 +1332,10 @@ namespace threepp::editor {
         };
         ConveyorRadiusDrag radiusDrag_;
 
-        // Physics collider overlay. The line buffer PhysX hands out changes
-        // size every frame, so the attribute is rewritten in place and only
-        // replaced when it is outgrown — same contract as the spline curves
-        // above, for the same reason (the renderer caches GPU buffers by
-        // attribute identity). Null whenever the view is off, play is stopped,
-        // or the scene was replaced under it.
-        std::shared_ptr<PhysicsPlaySession> physics_;
-        // Belts in the world physics_ builds + the visual motion on the derived
-        // meshes. Registered right after physics (start order), which also puts
-        // its stop BEFORE physics' — the world is still alive to unregister from.
-        std::shared_ptr<ConveyorPlaySession> conveyorSession_;
-        // The fields an authored particle node runs during Play — the previews
-        // above are parked while it does. Kept as a member for the selftest and
-        // the status readout, like the sessions beside it; registered in every
-        // build, since a field wants a renderer rather than a world.
-        std::shared_ptr<ParticleFieldPlaySession> particleSession_;
-        // The PBD grains an authored chute pours during Play, in the world
-        // physics_ built. Registered right after the fields above and inside
-        // the PhysX guard, so its stop comes before physics' — the world is
-        // still alive to release the particle actor into.
-        std::shared_ptr<GranularPlaySession> granularSession_;
-        // The capsule controllers an authored character walks on during Play,
-        // in the world physics_ built. Registered inside the PhysX guard after
-        // the grains, so its stop comes first and the controller manager is
-        // released while its scene is still alive.
-        std::shared_ptr<CharacterPlaySession> characterSession_;
-        // Scanned surfaces made solid and sensable during Play. Registered
-        // inside the PhysX guard right after the grains, for the same reason:
-        // its colliders are cooked into the world physics_ built, and stopping
-        // in reverse order tears them down first.
-        std::shared_ptr<SplatSurfacePlaySession> splatSurfaceSession_;
-        // The bake memo, shared between that session and the inspector's "Bake
-        // now" — which is why it is the APP's and not the session's (see
-        // SplatSurfaceCache.hpp). shared_ptr so this header can leave the type
-        // incomplete.
+        // The splat-surface bake memo, shared between the play session and the
+        // inspector's "Bake now" — which is why it is the APP's and not the
+        // session's (see SplatSurfaceCache.hpp). shared_ptr so this header can
+        // leave the type incomplete.
         std::shared_ptr<SplatSurfaceCache> splatSurfaces_;
         // The last bake's stats line and the node it was for, so the inspector
         // can show what it produced without re-reading a mesh it does not own.
@@ -1408,6 +1354,12 @@ namespace threepp::editor {
             std::size_t triangles = 0;// what the memo held when it was built
         };
         std::unordered_map<std::string, SplatSurfacePreview> splatSurfacePreviews_;
+        // Physics collider overlay. The line buffer PhysX hands out changes
+        // size every frame, so the attribute is rewritten in place and only
+        // replaced when it is outgrown — same contract as the spline curves
+        // above, for the same reason (the renderer caches GPU buffers by
+        // attribute identity). Null whenever the view is off, play is stopped,
+        // or the scene was replaced under it.
         std::shared_ptr<LineSegments> physicsDebugLines_;
         int physicsDebugCapacity_ = 0;
         bool physicsDebug_ = false;
@@ -1453,26 +1405,18 @@ namespace threepp::editor {
         int debugDrawCapacity_ = 0;
         bool debugDrawWarned_ = false;
 
-        // Sensors authored on scene objects. The session is kept as a member for
-        // the same reason physics_ is: the readout and the point-cloud overlay
-        // both read what it built.
-        //
-        // sensorRig_ is where the vision sensors' nodes are parented. It is
-        // editor-only (so they are never saved, picked or given a marker) and
-        // deliberately NOT a child of overlay_, because the overlay is hidden for
-        // the duration of every scan — a depth camera aimed at the viewport grid
-        // otherwise measures the grid. The point cloud, being furniture, IS under
-        // the overlay and so is correctly invisible to the sensors.
-        std::shared_ptr<SensorPlaySession> sensors_;
+        // Where the vision sensors' nodes are parented. It is editor-only (so
+        // they are never saved, picked or given a marker) and deliberately NOT
+        // a child of overlay_, because the overlay is hidden for the duration
+        // of every scan — a depth camera aimed at the viewport grid otherwise
+        // measures the grid. The point cloud, being furniture, IS under the
+        // overlay and so is correctly invisible to the sensors.
         std::shared_ptr<Group> sensorRig_;
         std::shared_ptr<Points> sensorCloud_;
         int sensorCloudCapacity_ = 0;
         bool sensorCloudVisible_ = true;
 
 #ifdef THREEPP_WITH_AUDIO
-        // Sounds authored on scene objects, played back during Play. Kept as a
-        // member for the status readout and the selftest, like physics_.
-        std::shared_ptr<AudioPlaySession> audio_;
         // The audition's own engine, opened on the first audition and kept for
         // the rest of the session (opening a device costs tens of ms). DECLARED
         // BEFORE the sound so it is DESTROYED AFTER it — an ma_sound must not
@@ -1735,10 +1679,6 @@ namespace threepp::editor {
         ExternalEditState externalEdit_;
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-        // Registered with the play controller; also the inspector's source for
-        // "what went wrong in this script last session".
-        std::shared_ptr<ScriptPlaySession> scripts_;
-
         // Discovering a script's fields means importing the file, which the
         // inspector cannot do sixty times a second. Cached per path and
         // invalidated by the file's write time, so saving the .py in an editor

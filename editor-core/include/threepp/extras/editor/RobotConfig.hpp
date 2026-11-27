@@ -118,10 +118,27 @@ namespace threepp::editor {
     // says so, because a robot that cannot be driven is worse than one that lost
     // its annotations. `logger`, when set, also receives each warning.
     //
-    // This is the headless core of EditorApp::rearticulateRobots, factored out so
-    // it can be tested without the app; the app calls it inside its traversal.
+    // rearticulateRobots() below calls this for each placeholder it finds; it is
+    // a function of its own so it can be tested without a file.
     std::shared_ptr<Robot> transplantRobot(Object3D& placeholder, const std::shared_ptr<Robot>& donor,
                                            const std::function<void(const std::string&)>& logger = {});
+
+    // What opening a document does to the robots in it, in the editor and in
+    // threepp_player alike, before anything else resolves nodes against the
+    // graph:
+    //
+    //   - a live Robot (ObjectLoader re-imported it from the "threeppRobot"
+    //     block) is re-driven from its saved joint values and collider flag;
+    //   - a node that carries a RobotConfig but is not a Robot (a document
+    //     written before the articulation block, or a node that names nothing
+    //     but a URDF, as a script-written document does) has the referenced
+    //     URDF re-imported with its saved xacro arguments and its joint table
+    //     moved onto it by transplantRobot().
+    //
+    // A URDF that cannot be loaded leaves the node as it is, so the scene still
+    // renders as saved, and is reported as a warning in editor.robot. `logger`,
+    // when set, also receives each warning.
+    void rearticulateRobots(Object3D& root, const std::function<void(const std::string&)>& logger = {});
 
 }// namespace threepp::editor
 

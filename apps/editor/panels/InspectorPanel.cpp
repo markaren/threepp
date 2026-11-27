@@ -2894,8 +2894,8 @@ void EditorApp::drawScriptSection(Object3D& object) {
 
     // --- what went wrong last time ------------------------------------------
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-    if (scripts_) {
-        const auto error = scripts_->errorFor(object.uuid);
+    if (sessions_.scripts) {
+        const auto error = sessions_.scripts->errorFor(object.uuid);
         if (!error.empty()) {
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, theme::danger());

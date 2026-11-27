@@ -68,7 +68,7 @@ namespace {
 void EditorApp::syncSensorOverlay() {
 
     // entries() is empty between plays: the session drops them in stop().
-    const bool wanted = sensorCloudVisible_ && sensors_ && sensors_->sensorCount() > 0;
+    const bool wanted = sensorCloudVisible_ && sessions_.sensors && sessions_.sensors->sensorCount() > 0;
     if (!wanted) {
         clearSensorOverlay();
         return;
@@ -78,7 +78,7 @@ void EditorApp::syncSensorOverlay() {
     // sensor, and a frame where nothing scanned keeps the last cloud (the same
     // choice the collider overlay makes, for the same "do not blink" reason).
     int points = 0;
-    for (const auto& entry : sensors_->entries()) {
+    for (const auto& entry : sessions_.sensors->entries()) {
         points += static_cast<int>(entry->pointCount());
     }
     if (points == 0) {
@@ -130,7 +130,7 @@ void EditorApp::syncSensorOverlay() {
 
     Color tint;
     int written = 0;
-    for (const auto& entry : sensors_->entries()) {
+    for (const auto& entry : sessions_.sensors->entries()) {
 
         // Range is normalised per sensor: a 5 m depth camera and a 100 m LIDAR
         // in one scene would otherwise put the whole depth cloud in one hue.

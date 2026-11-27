@@ -1,26 +1,10 @@
 
 #include "PlayerCore.hpp"
 
-#include "threepp/extras/editor/AnimationPlaySession.hpp"
 #include "threepp/extras/editor/EditorLog.hpp"
-#include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
-#include "threepp/extras/editor/SensorPlaySession.hpp"
-
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-#include "threepp/extras/editor/CharacterPlaySession.hpp"
-#include "threepp/extras/editor/ConveyorPlaySession.hpp"
-#include "threepp/extras/editor/GranularPlaySession.hpp"
-#include "threepp/extras/editor/PhysicsPlaySession.hpp"
-#include "threepp/extras/editor/PhysxSensorPlaySession.hpp"
-#endif
-
-#ifdef THREEPP_WITH_AUDIO
-#include "threepp/extras/editor/AudioPlaySession.hpp"
-#endif
-
-#ifdef THREEPP_EDITOR_WITH_PYTHON
-#include "Scripting.hpp"
-#endif
+#include "threepp/extras/editor/PlayRuntime.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
+#include "threepp/extras/editor/SplatSurfaceCache.hpp"
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -65,104 +49,28 @@ PlayerCore::PlayerCore() {
     sensorRig_->name = "__player_sensor_rig";
     document_.addEditorOnly(*sensorRig_);
 
-    // --- the editor's registration order, and nothing else -------------------
-    // Update order is registration order; stop order is its reverse. See the
-    // header, and EditorApp's constructor, which this mirrors line for line.
+    splatSurfaces_ = std::make_shared<editor::SplatSurfaceCache>();
 
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-    physics_ = std::make_shared<editor::PhysicsPlaySession>();
-    physics_->setLogger([this](const std::string& message) { forward(message); });
-    play_.addSession(physics_);
-    // Right after physics, as in the editor: its start() borrows the world
-    // physics just built, and the reverse stop order tears the belts down while
-    // that world is still alive. Without this session an authored conveyor is
-    // inert scenery here — the visuals sit still and nothing resting on a belt
-    // is carried — so a document that works under Play stops working in CI.
-    conveyor_ = std::make_shared<editor::ConveyorPlaySession>();
-    conveyor_->setPhysics(physics_.get());
-    play_.addSession(conveyor_);
-#endif
-
-    // Right after the conveyor and outside its guard, exactly as in the editor:
-    // an authored particle field needs a renderer rather than a physics world,
-    // so it plays in every build. On a backend that cannot draw it — which is
-    // every headless run — the session says so once and still COUNTS the nodes,
-    // because a document that has a field and reports none is the regression.
-    particles_ = std::make_shared<editor::ParticleFieldPlaySession>();
-    particles_->setLogger([this](const std::string& message) { forward(message); });
-    particles_->setViewpoint([this] {
+    // The editor's sessions, in the editor's order (PlayRuntime.hpp). No
+    // renderer yet: setRenderer() supplies one for a windowed run, and a
+    // headless run keeps none. That is a supported state for every session —
+    // a particle field says once that it cannot be drawn and still counts its
+    // node, the granular visual resolves to the InstancedMesh, a scan whose
+    // config takes the point route still bakes, and the vision sensors are
+    // built and never scanned. A headless run also leaves the listener at the
+    // origin, but the audio session still LOADS every authored file, so a
+    // sound whose file moved is logged on the run that broke it.
+    editor::PlayWiring wiring;
+    wiring.viewpoint = [this] {
         Vector3 position;
         if (viewpointHost_) viewpointHost_->getWorldPosition(position);
         return position;
-    });
-    play_.addSession(particles_);
-
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-    // Right after the fields and back inside the PhysX guard, as in the editor:
-    // grains are a PBD simulation in the world physics built, borrowed the same
-    // way the belts are, and emitted between its steps. No renderer is set here
-    // — a headless run has none — which resolves the authored "auto" visual to
-    // the InstancedMesh, the one that does not need Vulkan.
-    granular_ = std::make_shared<editor::GranularPlaySession>();
-    granular_->setPhysics(physics_.get());
-    granular_->setLogger([this](const std::string& message) { forward(message); });
-    play_.addSession(granular_);
-
-    // Characters, borrowing the same world for the same reason. The player has
-    // no teleop of its own (nor does it drive vehicles), so an authored
-    // character stands its ground and plays its idle — but it is SIMULATED: it
-    // has its capsule, it is animated, and a script can drive it. Without this
-    // it would be a bind-pose statue, since the animation session below defers
-    // to it.
-    character_ = std::make_shared<editor::CharacterPlaySession>();
-    character_->setPhysics(physics_.get());
-    character_->setLogger([this](const std::string& message) { forward(message); });
-    play_.addSession(character_);
-#endif
-
-    {
-        auto animations = std::make_shared<editor::AnimationPlaySession>();
-        animations->setSkipCharacters(character_ != nullptr);
-        play_.addSession(animations);
-    }
-
-#ifdef THREEPP_WITH_AUDIO
-    // Authored sound. A headless run leaves the listener host null, so the
-    // listener sits at the origin — but the session still LOADS every authored
-    // file, which is the part worth having in CI: a sound whose file moved is
-    // logged on the run that broke it rather than the next time somebody
-    // listens. A machine with no audio device at all is handled inside the
-    // session — it logs once and becomes a no-op, never fatal.
-    audio_ = std::make_shared<editor::AudioPlaySession>();
-    audio_->setLogger([this](const std::string& message) { forward(message); });
-    play_.addSession(audio_);
-#endif
-
-    // After physics (whose world the pushed sensors register with) and after the
-    // animation player, so a scan sees the pose the frame ended on.
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-    {
-        auto sensors = std::make_shared<editor::PhysxSensorPlaySession>();
-        sensors->setPhysics(physics_.get());
-        sensors_ = std::move(sensors);
-    }
-#else
-    // The base session runs the VISION sensors, which need a renderer rather
-    // than a physics world. The body and joint sensors author and say which
-    // build they are waiting for.
-    sensors_ = std::make_shared<editor::SensorPlaySession>();
-#endif
-    sensors_->setRig(sensorRig_.get());
-    sensors_->setHiddenDuringScan(overlay_.get());
-    sensors_->setLogger([this](const std::string& message) { forward(message); });
-    play_.addSession(sensors_);
-
-#ifdef THREEPP_EDITOR_WITH_PYTHON
-    // Last, so a script's transform edits are the final word for the frame.
-    scripts_ = std::make_shared<editor::ScriptPlaySession>();
-    scripts_->setLogger([this](const std::string& message) { forward(message); });
-    play_.addSession(scripts_);
-#endif
+    };
+    wiring.splatSurfaceCache = splatSurfaces_.get();
+    wiring.sensorRig = sensorRig_.get();
+    wiring.hiddenDuringScan = overlay_.get();
+    wiring.logger = [this](const std::string& message) { forward(message); };
+    editor::buildPlaySessions(play_, document_, wiring, sessions_);
 }
 
 PlayerCore::~PlayerCore() {
@@ -176,14 +84,7 @@ PlayerCore::~PlayerCore() {
     // and leave the session's destructor unlinking from freed memory. Drop the
     // sessions here, while everything they point into is still alive. (The
     // editor's destructor does exactly this, for exactly this reason.)
-    play_.clearSessions();
-    scripts_.reset();
-    sensors_.reset();
-    audio_.reset();
-    granular_.reset();
-    particles_.reset();
-    conveyor_.reset();
-    physics_.reset();
+    sessions_.release(play_);
 
     if (sensorRig_) {
         sensorRig_->clear();
@@ -202,16 +103,12 @@ void PlayerCore::setLogger(std::function<void(const std::string&)> logger) {
 
 void PlayerCore::setRenderer(Renderer* renderer) {
 
-    if (sensors_) sensors_->setRenderer(renderer);
     // The particle session only ever asks the renderer WHICH BACKEND it is:
     // ParticleField draws on Vulkan and nowhere else, so a headless run (null)
-    // and a GL run both take the skip-visuals path.
-    if (particles_) particles_->setRenderer(renderer);
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-    // Same question, different answer: the granular session has an InstancedMesh
-    // to fall back on, so what the backend picks is which visual, not whether.
-    if (granular_) granular_->setRenderer(renderer);
-#endif
+    // and a GL run both take the skip-visuals path. The granular session asks
+    // the same question with a different answer: it has an InstancedMesh to
+    // fall back on, so the backend picks which visual, not whether.
+    editor::setPlayRenderer(sessions_, renderer);
 }
 
 void PlayerCore::setViewpointHost(Object3D* host) {
@@ -222,7 +119,7 @@ void PlayerCore::setViewpointHost(Object3D* host) {
 void PlayerCore::setAudioListenerHost(Object3D* host) {
 
 #ifdef THREEPP_WITH_AUDIO
-    if (audio_) audio_->setListenerHost(host);
+    if (sessions_.audio) sessions_.audio->setListenerHost(host);
 #else
     (void) host;
 #endif
@@ -249,6 +146,7 @@ bool PlayerCore::open(const std::filesystem::path& path, std::string* error) {
 
     if (!document_.open(path, error)) return false;
     for (const auto& warning : document_.warnings()) logWarn(warning);
+    reviveRobots();
     return true;
 }
 
@@ -256,7 +154,17 @@ bool PlayerCore::openJson(const std::string& json, std::string* error) {
 
     if (!document_.openJson(json, error)) return false;
     for (const auto& warning : document_.warnings()) logWarn(warning);
+    reviveRobots();
     return true;
+}
+
+void PlayerCore::reviveRobots() {
+
+    // What the editor does to every document it opens, before anything reads
+    // the graph: a robot saved before the articulation block, or a node that
+    // names nothing but a URDF, is re-imported from the file and jointed. On
+    // the AUTHORED scene, so every episode's play copy carries the live robot.
+    editor::rearticulateRobots(document_.scene(), [this](const std::string& message) { forward(message); });
 }
 
 bool PlayerCore::playing() const {
@@ -285,11 +193,11 @@ bool PlayerCore::beginEpisode(int index, std::string* error) {
     // independent), so a second episode recording into the same directory would
     // silently overwrite the first one's rows and a --episodes=100 run would
     // leave exactly one episode's data behind.
-    if (sensors_ && recording_) {
+    if (sessions_.sensors && recording_) {
         auto directory = recordRoot_;
         if (recordPerEpisode_) directory /= ("episode_" + episodeTag(index));
-        sensors_->setRecordDirectory(directory);
-        sensors_->setRecording(true);
+        sessions_.sensors->setRecordDirectory(directory);
+        sessions_.sensors->setRecording(true);
     }
 
 #ifdef THREEPP_WITH_AUDIO
@@ -297,8 +205,8 @@ bool PlayerCore::beginEpisode(int index, std::string* error) {
     // than once, for the same reason the editor sets it per play: the anchor is
     // the document's directory, and open() can be pointed somewhere else
     // between runs of the same PlayerCore.
-    if (audio_) {
-        audio_->setResourcePath(document_.path().empty()
+    if (sessions_.audio) {
+        sessions_.audio->setResourcePath(document_.path().empty()
                                         ? std::filesystem::path{}
                                         : document_.path().parent_path());
     }
@@ -315,15 +223,15 @@ bool PlayerCore::beginEpisode(int index, std::string* error) {
     current_.started = true;
 
     // Read while the sessions are up: stop() drops the entries these count.
-    if (sensors_) current_.sensorCount = sensors_->sensorCount();
-    if (particles_) current_.particleFieldCount = particles_->fieldNodeCount();
+    if (sessions_.sensors) current_.sensorCount = sessions_.sensors->sensorCount();
+    if (sessions_.particles) current_.particleFieldCount = sessions_.particles->fieldNodeCount();
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    if (physics_) current_.bodyCount = physics_->bodyCount();
-    if (conveyor_) current_.conveyorCount = conveyor_->conveyorCount();
-    if (granular_) current_.granularCount = granular_->granularNodeCount();
+    if (sessions_.physics) current_.bodyCount = sessions_.physics->bodyCount();
+    if (sessions_.conveyor) current_.conveyorCount = sessions_.conveyor->conveyorCount();
+    if (sessions_.granular) current_.granularCount = sessions_.granular->granularNodeCount();
 #endif
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-    if (scripts_) current_.scriptInstances = scripts_->instanceCount();
+    if (sessions_.scripts) current_.scriptInstances = sessions_.scripts->instanceCount();
     // ScriptPlaySession::start() switched the list on; anything left in it from
     // the previous episode is not this one's.
     editor::scripting::debugDraw().clear();
@@ -347,8 +255,8 @@ void PlayerCore::step(float dt) {
     // world to ask. The world is fresh per episode, so no baseline subtraction.
     bool simulated = false;
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    if (physics_ && physics_->world()) {
-        current_.seconds = static_cast<float>(physics_->world()->simTime());
+    if (sessions_.physics && sessions_.physics->world()) {
+        current_.seconds = static_cast<float>(sessions_.physics->world()->simTime());
         simulated = true;
     }
 #endif
@@ -374,7 +282,7 @@ EpisodeResult PlayerCore::endEpisode() {
 
     // Before the sessions go: this counts rows on entries stop() is about to
     // destroy.
-    if (sensors_) current_.sensorRows = sensors_->recordedRows();
+    if (sessions_.sensors) current_.sensorRows = sessions_.sensors->recordedRows();
 
     play_.stop(document_);
     // The geometry audit: a shared mesh a session or a script wrote in place.
@@ -384,7 +292,7 @@ EpisodeResult PlayerCore::endEpisode() {
     // can raise, so reading before it would miss the last error of the episode;
     // and the next start() clears the map, so reading later would report zero.
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-    if (scripts_) current_.scriptErrors = scripts_->errorCount();
+    if (sessions_.scripts) current_.scriptErrors = sessions_.scripts->errorCount();
     // The session switched the list off with its stop(); drop whatever the last
     // frame left in it so the next episode starts from nothing.
     editor::scripting::debugDraw().clear();

@@ -53,11 +53,11 @@ void EditorApp::drawSensorsTab() {
     const float s = contentScale_;
 
     // --- recording ---------------------------------------------------------
-    bool recording = sensors_ && sensors_->recording();
+    bool recording = sessions_.sensors && sessions_.sensors->recording();
     if (ImGui::Checkbox("Record", &recording)) {
         // Re-query rather than trusting `recording`: the checkbox's own handler
         // is the only writer, but the session may not exist at all.
-        if (sensors_) sensors_->setRecording(recording);
+        if (sessions_.sensors) sessions_.sensors->setRecording(recording);
     }
     ImGui::SameLine();
     if (ImGui::SmallButton("Folder...")) {
@@ -65,16 +65,16 @@ void EditorApp::drawSensorsTab() {
         // The browser has no directory mode; a Save dialog's PARENT directory is
         // what gets used, and the name the user types is discarded.
         fileBrowser_.open("Recording Folder", FileBrowser::Mode::Save,
-                          sensors_ ? sensors_->recordDirectory()
+                          sessions_.sensors ? sessions_.sensors->recordDirectory()
                                    : std::filesystem::temp_directory_path(),
                           {}, "sensors");
     }
-    if (sensors_) {
+    if (sessions_.sensors) {
         ImGui::SameLine();
-        ImGui::TextColored(theme::muted(), "%s", sensors_->recordDirectory().string().c_str());
-        if (sensors_->recording()) {
+        ImGui::TextColored(theme::muted(), "%s", sessions_.sensors->recordDirectory().string().c_str());
+        if (sessions_.sensors->recording()) {
             ImGui::TextColored(theme::playing(), "recording - %zu rows",
-                               sensors_->recordedRows());
+                               sessions_.sensors->recordedRows());
             ImGui::SameLine();
             ImGui::TextColored(theme::muted(), "(flushed on Stop)");
         }
@@ -96,14 +96,14 @@ void EditorApp::drawSensorsTab() {
         return;
     }
 
-    if (!sensors_ || sensors_->sensorCount() == 0) {
+    if (!sessions_.sensors || sessions_.sensors->sensorCount() == 0) {
         ImGui::TextColored(theme::muted(), "Playing, but no sensors in this scene.");
         return;
     }
 
-    ImGui::Text("%zu of %zu measuring", sensors_->liveCount(), sensors_->sensorCount());
+    ImGui::Text("%zu of %zu measuring", sessions_.sensors->liveCount(), sessions_.sensors->sensorCount());
     ImGui::SameLine();
-    ImGui::TextColored(theme::muted(), "- sim time %.3f s", sensors_->simTime());
+    ImGui::TextColored(theme::muted(), "- sim time %.3f s", sessions_.sensors->simTime());
 
     if (!ImGui::BeginChild("##sensors", {0, 0})) {
         ImGui::EndChild();
@@ -111,7 +111,7 @@ void EditorApp::drawSensorsTab() {
     }
 
     int index = 0;
-    for (const auto& entry : sensors_->entries()) {
+    for (const auto& entry : sessions_.sensors->entries()) {
 
         ImGui::PushID(index++);
 

@@ -52,7 +52,7 @@ void EditorApp::syncPhysicsDebug() {
     using namespace ::physx;
 
     // world() is null between plays: the session destroys it in stop().
-    auto* world = physics_ ? physics_->world() : nullptr;
+    auto* world = sessions_.physics ? sessions_.physics->world() : nullptr;
 
     if (!world || !physicsDebug_) {
         if (world) {

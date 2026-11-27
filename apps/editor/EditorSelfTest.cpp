@@ -820,7 +820,7 @@ int EditorApp::runScreenshot() {
         // scan is rate-gated off the physics accumulator, so how many frames it
         // takes depends on the machine. Vision sensors scan in every build —
         // the session no longer needs PhysX — so the wait is unconditional.
-        for (int i = 0; i < 400 && sensors_ && cloudPoints() == 0; ++i) playFor(0.05f);
+        for (int i = 0; i < 400 && sessions_.sensors && cloudPoints() == 0; ++i) playFor(0.05f);
         camera_.position.set(-11.f, 9.f, 20.f);
         orbit_->target.set(0.f, 1.5f, 6.f);
         playFor(0.4f);
@@ -2192,7 +2192,7 @@ int EditorApp::runSelfTest() {
         auto* live = findByUuid(document_.scene(), uuid);
         check(live && live->position.y > 3.f,
               "a script drives the rigid body the physics session is simulating");
-        check(scripts_ && scripts_->errorFor(uuid).empty(),
+        check(sessions_.scripts && sessions_.scripts->errorFor(uuid).empty(),
               "and reaching it raised nothing");
         stopPlay();
         step();
@@ -2258,7 +2258,7 @@ int EditorApp::runSelfTest() {
         check(live && static_cast<int>(live->scale.x) == 60 &&
                       static_cast<int>(live->scale.y) == 0,
               "before that frame's update, one for one");
-        check(scripts_ && scripts_->errorFor(tickerUuid).empty(),
+        check(sessions_.scripts && sessions_.scripts->errorFor(tickerUuid).empty(),
               "and the substep sweep raised nothing");
         stopPlay();
         step();
@@ -2346,7 +2346,7 @@ int EditorApp::runSelfTest() {
               "and the contact names the other object, with a normal and an impulse");
         check(live && static_cast<int>(live->scale.z) == 0,
               "and no exit while it is still standing on it");
-        check(scripts_ && scripts_->errorFor(bumperUuid).empty(),
+        check(sessions_.scripts && sessions_.scripts->errorFor(bumperUuid).empty(),
               "and the collision sweep raised nothing");
 
         stopPlay();
@@ -2440,7 +2440,7 @@ int EditorApp::runSelfTest() {
               "and one on_trigger_exit when it leaves the far side");
         check(live && live->position.y < 0.f,
               "and it fell straight through - a trigger collides with nothing");
-        check(scripts_ && scripts_->errorFor(dropperUuid).empty(),
+        check(sessions_.scripts && sessions_.scripts->errorFor(dropperUuid).empty(),
               "and the trigger sweep raised nothing");
 
         stopPlay();
@@ -2532,7 +2532,7 @@ int EditorApp::runSelfTest() {
               "and without ignore the same ray finds the caller's own collider");
         check(live && live->scale.z < 10.f,
               "and the distance it reports agrees with the body's own pose");
-        check(scripts_ && scripts_->errorFor(proberUuid).empty(),
+        check(sessions_.scripts && sessions_.scripts->errorFor(proberUuid).empty(),
               "and the queries raised nothing");
 
         stopPlay();
@@ -3178,7 +3178,7 @@ int EditorApp::runSelfTest() {
                 check(isPlaying(), "a raising script does not abort play");
                 stopPlay();
                 step();
-                check(scripts_ && !scripts_->errorFor(uuid).empty(),
+                check(sessions_.scripts && !sessions_.scripts->errorFor(uuid).empty(),
                       "the failure is recorded against the object");
 
                 if (auto* clear = document_.scene().getObjectByName("Box")) {
@@ -3291,7 +3291,7 @@ int EditorApp::runSelfTest() {
                 check(isPlaying(), "a broken inline script does not abort play");
                 stopPlay();
                 step();
-                check(scripts_ && !scripts_->errorFor(uuid).empty(),
+                check(sessions_.scripts && !sessions_.scripts->errorFor(uuid).empty(),
                       "the inline failure is recorded against the object");
 
                 // The New Inline Script template must itself run: it carries
@@ -3385,8 +3385,8 @@ int EditorApp::runSelfTest() {
                     auto* opened = document_.scene().getObjectByName("Box");
                     check(opened && opened->position.y > doorBefore + 1e-3f,
                           "one script drives another's live instance through script_from_object");
-                    check(scripts_ && opened && scripts_->errorFor(opened->uuid).empty() &&
-                                  scripts_->errorFor(buttonUuid).empty(),
+                    check(sessions_.scripts && opened && sessions_.scripts->errorFor(opened->uuid).empty() &&
+                                  sessions_.scripts->errorFor(buttonUuid).empty(),
                           "and neither side of the handshake raised");
                     stopPlay();
                     step();
@@ -4387,13 +4387,13 @@ int EditorApp::runSelfTest() {
 
             startPlay();
             step(2);
-            check(conveyorSession_ && conveyorSession_->conveyorCount() == 1,
+            check(sessions_.conveyor && sessions_.conveyor->conveyorCount() == 1,
                   "the play session picks the conveyor up");
-            check(conveyorSession_ && conveyorSession_->beltCount() >= 2,
+            check(sessions_.conveyor && sessions_.conveyor->beltCount() >= 2,
                   "and builds belt colliders for it");
-            check(conveyorSession_ && conveyorSession_->rollerCount() >= 3,
+            check(sessions_.conveyor && sessions_.conveyor->rollerCount() >= 3,
                   "and real roller colliders for the roller bed");
-            check(conveyorSession_ && conveyorSession_->wallCount() >= 1,
+            check(sessions_.conveyor && sessions_.conveyor->wallCount() >= 1,
                   "and wall colliders for the attached diverter");
 
             auto* cargo1 = findByUuid(document_.scene(), cargoUuid);
@@ -4543,7 +4543,7 @@ int EditorApp::runSelfTest() {
 
             startPlay();
             step(2);
-            check(conveyorSession_ && conveyorSession_->conveyorCount() == 2,
+            check(sessions_.conveyor && sessions_.conveyor->conveyorCount() == 2,
                   "both conveyors play at once");
 
             const Vector3 centre(fillet.centre.x, 0.f, fillet.centre.z);
@@ -4595,7 +4595,7 @@ int EditorApp::runSelfTest() {
 
             startPlay();
             step(2);
-            if (physics_ && physics_->softBodyCount() == 1) {
+            if (sessions_.physics && sessions_.physics->softBodyCount() == 1) {
                 auto* riding = findByUuid(document_.scene(), ballUuid);
                 float startX = riding ? riding->position.x : 0.f;
                 bool conveyed = false;
@@ -4804,13 +4804,13 @@ int EditorApp::runSelfTest() {
             startPlay();
             stepFixed(30);
 
-            check(particleSession_ && particleSession_->fieldNodeCount() == 1,
+            check(sessions_.particles && sessions_.particles->fieldNodeCount() == 1,
                   "the play session counts the authored node on every backend");
-            check(particleSession_ && particleSession_->emitterTime() > 0.4f,
+            check(sessions_.particles && sessions_.particles->emitterTime() > 0.4f,
                   "and runs its own deterministic clock from zero");
 
             if (previewable) {
-                const auto* played = particleSession_->fieldFor(particlesUuid);
+                const auto* played = sessions_.particles->fieldFor(particlesUuid);
                 check(played != nullptr && fieldsInDocument() == 1,
                       "a session field is built and added to the played scene");
                 check(played && played->emitterTime() > 0.4f,
@@ -4827,7 +4827,7 @@ int EditorApp::runSelfTest() {
                               particlePreviews_.begin()->second.field->liveCount() == 0,
                       "and the edit-mode preview is parked while it plays");
             } else {
-                check(particleSession_ && particleSession_->liveFieldCount() == 0 &&
+                check(sessions_.particles && sessions_.particles->liveFieldCount() == 0 &&
                               fieldsInDocument() == 0,
                       "no session field is built on the OpenGL backend");
                 check(particlePreviews_.empty() && particlesNow(particlesUuid) != nullptr,
@@ -4837,7 +4837,7 @@ int EditorApp::runSelfTest() {
             stopPlay();
             step();
             check(fieldsInDocument() == 0 &&
-                          (!particleSession_ || particleSession_->liveFieldCount() == 0),
+                          (!sessions_.particles || sessions_.particles->liveFieldCount() == 0),
                   "Stop takes the session's fields with the play copy");
             if (previewable) {
                 check(!particlePreviews_.empty() &&
@@ -5583,7 +5583,7 @@ int EditorApp::runSelfTest() {
                 if (!current && o.uuid == uuid) current = &o;
             });
             auto* sim = current ? current->as<Robot>() : nullptr;
-            if (sim && physics_ && sensors_) {
+            if (sim && sessions_.physics && sessions_.sensors) {
 
                 const auto joints = sim->getArticulatedJointInfo();
                 check(!joints.empty(), "the simulated robot exposes a joint to read");
@@ -5605,14 +5605,14 @@ int EditorApp::runSelfTest() {
                 enc.write(*sim);
 
                 startPlay();
-                check(physics_->articulationCount() == 1,
+                check(sessions_.physics->articulationCount() == 1,
                       "the robot plays as one articulation");
-                check(sensors_->liveCount() >= 1, "the joint encoder comes up live");
+                check(sessions_.sensors->liveCount() >= 1, "the joint encoder comes up live");
                 // A handful of frames so the substep loop feeds the encoder.
                 step(20);
 
                 const SensorPlaySession::Entry* encEntry = nullptr;
-                for (const auto& e : sensors_->entries()) {
+                for (const auto& e : sessions_.sensors->entries()) {
                     if (e->encoder) encEntry = e.get();
                 }
                 check(encEntry && encEntry->samples > 0,
@@ -5690,11 +5690,11 @@ int EditorApp::runSelfTest() {
                     // The error text in the message, because "it raised" without
                     // WHAT it raised is a failure you cannot act on.
                     const std::string scriptError =
-                            scripts_ ? scripts_->errorFor(uuid) : "no script host";
+                            sessions_.scripts ? sessions_.scripts->errorFor(uuid) : "no script host";
                     const std::string raisedMsg =
                             "and reaching it raised nothing" +
                             (scriptError.empty() ? "" : " - " + scriptError);
-                    check(scripts_ && scriptError.empty(), raisedMsg.c_str());
+                    check(sessions_.scripts && scriptError.empty(), raisedMsg.c_str());
                     stopPlay();
                     step();
                 }
@@ -5758,7 +5758,7 @@ int EditorApp::runSelfTest() {
         check(robot && std::abs(robot->scale.x - 0.001f) < 1e-6f, "scaled into metres");
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-        if (robot && physics_) {
+        if (robot && sessions_.physics) {
 
             // Play replaces the scene, so the robot has to be found again after.
             const std::string uuid = robot->uuid;
@@ -5773,7 +5773,7 @@ int EditorApp::runSelfTest() {
             step();
 
             startPlay();
-            check(physics_->articulationCount() == 1,
+            check(sessions_.physics->articulationCount() == 1,
                   "a uniformly scaled robot now plays as an articulation");
             step(30);
 
@@ -6994,9 +6994,9 @@ int EditorApp::runSelfTest() {
             check(AudioPlaySession::distanceGate(40.f, 12.f) == 0.f, "and zero beyond it");
             const float inBand = AudioPlaySession::distanceGate(11.5f, 12.f);
             check(inBand > 0.f && inBand < 1.f, "and eases through the band before max");
-            if (audio_ && audio_->listenerReady()) {
-                check(audio_->soundCount() == 1, "the session built one sound from it");
-                check(audio_->isPlaying(soundUuid), "and it is playing");
+            if (sessions_.audio && sessions_.audio->listenerReady()) {
+                check(sessions_.audio->soundCount() == 1, "the session built one sound from it");
+                check(sessions_.audio->isPlaying(soundUuid), "and it is playing");
             } else {
                 std::cout << "[selftest] SKIP no audio device - the audible sound block "
                              "did not run" << std::endl;
@@ -7095,12 +7095,12 @@ int EditorApp::runSelfTest() {
             stepFixed(30);
             check(isPlaying(), "Play starts with an acoustic surface in the scene");
 #ifdef THREEPP_WITH_AUDIO
-            if (audio_ && audio_->listenerReady()) {
-                check(audio_->acousticsActive(), "the audio session brought up acoustics");
-                check(audio_->acousticSurfaceCount() == 1, "over the one flagged mesh");
+            if (sessions_.audio && sessions_.audio->listenerReady()) {
+                check(sessions_.audio->acousticsActive(), "the audio session brought up acoustics");
+                check(sessions_.audio->acousticSurfaceCount() == 1, "over the one flagged mesh");
                 // transmission 0.15 through a closed box is 0.15 of the energy,
                 // so the smoothed occlusion settles near 0.85.
-                check(audio_->occlusionOf(sourceUuid) > 0.5f,
+                check(sessions_.audio->occlusionOf(sourceUuid) > 0.5f,
                       "and the wall muffles the sound behind it");
             } else {
                 std::cout << "[selftest] SKIP no audio device - the acoustics play block "
@@ -7122,7 +7122,7 @@ int EditorApp::runSelfTest() {
             startPlay();
             step(3);
 #ifdef THREEPP_WITH_AUDIO
-            check(audio_ && !audio_->acousticsActive(),
+            check(sessions_.audio && !sessions_.audio->acousticsActive(),
                   "and a scene with no flagged mesh builds no acoustics at all");
 #endif
             stopPlay();
@@ -7253,7 +7253,7 @@ int EditorApp::runSelfTest() {
             startPlay();
             stepFixed(2);
             check(isPlaying(), "Play starts with an authored joint in the scene");
-            check(physics_ && physics_->jointCount() == 1, "the session built the joint");
+            check(sessions_.physics && sessions_.physics->jointCount() == 1, "the session built the joint");
 
             auto* playedGate = document_.scene().getObjectByName("Gate");
             check(playedGate != nullptr, "the played scene still has the gate");
@@ -7430,14 +7430,14 @@ int EditorApp::runSelfTest() {
             startPlay();
             stepFixed(2);
             check(isPlaying(), "Play starts with an authored vehicle in the scene");
-            check(physics_ && physics_->vehicleCount() == 1, "the session built the vehicle");
+            check(sessions_.physics && sessions_.physics->vehicleCount() == 1, "the session built the vehicle");
 
             auto* playedCar = document_.scene().getObjectByName("Car");
             check(playedCar != nullptr, "the played scene still has the car");
 
             float maxZ = 0.f;
             for (int i = 0; i < 240 && playedCar; ++i) {// 4 s of full throttle
-                physics_->driveVehicles(true, false, 0.f, false, kFixedDt);
+                sessions_.physics->driveVehicles(true, false, 0.f, false, kFixedDt);
                 stepFixed(1);
                 maxZ = std::max(maxZ, playedCar->position.z);
             }
@@ -7687,7 +7687,7 @@ int EditorApp::runSelfTest() {
             startPlay();
             stepFixed(2);
             check(isPlaying(), "Play starts with an authored character in the scene");
-            check(characterSession_ && characterSession_->characterCount() == 1,
+            check(sessions_.character && sessions_.character->characterCount() == 1,
                   "the session built one capsule controller");
 
             auto* playedHero = findByUuid(document_.scene(), heroUuid);
@@ -7702,7 +7702,7 @@ int EditorApp::runSelfTest() {
                 input.jump = jump;
                 input.viewYaw = viewYawRad;
                 for (int i = 0; i < frames; ++i) {
-                    characterSession_->drive(input);
+                    sessions_.character->drive(input);
                     stepFixed(1);
                 }
             };
@@ -7713,7 +7713,7 @@ int EditorApp::runSelfTest() {
             const float walkedZ = playedHero ? playedHero->position.z - startZ : 0.f;
             check(walkedZ > 1.5f, "holding forward walked the character several metres");
             {
-                const auto* played = characterSession_->player();
+                const auto* played = sessions_.character->player();
                 check(played != nullptr && played->grounded,
                       "and it stayed on the ground the whole way");
                 // A clip is actually playing, and the walk role resolved — the
@@ -7746,7 +7746,7 @@ int EditorApp::runSelfTest() {
             const float strafedX = playedHero ? playedHero->position.x - strafeFromX : 0.f;
             check(strafedX > 0.8f, "A strafes to the character's left, across the view");
             {
-                const auto* played = characterSession_->player();
+                const auto* played = sessions_.character->player();
                 check(played != nullptr &&
                               std::abs(std::remainder(played->yaw, math::TWO_PI)) < 0.2f,
                       "and the body still faces the way the camera looks");
@@ -8094,7 +8094,7 @@ int EditorApp::runSelfTest() {
             check(colliderVertices() > 0, "an S-curve tube draws collider lines of its own");
 
             int shapes = -1;
-            if (auto* world = physics_ ? physics_->world() : nullptr) {
+            if (auto* world = sessions_.physics ? sessions_.physics->world() : nullptr) {
                 using namespace ::physx;
                 auto& pxScene = world->scene();
                 const PxU32 count = pxScene.getNbActors(PxActorTypeFlag::eRIGID_STATIC);
@@ -8221,8 +8221,8 @@ int EditorApp::runSelfTest() {
         check(viewportMarkers_.size() >= 3, "an authored sensor gets a viewport marker");
 
         const auto entryFor = [this](const std::string& uuid) -> const SensorPlaySession::Entry* {
-            if (!sensors_) return nullptr;
-            for (const auto& entry : sensors_->entries()) {
+            if (!sessions_.sensors) return nullptr;
+            for (const auto& entry : sessions_.sensors->entries()) {
                 if (entry->uuid == uuid) return entry.get();
             }
             return nullptr;
@@ -8264,11 +8264,11 @@ int EditorApp::runSelfTest() {
         const auto recordDir = std::filesystem::temp_directory_path() / "threepp-editor-selftest-sensors";
         std::error_code ec;
         std::filesystem::remove_all(recordDir, ec);
-        if (sensors_) {
-            sensors_->setRecordDirectory(recordDir);
+        if (sessions_.sensors) {
+            sessions_.sensors->setRecordDirectory(recordDir);
             // Armed while stopped: the files open on the first measurement of the
             // play that follows, so "Record then Play" captures from t = 0.
-            sensors_->setRecording(true);
+            sessions_.sensors->setRecording(true);
         }
 
         // The raster backends read depth back through a 16-bit packed texture,
@@ -8319,8 +8319,8 @@ int EditorApp::runSelfTest() {
 
             startPlay();
             check(isPlaying(), "play starts with sensors in the scene");
-            check(sensors_ && sensors_->sensorCount() == 3, "all three authored sensors are built");
-            check(sensors_ && sensors_->liveCount() == 3, "and all three come up live");
+            check(sessions_.sensors && sessions_.sensors->sensorCount() == 3, "all three authored sensors are built");
+            check(sessions_.sensors && sessions_.sensors->liveCount() == 3, "and all three come up live");
 
             // The first scan of each vision sensor, LATCHED the moment it
             // lands and nothing later: every scan draws from the range-noise
@@ -8474,11 +8474,11 @@ int EditorApp::runSelfTest() {
                 }
             }
 
-            check(sensors_ && sensors_->recordedRows() > 0, "recording accumulates rows");
+            check(sessions_.sensors && sessions_.sensors->recordedRows() > 0, "recording accumulates rows");
 
             stopPlay();
             stepFixed(2);
-            check(sensors_ && sensors_->sensorCount() == 0, "stop drops every sensor");
+            check(sessions_.sensors && sessions_.sensors->sensorCount() == 0, "stop drops every sensor");
             check(sensorCloud_ == nullptr, "and clears the cloud overlay");
             check(sensorRig_ && sensorRig_->children.empty(),
                   "and leaves nothing parented to the sensor rig");
@@ -8501,7 +8501,7 @@ int EditorApp::runSelfTest() {
         // One per sensor, plus the final-cloud dump each vision sensor writes.
         check(csvFiles >= 3, "recording wrote a CSV per sensor");
         check(csvRows > 0, "with rows in them");
-        if (sensors_) sensors_->setRecording(false);
+        if (sessions_.sensors) sessions_.sensors->setRecording(false);
         std::filesystem::remove_all(recordDir, ec);
 
         // Two scene replaces back to back with the cloud toggle still on. Every
@@ -8513,7 +8513,7 @@ int EditorApp::runSelfTest() {
         newScene();
         step(2);
         check(sensorCloud_ == nullptr, "a double scene replace leaves no sensor overlay");
-        check(sensors_ && sensors_->sensorCount() == 0, "and no sensors");
+        check(sessions_.sensors && sessions_.sensors->sensorCount() == 0, "and no sensors");
         // The sensor glyphs went with the objects that carried them; the fresh
         // template scene's lights still get theirs, which is the marker pass
         // having survived two graph swaps rather than gone quiet.
@@ -8567,8 +8567,8 @@ int EditorApp::runSelfTest() {
         stepFixed(20);
 
         const SensorPlaySession::Entry* cameraEntry = nullptr;
-        if (sensors_) {
-            for (const auto& entry : sensors_->entries()) {
+        if (sessions_.sensors) {
+            for (const auto& entry : sessions_.sensors->entries()) {
                 if (entry->uuid == cameraUuid) cameraEntry = entry.get();
             }
         }
@@ -8652,7 +8652,7 @@ int EditorApp::runSelfTest() {
         }
 
         stopPlay();
-        check(sensors_ && sensors_->sensorCount() == 0, "stop drops the camera with everything else");
+        check(sessions_.sensors && sessions_.sensors->sensorCount() == 0, "stop drops the camera with everything else");
 
         // --- and its recording is FRAMES, not a summary --------------------
         // recordCamera is its own path (a PNG per capture plus an index CSV,
@@ -8664,15 +8664,15 @@ int EditorApp::runSelfTest() {
             const auto recordDir = std::filesystem::temp_directory_path() /
                                    "threepp-selftest-camera-rec";
             std::filesystem::remove_all(recordDir, ec);
-            if (sensors_) {
-                sensors_->setRecordDirectory(recordDir);
-                sensors_->setRecording(true);
+            if (sessions_.sensors) {
+                sessions_.sensors->setRecordDirectory(recordDir);
+                sessions_.sensors->setRecording(true);
             }
 
             startPlay();
             stepFixed(12);
             stopPlay();
-            if (sensors_) sensors_->setRecording(false);
+            if (sessions_.sensors) sessions_.sensors->setRecording(false);
 
             std::size_t pngs = 0, csvs = 0, rows = 0;
             if (std::filesystem::exists(recordDir, ec)) {
@@ -9189,27 +9189,27 @@ int EditorApp::runSelfTest() {
 #endif
             }
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-            check(scripts_ && scripts_->errorCount() == 0, "with no script errors");
-            check(scripts_ && scripts_->instanceCount() == 7, "and all seven scripts live");
+            check(sessions_.scripts && sessions_.scripts->errorCount() == 0, "with no script errors");
+            check(sessions_.scripts && sessions_.scripts->instanceCount() == 7, "and all seven scripts live");
 #endif
             // The sensors are the other half of the example, and the only half
             // the headless test cannot reach: a LIDAR scan needs a renderer.
             std::size_t samples = 0;
             std::size_t scans = 0;
-            if (sensors_) {
-                for (const auto& entry : sensors_->entries()) {
+            if (sessions_.sensors) {
+                for (const auto& entry : sessions_.sensors->entries()) {
                     samples += entry->samples;
                     scans += entry->scans;
                 }
             }
-            check(sensors_ && sensors_->sensorCount() == 2, "two sensors authored on the drone");
+            check(sessions_.sensors && sessions_.sensors->sensorCount() == 2, "two sensors authored on the drone");
             check(samples > 0, "the IMU is measuring");
             // Rate-gated at 10 Hz off the physics accumulator, so wait rather
             // than assume 120 frames covered a scan on this machine.
             for (int i = 0; i < 200 && scans == 0; ++i) {
                 stepFixed(4);
                 scans = 0;
-                for (const auto& entry : sensors_->entries()) scans += entry->scans;
+                for (const auto& entry : sessions_.sensors->entries()) scans += entry->scans;
             }
             check(scans > 0, "and the LIDAR has scanned");
 
@@ -9593,9 +9593,9 @@ int EditorApp::runSelfTest() {
 
         {
             const double rockY = rock->position.y;
-            std::cout << "[selftest] rock scan: " << (splatSurfaceSession_ ? splatSurfaceSession_->movingCount() : 0)
+            std::cout << "[selftest] rock scan: " << (sessions_.splatSurfaces ? sessions_.splatSurfaces->movingCount() : 0)
                       << " moving body, fell from y " << rockStartY << " to " << rockY << std::endl;
-            check(splatSurfaceSession_ && splatSurfaceSession_->movingCount() == 1,
+            check(sessions_.splatSurfaces && sessions_.splatSurfaces->movingCount() == 1,
                   "Play cooks the rock scan into a dynamic compound of convex hulls");
             check(rockY < rockStartY - 0.3,
                   "and the cloud follows its body down");
@@ -9608,8 +9608,8 @@ int EditorApp::runSelfTest() {
         }
 
         if (bakeable) {
-            check(splatSurfaceSession_ && splatSurfaceSession_->surfaceCount() == 2 &&
-                          splatSurfaceSession_->colliderCount() == 2,
+            check(sessions_.splatSurfaces && sessions_.splatSurfaces->surfaceCount() == 2 &&
+                          sessions_.splatSurfaces->colliderCount() == 2,
                   "Play bakes both scans: one static collider, one dynamic");
 
             // The plane the ball is graded against is the very mesh the session
@@ -9633,7 +9633,7 @@ int EditorApp::runSelfTest() {
                       << ", voxel 0.05)" << std::endl;
             check(verts > 0 && std::abs(rest - (meanY + 0.15)) < 0.05,
                   "and a dropped ball rests on the baked scan, within a voxel");
-            check(splatSurfaceSession_ && splatSurfaceSession_->sensorSurfaces(),
+            check(sessions_.splatSurfaces && sessions_.splatSurfaces->sensorSurfaces(),
                   "the sensor-only master is on while the surface plays");
             check(splatSurfaces_ && splatSurfaces_->bakeCount() == bakesBeforePlay + 1,
                   "the floor came from the memo and only the rock baked at Play");
@@ -9642,8 +9642,8 @@ int EditorApp::runSelfTest() {
         } else {
             // The floor needs the depth AOV and stays unbaked here; the rock
             // took the direct route and is the one surface this play has.
-            check(splatSurfaceSession_ && splatSurfaceSession_->surfaceCount() == 1 &&
-                          splatSurfaceSession_->colliderCount() == 1,
+            check(sessions_.splatSurfaces && sessions_.splatSurfaces->surfaceCount() == 1 &&
+                          sessions_.splatSurfaces->colliderCount() == 1,
                   "without a depth AOV only the direct-route scan is baked");
         }
 

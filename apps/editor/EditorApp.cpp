@@ -15,6 +15,7 @@
 #include "threepp/extras/editor/OrthoClipFit.hpp"
 #include "threepp/extras/editor/FlockPlaySession.hpp"
 #include "threepp/extras/editor/ParticleFieldPlaySession.hpp"
+#include "threepp/extras/editor/PlayRuntime.hpp"
 #include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/ScriptWorkspace.hpp"
@@ -655,8 +656,9 @@ EditorApp::EditorApp(const Options& options)
         if (!playSwap) {
             // Before rebinding: this replaces nodes, and the command stack
             // should resolve its targets against the final graph. A play copy
-            // carries live robots already.
-            rearticulateRobots(scene);
+            // carries live robots already. threepp_player does the same on
+            // open (PlayerCore::open).
+            editor::rearticulateRobots(scene);
 
             // Entries for clouds that did not come back are unreachable
             // megabytes. A play swap lends the same clouds, so none are lost.
@@ -718,125 +720,31 @@ EditorApp::EditorApp(const Options& options)
     // where it cannot (see SplatSurfaceCache).
     splatSurfaces_ = std::make_shared<editor::SplatSurfaceCache>();
 
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-    // Kept as a member too: the collider overlay reads the world it builds.
-    physics_ = std::make_shared<PhysicsPlaySession>();
-    play_.addSession(physics_);
-    // Right after physics: its start() borrows the world physics just built,
-    // and stopping in reverse order tears the belts down while that world is
-    // still alive.
-    conveyorSession_ = std::make_shared<ConveyorPlaySession>();
-    conveyorSession_->setPhysics(physics_.get());
-    play_.addSession(conveyorSession_);
-#endif
-    // Right after the conveyor, and OUTSIDE its guard: a particle field needs a
-    // renderer rather than a physics world, so it plays in every build. The
-    // previews are parked for the duration (ParticleOverlay) and this session
-    // owns its own fields and its own clock from t = 0.
-    particleSession_ = std::make_shared<ParticleFieldPlaySession>();
-    particleSession_->setRenderer(renderer_.get());
-    // The viewport camera, asked for per frame rather than pinned: the ortho
-    // views have cameras of their own, and the preview overlay follows the same
-    // one (syncParticleOverlays), so a follow field wraps about the same point
-    // whether the scene is being authored or played.
-    particleSession_->setViewpoint([this] {
-        Vector3 position;
-        viewCamera().getWorldPosition(position);
-        return position;
-    });
-    play_.addSession(particleSession_);
-
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-    // Right after the particle fields and back inside the PhysX guard: grains
-    // are a PBD simulation in the world physics built, so this borrows that
-    // world exactly as the conveyor does — and emits BETWEEN steps, which is
-    // what registering after the physics session buys. It needs the renderer
-    // too, but only to ask which backend it is: that resolves the authored
-    // "auto" visual to a particle field on Vulkan and an InstancedMesh on GL.
-    granularSession_ = std::make_shared<GranularPlaySession>();
-    granularSession_->setPhysics(physics_.get());
-    granularSession_->setRenderer(renderer_.get());
-    play_.addSession(granularSession_);
-
-#ifdef THREEPP_WITH_VULKAN
-    // Baked scan surfaces, right after the grains and still inside the PhysX
-    // guard: the collider is cooked into the world physics_ built, so the same
-    // borrow-and-stop-first ordering applies. The memo it bakes into is the
-    // app's — the inspector's "Bake now" fills the very same one, which is what
-    // makes a warmed bake instant at Play.
-    splatSurfaceSession_ = std::make_shared<SplatSurfacePlaySession>();
-    splatSurfaceSession_->setPhysics(physics_.get());
-    splatSurfaceSession_->setRenderer(renderer_.get());
-    splatSurfaceSession_->setCache(splatSurfaces_.get());
-    play_.addSession(splatSurfaceSession_);
-#endif
-
-    // Characters, last of the world-borrowers: each one is a capsule controller
-    // in the world physics_ built, so the same borrow-and-stop-first ordering
-    // applies. It updates AFTER the physics step (registration order), which is
-    // what a kinematic sweep wants — the world it sweeps through has already
-    // settled this frame.
-    characterSession_ = std::make_shared<CharacterPlaySession>();
-    characterSession_->setPhysics(physics_.get());
-    play_.addSession(characterSession_);
-#endif
-
+    // The play sessions, in the order and with the gating threepp_player shares
+    // (PlayRuntime.hpp). A particle field that follows the viewer follows the
+    // viewport camera, asked for per frame rather than pinned: the ortho views
+    // have cameras of their own, and the preview overlay follows the same one
+    // (syncParticleOverlays), so a follow field wraps about the same point
+    // whether the scene is being authored or played. The audio listener rides
+    // the perspective camera, the closest thing the editor has to "where the
+    // user is standing"; the ortho views are a drafting aid, not a vantage.
     {
-        auto animations = std::make_shared<AnimationPlaySession>();
-        // Defer authored characters to the session registered above — but only
-        // when there IS one. Without PhysX nothing else would drive them, and
-        // an authored character would stand in its bind pose.
-        animations->setSkipCharacters(characterSession_ != nullptr);
-        play_.addSession(animations);
+        PlayWiring wiring;
+        wiring.renderer = renderer_.get();
+        wiring.viewpoint = [this] {
+            Vector3 position;
+            viewCamera().getWorldPosition(position);
+            return position;
+        };
+        // The app's memo: the inspector's "Bake now" fills the same one, which
+        // is what makes a warmed bake instant at Play.
+        wiring.splatSurfaceCache = splatSurfaces_.get();
+        wiring.sensorRig = sensorRig_.get();
+        wiring.hiddenDuringScan = overlay_.get();
+        wiring.listenerHost = &camera_;
+        buildPlaySessions(play_, document_, wiring, sessions_);
     }
-    // Ambient flocks. Dependency-free (no PhysX, no renderer coupling) and
-    // stateless between plays. The mesh filter is NOT optional here: the
-    // editor scene carries overlay meshes (gizmo handles, light markers,
-    // waypoint pucks) in the same graph the perch bake traverses, and a
-    // marker hovering at altitude reads as the highest surface in its column
-    // — the whole flock then climbs to a phantom floor.
-    {
-        auto flockSession = std::make_shared<FlockPlaySession>();
-        flockSession->setMeshFilter(
-                [this](const Mesh& mesh) { return !document_.isEditorOnly(mesh); });
-        play_.addSession(flockSession);
-    }
-#ifdef THREEPP_WITH_AUDIO
-    // Sounds. Kept as a member for the status readout and the selftest. Its
-    // listener rides the perspective viewport camera, which is the closest
-    // thing the editor has to "where the user is standing" — the ortho views
-    // are a drafting aid, not a vantage.
-    audio_ = std::make_shared<AudioPlaySession>();
-    audio_->setListenerHost(&camera_);
-    play_.addSession(audio_);
-#endif
-    // After physics (whose world the pushed sensors register with) and after the
-    // animation player, so a scan sees the pose the frame ended on. Before the
-    // script session, which stays last by rule — a script that moves a sensor's
-    // object is therefore read one frame later, which is the price of "scripts
-    // are the frame's final word".
-#ifdef THREEPP_EDITOR_WITH_PHYSX
-    {
-        auto sensors = std::make_shared<PhysxSensorPlaySession>();
-        sensors->setPhysics(physics_.get());
-        sensors_ = std::move(sensors);
-    }
-#else
-    // The base session runs the vision sensors: a depth or lidar scan needs a
-    // renderer, not a physics world. Body and joint sensors author, and say at
-    // Play which build they are waiting for.
-    sensors_ = std::make_shared<SensorPlaySession>();
-#endif
-    sensors_->setRenderer(renderer_.get());
-    sensors_->setRig(sensorRig_.get());
-    sensors_->setHiddenDuringScan(overlay_.get());
-    play_.addSession(sensors_);
 #ifdef THREEPP_EDITOR_WITH_PYTHON
-    // Last, so a script's transform edits are the final word for the frame —
-    // physics and the animation player have already had their say.
-    scripts_ = std::make_shared<ScriptPlaySession>();
-    play_.addSession(scripts_);
-
     // threepp.editor.is_key_down: let a playing script be DRIVEN. Answered from ImGui's key
     // state, not the canvas's — `ioCapture_.preventKeyboardEvent` gates on
     // WantCaptureKeyboard, which stays true for as long as a panel keeps focus after a click,
@@ -942,13 +850,11 @@ EditorApp::~EditorApp() {
     // The sensor session parents nodes into sensorRig_, which is a member of this
     // same object: member destruction order would take the rig down first and
     // leave the session's destructor unlinking from freed memory. Drop the
-    // sessions here, while everything they point into is still alive.
-    play_.clearSessions();
-    sensors_.reset();
-    physics_.reset();
+    // sessions here, while everything they point into is still alive. (The
+    // audio session's sounds are parented into the scene document_ owns, for
+    // the same reason.)
+    sessions_.release(play_);
 #ifdef THREEPP_WITH_AUDIO
-    // Same reasoning: its sounds are parented into the scene document_ owns.
-    audio_.reset();
     // And the audition's, before the listener it was opened on goes.
     stopAudition();
 #endif
@@ -1284,9 +1190,9 @@ void EditorApp::drawUi() {
                 // The dialog picks a FILE (it has no directory mode); what the
                 // recorder wants is the folder it sits in, because it writes one
                 // CSV per sensor named after the sensor.
-                if (sensors_) {
+                if (sessions_.sensors) {
                     const auto dir = path.has_filename() ? path.parent_path() : path;
-                    sensors_->setRecordDirectory(dir);
+                    sessions_.sensors->setRecordDirectory(dir);
                     log("sensor recordings will go to " + dir.string());
                 }
 #endif
@@ -3293,74 +3199,6 @@ void EditorApp::setJointValue(Robot& robot, std::size_t index, float radians) {
     if (!config.urdf.empty()) config.write(robot);
 }
 
-void EditorApp::rearticulateRobots(Scene& scene) {
-
-    // A document written before the articulation extension flattens a Robot into
-    // a plain Object3D: the pose survives, the joint table does not. Re-import
-    // the referenced URDF and move its joint table onto the subtree the document
-    // carries, keeping the placeholder's identity and placement so uuid lookups
-    // (selection, undo rebinding) still resolve.
-    //
-    // Documents written since do not come through here at all — ObjectLoader
-    // hands back a live Robot, which is the branch just below. That is the whole
-    // point of the extension: a play/stop cycle no longer reads the URDF, so it
-    // cannot rebuild the subtree from it, so it cannot delete anything authored
-    // into it.
-    std::vector<Object3D*> placeholders;
-    scene.traverse([&placeholders](Object3D& object) {
-        if (auto* robot = object.as<Robot>()) {
-            // Already live — ObjectLoader re-imported it from the URDF the
-            // document referenced. The node transforms are right (the override
-            // table restored them) but the joint table is still at the file's
-            // rest pose, so the inspector would show the wrong angles and snap
-            // the robot on the first drag. Re-drive it from the saved values.
-            if (const auto config = RobotConfig::read(object)) {
-                for (std::size_t i = 0; i < config->joints.size() && i < robot->numDOF(); ++i) {
-                    robot->setJointValue(i, config->joints[i]);
-                }
-                robot->showColliders(config->showColliders);
-            }
-            return;
-        }
-        if (RobotConfig::read(object)) placeholders.push_back(&object);
-    });
-
-    for (auto* placeholder : placeholders) {
-
-        auto* parent = placeholder->parent;
-        if (!parent) continue;
-
-        const auto config = *RobotConfig::read(*placeholder);
-
-        std::shared_ptr<Robot> robot;
-        std::string error;
-        try {
-            URDFLoader loader;
-            // The same arguments the import used, or this rebuilds a different
-            // robot out of the same file — the exact thing a play/stop cycle
-            // must not do.
-            loader.setArgs(config.argMap());
-            robot = loader.load(config.urdf);
-            if (!robot) error = loader.lastError();
-        } catch (const std::exception& e) {
-            error = e.what();
-        }
-        if (!robot) {
-            // The geometry is still in the document, so the scene renders as
-            // saved — it just cannot be re-jointed until the file is back.
-            logWarn("robot not re-articulated (" + std::filesystem::path(config.urdf).filename().string() +
-                (error.empty() ? ")" : "): " + error));
-            continue;
-        }
-
-        // Only the joint table is taken from the re-import; the subtree stays the
-        // document's. That, the identity/placement handover and the reporting all
-        // live in a free function so they can be tested headlessly — see
-        // transplantRobot.
-        transplantRobot(*placeholder, robot);
-    }
-}
-
 void EditorApp::startAnimationPreview(Object3D& root, const std::string& clipName,
                                       bool loop, float speed) {
 
@@ -4364,8 +4202,8 @@ void EditorApp::startPlay() {
 #ifdef THREEPP_WITH_AUDIO
     // Where a relative userData["soundFile"] resolves from. Set per play rather
     // than once: Save As moves the document, and with it the anchor.
-    if (audio_) {
-        audio_->setResourcePath(document_.path().empty()
+    if (sessions_.audio) {
+        sessions_.audio->setResourcePath(document_.path().empty()
                                         ? std::filesystem::path{}
                                         : document_.path().parent_path());
     }
@@ -4408,7 +4246,7 @@ void EditorApp::updateVehicleTeleop(float dt) {
 
     vehicleDriving_ = false;
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    if (!isPlaying() || !physics_ || physics_->vehicleCount() == 0) return;
+    if (!isPlaying() || !sessions_.physics || sessions_.physics->vehicleCount() == 0) return;
     // A vehicle exists in the played scene, so the plain keys are the pedals
     // whether or not one is pressed right now — see handleShortcuts.
     vehicleDriving_ = true;
@@ -4436,8 +4274,8 @@ void EditorApp::updateVehicleTeleop(float dt) {
     if (!any && !vehicleTeleopActive_) return;
 
     const float steer = (left ? 1.f : 0.f) - (right ? 1.f : 0.f);
-    physics_->driveVehicles(forward, backward, steer, handbrake, dt);
-    vehicleTeleopActive_ = any || physics_->vehiclesSteering();
+    sessions_.physics->driveVehicles(forward, backward, steer, handbrake, dt);
+    vehicleTeleopActive_ = any || sessions_.physics->vehiclesSteering();
 #else
     (void) dt;
 #endif
@@ -4460,7 +4298,7 @@ void EditorApp::updateCharacterTeleop(float dt) {
 
     characterDriving_ = false;
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    if (!isPlaying() || !characterSession_ || characterSession_->characterCount() == 0) return;
+    if (!isPlaying() || !sessions_.character || sessions_.character->characterCount() == 0) return;
     // A character exists in the played scene, so the plain keys are the
     // controls whether or not one is pressed right now — see handleShortcuts.
     characterDriving_ = true;
@@ -4491,7 +4329,7 @@ void EditorApp::updateCharacterTeleop(float dt) {
     // the same character from being overwritten by silence every frame.
     const bool any = input.forward != 0.f || input.strafe != 0.f || input.run || input.jump;
     if (!any && !characterTeleopActive_) return;
-    characterSession_->drive(input);
+    sessions_.character->drive(input);
     characterTeleopActive_ = any;
 #else
     (void) dt;
@@ -4501,11 +4339,11 @@ void EditorApp::updateCharacterTeleop(float dt) {
 void EditorApp::updateCharacterCamera(float dt) {
 
 #ifdef THREEPP_EDITOR_WITH_PHYSX
-    if (!isPlaying() || !characterSession_) return;
+    if (!isPlaying() || !sessions_.character) return;
     // The user's own chase wins: Follow Selection is an explicit choice, and
     // two filters pulling the same target apart is not a camera.
     if (followSelection_) return;
-    const auto* player = characterSession_->player();
+    const auto* player = sessions_.character->player();
     if (!player || !player->root) return;
 
     // Aim at the chest rather than the feet: a target on the floor puts the
