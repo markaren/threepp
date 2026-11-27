@@ -21,12 +21,12 @@
 //   --dump <dir>                 write each compared render there as <scene>.ppm,
 //                                for diffing a failure against its reference
 // Or via CTest: `ctest -R VulkanGolden_test`. Exits 42 (→ CTest "Skipped") when
-// no Vulkan/RT GPU is available, so CI without RT hardware doesn't fail.
+// no Vulkan device is available.
 //
-// With THREEPP_VULKAN_NO_RT set (anything but empty or "0", the renderer's own
-// rule) the renderer runs its raster path without ray queries, whose pictures
-// differ from the traced ones by design, so those references live apart in
-// tests/renderers/golden_nort/ under the same gates.
+// Without ray tracing (a device without ray query, or THREEPP_VULKAN_NO_RT set)
+// the renderer runs its raster path, whose pictures differ from the traced ones
+// by design, so those references live apart in tests/renderers/golden_nort/
+// under the same gates. The renderer's rayTracingSupported() picks the set.
 //
 // References are PPM (raw readRGBPixels bytes — no codec/flip/channel ambiguity,
 // byte-exact round-trip). They are GPU/driver-sensitive: the tolerance is set
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) dump = argv[++i];
     }
 
-    // Construction throws without a Vulkan/RT GPU (or a display) — treat that as
+    // Construction throws without a Vulkan device (or a display) — treat that as
     // a CTest skip rather than a failure.
     auto gpu = vktest::openHeadlessVulkan("VulkanGolden_test", kW, kH);
     if (!gpu) return kSkipCode;
@@ -651,10 +651,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    // The renderer's own reading of the variable (VulkanContext): set and not
-    // starting with '0' turns ray tracing off.
-    const char* noRtEnv = std::getenv("THREEPP_VULKAN_NO_RT");
-    const bool noRt = noRtEnv && *noRtEnv && *noRtEnv != '0';
+    // Whatever turned ray tracing off (the device or THREEPP_VULKAN_NO_RT), the
+    // renderer draws the raster path, whose references are golden_nort/.
+    const bool noRt = !renderer.rayTracingSupported();
     const fs::path goldenDir = fs::path(PROJECT_FOLDER) / "tests" / "renderers" / (noRt ? "golden_nort" : "golden");
 
     size_t sceneIdx = 0;
