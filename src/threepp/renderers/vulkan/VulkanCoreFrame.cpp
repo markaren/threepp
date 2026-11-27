@@ -40,36 +40,6 @@ void VulkanRenderer::Impl::createCommandResources() {
                 check(vkCreateFence(ctx->device(), &fci, nullptr, &inFlight[i]), "vkCreateFence");
             }
             createRenderFinishedSemaphores();
-
-            // The async-compute pilot's extra command buffers and semaphores
-            // (see computeGraph_). S1/S2 are signalled and waited once each per
-            // frame, in pairs, so unlike imageAvailable/renderFinished they need
-            // no suppressed-present special case: the inFlight fence wait
-            // before a slot's reuse proves both waits consumed.
-            asyncPilot_ = ctx->asyncComputeQueue();
-            const int pilotMode = vulkan::VulkanContext::asyncComputePilotMode();
-            asyncMoveAs_ = asyncPilot_ && pilotMode == 1;
-            asyncMoveDispatch_ = asyncPilot_ && (pilotMode == 1 || pilotMode == 3);
-            if (asyncPilot_) {
-                ai.commandPool = cmdPool;
-                check(vkAllocateCommandBuffers(ctx->device(), &ai, asyncGbufCmdBuffers_.data()),
-                      "vkAllocateCommandBuffers (async gbuffer)");
-                check(vkAllocateCommandBuffers(ctx->device(), &ai, asyncTailCmdBuffers_.data()),
-                      "vkAllocateCommandBuffers (async tail)");
-                VkCommandPoolCreateInfo cpci = pci;
-                cpci.queueFamilyIndex = ctx->queueFamilies().compute;
-                check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &computeCmdPool_),
-                      "vkCreateCommandPool (compute)");
-                VkCommandBufferAllocateInfo cai = ai;
-                cai.commandPool = computeCmdPool_;
-                check(vkAllocateCommandBuffers(ctx->device(), &cai, computeCmdBuffers_.data()),
-                      "vkAllocateCommandBuffers (compute)");
-                for (uint32_t i = 0; i < kFramesInFlight; ++i) {
-                    check(vkCreateSemaphore(ctx->device(), &sci, nullptr, &asyncHeadDone_[i]), "vkCreateSemaphore S1");
-                    check(vkCreateSemaphore(ctx->device(), &sci, nullptr, &asyncComputeDone_[i]), "vkCreateSemaphore S2");
-                }
-                computeGraph_.setPassTimer(nullptr);// one query pool, one queue (GpuTimings)
-            }
         }
 
 VkCommandBuffer VulkanRenderer::Impl::acquireSecondaryCommandBuffer() {
@@ -107,17 +77,6 @@ void VulkanRenderer::Impl::destroyRecordApartBuffers() {
                 list.clear();
             }
             recordApartUsed_.fill(0);
-        }
-
-void VulkanRenderer::Impl::destroyAsyncPilotResources() {
-            VkDevice d = ctx->device();
-            for (auto s : asyncHeadDone_) if (s) vkDestroySemaphore(d, s, nullptr);
-            for (auto s : asyncComputeDone_) if (s) vkDestroySemaphore(d, s, nullptr);
-            asyncHeadDone_.fill(VK_NULL_HANDLE);
-            asyncComputeDone_.fill(VK_NULL_HANDLE);
-            // The graphics pool's buffers go with cmdPool.
-            if (computeCmdPool_) vkDestroyCommandPool(d, computeCmdPool_, nullptr);
-            computeCmdPool_ = VK_NULL_HANDLE;
         }
 
 void VulkanRenderer::Impl::createRenderFinishedSemaphores() {
@@ -1381,29 +1340,11 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 // The Sky's bake, when refreshEnvTextureFromScene marked one:
                 // mip 0 and the prefiltered mips of the env image, rewritten
                 // in place ahead of every pass of this frame that samples it
-                // (the secondaries ride the same submission). Under the
-                // async-compute pilot the compute buffer's readers are
-                // ordered behind this by the pilot's own queue sync.
+                // (the secondaries ride the same submission).
                 if (envIsSky && skyBakePending_) {
                     THREEPP_CPUPROF("frame.3b_skyBake");
                     skyBake_->record(cmdBuffers[currentFrame], skyBaked_, envSunExtractionWanted());
                     skyBakePending_ = false;
-                }
-                // The async-compute pilot takes full frames only: the hybrid
-                // debug view and events-only frames build no shade to overlap.
-                const bool gbufOnlyFrame = rasterGbufIndirectPipeline != VK_NULL_HANDLE &&
-                                           (hybridDebugView_ != HybridDebugView::Off ||
-                                            (eventsOnlyMode_ && eventCamEnabled_));
-                asyncFrame_ = asyncPilot_ && !gbufOnlyFrame;
-                if (asyncFrame_) {
-                    VkCommandBufferBeginInfo bi{};
-                    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-                    for (VkCommandBuffer c : {asyncGbufCmdBuffers_[currentFrame], asyncTailCmdBuffers_[currentFrame],
-                                              computeCmdBuffers_[currentFrame]}) {
-                        vkResetCommandBuffer(c, 0);
-                        check(vkBeginCommandBuffer(c, &bi), "vkBeginCommandBuffer (async pilot)");
-                    }
-                    computeGraph_.reset();
                 }
                 // (2026-09-06: a global ALL_COMMANDS barrier here, ordering
                 // each frame after everything the queue held, was tried against
@@ -1475,32 +1416,11 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             {
                 THREEPP_CPUPROF("frame.J_record");
                 THREEPP_CPUPROF("frame.J2_execute");// detail row: the recording alone
-                if (asyncFrame_) {
-                    const VkCommandBuffer cbs[3] = {cmdBuffers[currentFrame], asyncGbufCmdBuffers_[currentFrame],
-                                                    asyncTailCmdBuffers_[currentFrame]};
-                    executeGraph(cbs, asyncSplits_, 2, g, "frame");
-                } else {
-                    executeGraph(cmdBuffers[currentFrame], g, "frame");
-                }
+                executeGraph(cmdBuffers[currentFrame], g, "frame");
             }
             // Leave the primary's state standing for what follows the graph
             // (the overlay below, HUD render() calls, readbacks).
             applyViewRecordState(viewRecordStates_[0]);
-            if (asyncFrame_) {
-                // The compute queue's share, recorded with the primary's state
-                // standing (its passes are the primary's; GpuTimings unsilenced,
-                // so TP_OceanBlas / TP_TlasRefit / TP_ProbeGI / TP_Froxel are
-                // written from this queue: graphics 1 reset the pool before S1).
-                // Graphics 1, graphics 2 and the compute buffer are complete;
-                // graphics 3 stays open for the overlay and endFrame.
-                {
-                    THREEPP_CPUPROF("frame.J_record");
-                    executeGraph(computeCmdBuffers_[currentFrame], computeGraph_, "compute");
-                }
-                check(vkEndCommandBuffer(cmdBuffers[currentFrame]), "vkEndCommandBuffer (graphics 1)");
-                check(vkEndCommandBuffer(asyncGbufCmdBuffers_[currentFrame]), "vkEndCommandBuffer (graphics 2)");
-                check(vkEndCommandBuffer(computeCmdBuffers_[currentFrame]), "vkEndCommandBuffer (compute)");
-            }
             // The same key again: the registry sums a name across call sites.
             THREEPP_CPUPROF("frame.4_recordTail");
 
@@ -1718,61 +1638,7 @@ void VulkanRenderer::Impl::endFrame() {
             // Separate from present, deliberately: a submit that stalls means
             // driver-side command translation, a present that stalls means the
             // compositor. Different diagnoses, so different keys.
-            if (asyncFrame_) {
-                // The async-compute pilot (see computeGraph_): graphics 1 takes
-                // the acquire wait (the graph's entry barrier, where the
-                // swapchain's first transition sits, is in it) and signals S1;
-                // graphics 2 follows with no wait; the compute submit waits S1
-                // and signals S2; graphics 3 waits S2 and carries the
-                // renderFinished signal and the inFlight fence, which therefore
-                // also covers the compute work.
-                THREEPP_CPUPROF("frame.K2_submit");
-                VkSemaphoreSubmitInfo s1{};
-                s1.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-                s1.semaphore = asyncHeadDone_[currentFrame];
-                s1.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                VkSemaphoreSubmitInfo s2 = s1;
-                s2.semaphore = asyncComputeDone_[currentFrame];
-                VkCommandBufferSubmitInfo cbs[4]{};
-                const VkCommandBuffer bufs[4] = {cmdBuffers[currentFrame], asyncGbufCmdBuffers_[currentFrame],
-                                                 computeCmdBuffers_[currentFrame], cb};
-                for (int i = 0; i < 4; ++i) {
-                    cbs[i].sType         = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-                    cbs[i].commandBuffer = bufs[i];
-                }
-                VkSubmitInfo2 g12[2]{};
-                g12[0].sType                    = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-                g12[0].waitSemaphoreInfoCount   = submit.waitSemaphoreInfoCount;
-                g12[0].pWaitSemaphoreInfos      = &waitInfo;
-                g12[0].commandBufferInfoCount   = 1;
-                g12[0].pCommandBufferInfos      = &cbs[0];
-                g12[0].signalSemaphoreInfoCount = 1;
-                g12[0].pSignalSemaphoreInfos    = &s1;
-                g12[1].sType                    = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-                g12[1].commandBufferInfoCount   = 1;
-                g12[1].pCommandBufferInfos      = &cbs[1];
-                // =5 (diagnostic): =4's three graphics command buffers alone, the
-                // empty compute buffer never submitted and no semaphore.
-                const bool computeSubmit = vulkan::VulkanContext::asyncComputePilotMode() != 5;
-                if (!computeSubmit) g12[0].signalSemaphoreInfoCount = 0;
-                check(vkQueueSubmit2(ctx->graphicsQueue(), 2, g12, VK_NULL_HANDLE), "vkQueueSubmit2 (graphics 1+2)");
-                VkSubmitInfo2 c{};
-                c.sType                    = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-                c.waitSemaphoreInfoCount   = 1;
-                c.pWaitSemaphoreInfos      = &s1;
-                c.commandBufferInfoCount   = 1;
-                c.pCommandBufferInfos      = &cbs[2];
-                c.signalSemaphoreInfoCount = 1;
-                c.pSignalSemaphoreInfos    = &s2;
-                if (computeSubmit)
-                    check(vkQueueSubmit2(ctx->computeQueue(), 1, &c, VK_NULL_HANDLE), "vkQueueSubmit2 (compute)");
-                submit.waitSemaphoreInfoCount = computeSubmit ? 1u : 0u;
-                submit.pWaitSemaphoreInfos    = &s2;
-                submit.pCommandBufferInfos    = &cbs[3];
-                check(vkQueueSubmit2(ctx->graphicsQueue(), 1, &submit, inFlight[currentFrame]),
-                      "vkQueueSubmit2 (graphics 3)");
-                asyncFrame_ = false;
-            } else {
+            {
                 THREEPP_CPUPROF("frame.K2_submit");
                 check(vkQueueSubmit2(ctx->graphicsQueue(), 1, &submit, inFlight[currentFrame]),
                       "vkQueueSubmit2");

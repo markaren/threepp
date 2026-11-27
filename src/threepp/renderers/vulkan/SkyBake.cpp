@@ -104,7 +104,6 @@ namespace threepp::vulkan {
         ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
         ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-        applyConcurrentSharing(ici);
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;

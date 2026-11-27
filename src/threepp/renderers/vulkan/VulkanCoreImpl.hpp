@@ -317,9 +317,9 @@ namespace threepp {
     //                             balance, and auto exposure
     //   ShadowState.hpp           shadow maps: the distance, the dummy bindings, the static-caster
     //                             cache, the shadow pipelines and the sun and lamp slot assignments
-    //   RenderGraphState.hpp      recording: the frame and compute render graphs, the async-compute
-    //                             pilot, the per-view record states, CPU-parallel recording (record-
-    //                             apart buffers, the secondary views' prep) and the graph diagnostics
+    //   RenderGraphState.hpp      recording: the frame render graph, the per-view record states,
+    //                             CPU-parallel recording (record-apart buffers, the secondary views'
+    //                             prep) and the graph diagnostics
     struct VulkanRenderer::Impl : vulkan::impl::CoreState,
                                   vulkan::impl::GeometryState,
                                   vulkan::impl::TlasState,
@@ -2179,8 +2179,7 @@ namespace threepp {
         void recordDisplacedDeform(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed = false);
         // Its two halves, which recordDisplacedDeform runs back to back: the
         // update (FFT, displace, foam, wake, readback copies) and the BLAS
-        // rebuild over the displaced vertices. The async-compute pilot records
-        // them into different command buffers on different queues.
+        // rebuild over the displaced vertices.
         void recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds, bool timed);
         // The patch mesh's frame (DisplacedMesh::Lod): selects the patches,
         // assigns the slots, uploads the table; returns its device address.
@@ -3935,11 +3934,7 @@ namespace threepp {
         // approximate diffuse IBL + ray-query accents). Adds its passes to
         // the frame graph between the G-buffer/AS head and the splats + post
         // tail (recordCommandBuffer); defined in VulkanRenderer.cpp.
-        // The async-compute pilot builds it in two calls: AsyncOnly (probeGI,
-        // clusterBuild, cloudShadow, froxels, into computeGraph_) and
-        // SkipAsync (everything else, into the frame graph).
-        enum class DispatchPart { All, AsyncOnly, SkipAsync };
-        void addSceneDispatchPasses(vulkan::rg::RenderGraph& g, DispatchPart part = DispatchPart::All);
+        void addSceneDispatchPasses(vulkan::rg::RenderGraph& g);
 
         // Called once after bloom_->createImages(); wires sceneHdr views.
         void onAfterBloomCreateImages() {
@@ -4165,10 +4160,7 @@ namespace threepp {
 
         // The command buffer this frame's recording continues in after the
         // graph (overlay, HUD render() calls, the present transition).
-        VkCommandBuffer frameCb() const {
-            return asyncFrame_ ? asyncTailCmdBuffers_[currentFrame] : cmdBuffers[currentFrame];
-        }
-        void destroyAsyncPilotResources();
+        VkCommandBuffer frameCb() const { return cmdBuffers[currentFrame]; }
 
         void saveViewRecordState(ViewRecordState& s);
         // Also silences the GPU timestamps for a secondary view: one query
@@ -4190,18 +4182,11 @@ namespace threepp {
         // barriers to stderr whenever they differ from what was last printed
         // under the same name (a pass appearing, a layout changing).
         void executeGraph(VkCommandBuffer cb, vulkan::rg::RenderGraph& graph, const char* name) {
-            executeGraph(&cb, nullptr, 0, graph, name);
-        }
-        // The same over consecutive command buffers of one queue
-        // (RenderGraph::execute with splits; the async-compute pilot).
-        void executeGraph(const VkCommandBuffer* cbs, const uint32_t* splits, uint32_t splitCount,
-                          vulkan::rg::RenderGraph& graph, const char* name) {
             // Which imported images share memory (TransientPool); the graph
             // orders the hand-over between them and checks their lifetimes.
             if (transientPool_) transientPool_->declare(graph);
             if (gbufMsPool_) gbufMsPool_->declare(graph);
-            if (splitCount == 0) graph.execute(cbs[0]);
-            else graph.execute(cbs, splits, splitCount);
+            graph.execute(cb);
             // Diagnostics (two-layout declarations, overlapping aliases): every
             // occurrence is counted, each distinct message printed and kept once.
             for (auto& e : graph.diagnostics()) {

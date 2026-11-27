@@ -4193,7 +4193,7 @@ void VulkanRenderer::Impl::refitTlasInPlace(SceneBuildFrame& sb) {
                 // Stage 5: instanced spans whose instances tlas_gen.comp
                 // appends after these (the expansion's world matrices).
                 const bool tlasGenOn = gpuTlasGen_ && gpuInstanceExpand_ && tlasGen_ && instExpand_ &&
-                                       ctx->rayQuerySupported() && !asyncPilot_;
+                                       ctx->rayQuerySupported();
                 // THREEPP_VK_TLAS_FILL_INPLACE=0: every fill from empty (A/B).
                 static const bool tlasFillInPlaceOn = vulkan::env::flag("THREEPP_VK_TLAS_FILL_INPLACE", true);
                 if (tlasRowDirty_.size() != (entries.size() + 31u) / 32u) {

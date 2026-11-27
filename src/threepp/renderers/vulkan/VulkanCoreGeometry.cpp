@@ -4127,8 +4127,6 @@ void VulkanRenderer::Impl::recordDisplacedUpdate(VkCommandBuffer cb, DisplacedMe
 void VulkanRenderer::Impl::recordDisplacedBlasRebuild(VkCommandBuffer cb, DisplacedMesh& dm, DisplacedMeshState& st, bool timed) {
             if (!ctx->rayQuerySupported()) return;// no BLAS to rebuild
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
-            // (Under the async-compute pilot the write was on the graphics queue
-            // and S1 is what orders it; the barrier then orders nothing.)
             VkBufferMemoryBarrier bbs[2]{};
             bbs[0].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
             bbs[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

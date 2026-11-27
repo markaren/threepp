@@ -62,7 +62,7 @@ namespace threepp {
                g0.rrDiffuseAlbedo.height == regionRenderExt_.height;
     }
 
-    void VulkanRenderer::Impl::addSceneDispatchPasses(vulkan::rg::RenderGraph& g, DispatchPart part) {
+    void VulkanRenderer::Impl::addSceneDispatchPasses(vulkan::rg::RenderGraph& g) {
         namespace rg = vulkan::rg;
         using Stage  = vulkan::DeferredShade::Stage;
         const uint32_t f = currentFrame;
@@ -72,16 +72,13 @@ namespace threepp {
         // descriptor-derived imports below don't pick its layout.
         g.importImage("sceneHdr", view().bloom_->sceneHdrImage(f), VK_IMAGE_ASPECT_COLOR_BIT, 1,
                       VK_IMAGE_LAYOUT_GENERAL);
-        // The async-compute pilot's split (DispatchPart): the four passes up
-        // to the froxels need no G-buffer, everything from cloudMarch on does.
-        const bool asyncPart = part != DispatchPart::SkipAsync;
 
         // ── Probe-GI update (on by default, setProbeGI) ─────────────────
         // Refresh a round-robin window of world-space irradiance probes
         // BEFORE the shade so this frame's gather taps a current grid. The
         // grid UBO is re-uploaded every frame — its `enabled` flag is what the
         // shader-side sampling gates on.
-        if (probeGI_ && asyncPart) {
+        if (probeGI_) {
             // The UBO write is per view on purpose: it targets the
             // frame-in-flight slot every view of this frame shares, and the
             // content is identical, so it is idempotent — writing it once per
@@ -140,7 +137,7 @@ namespace threepp {
         // refit (its rays traverse it) and the probe update, in the primary's
         // segment only: it reads the primary camera and writes nothing the
         // frame shows. The accumulator follows the render extent.
-        if (pathTracer_ && pathTracer_->active() && asyncPart && !view().secondary) {
+        if (pathTracer_ && pathTracer_->active() && !view().secondary) {
             // Photons for the emitters' caustics: a scene with emitters and a
             // transmissive material in use (a dielectric to the paths); and
             // for the sun's through the waves: a scene with an ocean (its fine
@@ -242,7 +239,7 @@ namespace threepp {
         const bool shadeBActive = viewMsaaSamples > 1 && gbufShadeBEnabled_;
         // Clustered light culling: per-cell light lists for the shade's
         // analytic split (all point/spot lights, no 8-per-type cap).
-        if (clusterLightCountThisFrame_ > 0 && asyncPart) {
+        if (clusterLightCountThisFrame_ > 0) {
             auto pass = g.addPass("clusterBuild", [this, f](VkCommandBuffer c) {
                 view().deferredShade_->recordClusterBuild(c, f, clusterLightCountThisFrame_,
                                                           regionRenderExt_.width, regionRenderExt_.height);
@@ -253,7 +250,7 @@ namespace threepp {
         // frame, sampled by the surface/froxel/water sun terms below (moving
         // cloud shadows on the ground). Only when clouds are on (off = free /
         // image-identical).
-        if (cloudsEnabled_ && asyncPart) {
+        if (cloudsEnabled_) {
             auto pass = g.addPass("cloudShadow", [this, f](VkCommandBuffer c) {
                 view().deferredShade_->recordCloudShadow(c, f, sampleIndex);
             });
@@ -291,7 +288,7 @@ namespace threepp {
         const bool froxelsActive = ((mediumActiveThisFrame_ || deferredVolDensity_ > 0.f) &&
                                     clusterLightCountThisFrame_ > 0) ||
                                    densityActive;
-        if (froxelsActive && asyncPart) {
+        if (froxelsActive) {
             // Read now: the flag is consumed (cleared) further down this
             // function, before the graph runs the pass.
             const bool historyStale = view().shadeHistoryStale;
@@ -306,7 +303,6 @@ namespace threepp {
             });
             shade.declare(g, pass, Stage::Froxels, f);
         }
-        if (part == DispatchPart::AsyncOnly) return;
         // Half-res volumetric cloud march (cloud_march.comp): raymarch the
         // cloud deck + temporally reproject at half res, off the per-pixel
         // shade critical path. Only when clouds are enabled (off = free /

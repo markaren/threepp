@@ -63,11 +63,6 @@ namespace threepp::vulkan {
     }
 
     namespace {
-        // Process-wide, like the device: set once by VulkanContext under the
-        // async-compute pilot, before any resource exists.
-        uint32_t gConcurrentFamilies[2] = {0, 0};
-        bool     gConcurrent = false;
-
         // The live-buffer registry behind forEachLiveBuffer (memory dump only).
         bool registryOn() {
             static const bool on = env::flag("THREEPP_VK_MEMDUMP");
@@ -95,31 +90,6 @@ namespace threepp::vulkan {
         for (const auto& [a, site] : registry()) fn(a, site);
     }
 
-    void setConcurrentSharingFamilies(uint32_t a, uint32_t b) {
-        gConcurrentFamilies[0] = a;
-        gConcurrentFamilies[1] = b;
-        gConcurrent = a != b;
-    }
-
-    void applyConcurrentSharing(VkBufferCreateInfo& info) {
-        if (!gConcurrent) return;
-        info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        info.queueFamilyIndexCount = 2;
-        info.pQueueFamilyIndices   = gConcurrentFamilies;
-    }
-
-    void applyConcurrentSharing(VkImageCreateInfo& info) {
-        // Render targets stay EXCLUSIVE: no pilot pass touches one, and a
-        // CONCURRENT attachment may lose its compression, which would charge
-        // the knob for a cost the queue split does not have.
-        constexpr VkImageUsageFlags kAttachment =
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        if (!gConcurrent || (info.usage & kAttachment)) return;
-        info.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        info.queueFamilyIndexCount = 2;
-        info.pQueueFamilyIndices   = gConcurrentFamilies;
-    }
-
     Buffer createBuffer(VmaAllocator alloc, VkDevice device,
                         VkDeviceSize size, VkBufferUsageFlags usage,
                         VmaMemoryUsage memoryUsage,
@@ -133,7 +103,6 @@ namespace threepp::vulkan {
         bci.size = size;
         bci.usage = usage;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        applyConcurrentSharing(bci);
 
         VmaAllocationCreateInfo aci{};
         aci.usage = memoryUsage;
@@ -171,7 +140,6 @@ namespace threepp::vulkan {
         bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        applyConcurrentSharing(bci);
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         check(vmaCreateBufferWithAlignment(alloc, &bci, &aci,

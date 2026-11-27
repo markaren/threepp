@@ -37,7 +37,6 @@ namespace threepp::vulkan {
         ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        applyConcurrentSharing(ici);
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         check(createImageMaybePooled(ctx.allocator(), pool, span, slots, ici, &a.image, &a.alloc),
               "vmaCreateImage(shadow map)");

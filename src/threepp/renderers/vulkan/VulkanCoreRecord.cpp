@@ -164,25 +164,10 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
             // shade samples the fine cascade's height and the foam accumulator
             // through its descriptors, so those are declared as images.
             if (!pendingDisplacedDeforms_.empty() && waterDisplace_) {
-                // The async-compute pilot (=1) moves the BLAS rebuild to the
-                // compute queue; the update stays here, ahead of the G-buffer
-                // that rasters the displaced vertices.
-                const bool async = asyncFrame_ && asyncMoveAs_;
-                if (async) {
-                    auto blas = computeGraph_.addPass("deform.waterBlas", [this, list = pendingDisplacedDeforms_](VkCommandBuffer c) {
-                        bool timed = true;
-                        for (auto& [dmPtr, stPtr, tsec] : list) {
-                            recordDisplacedBlasRebuild(c, *dmPtr, *stPtr, timed);
-                            timed = false;
-                        }
-                    });
-                    blas.use(computeGraph_.importMemory(kSceneGeometry), deform);
-                }
-                auto pass = g.addPass("deform.water", [this, async](VkCommandBuffer c) {
+                auto pass = g.addPass("deform.water", [this](VkCommandBuffer c) {
                     bool timed = true;// TP_Ocean* slots: first displaced mesh only
                     for (auto& [dmPtr, stPtr, tsec] : pendingDisplacedDeforms_) {
-                        if (async) recordDisplacedUpdate(c, *dmPtr, *stPtr, tsec, timed);
-                        else recordDisplacedDeform(c, *dmPtr, *stPtr, tsec, timed);
+                        recordDisplacedDeform(c, *dmPtr, *stPtr, tsec, timed);
                         timed = false;
                     }
                     pendingDisplacedDeforms_.clear();
@@ -247,25 +232,23 @@ void VulkanRenderer::Impl::addDeformAndTlasPasses(rg::RenderGraph& g) {
             // — declare the TLAS through their descriptor sets.
             if (!ctx->rayQuerySupported()) pendingTlasRefit_ = false;// no TLAS
             if (pendingTlasRefit_) {
-                // On the compute queue under the async-compute pilot (=1 only).
-                rg::RenderGraph& tg = asyncFrame_ && asyncMoveAs_ ? computeGraph_ : g;
-                auto pass = tg.addPass("tlas", [this](VkCommandBuffer c) {
+                auto pass = g.addPass("tlas", [this](VkCommandBuffer c) {
                     gpuTimings_->begin(c, vulkan::TP_TlasRefit, currentFrame);
                     recordTlasRefit(c, pendingTlasInstances_, pendingTlasFullBuild_);
                     gpuTimings_->end(c, vulkan::TP_TlasRefit, currentFrame);
                     pendingTlasRefit_ = false;
                 });
-                pass.use(tg.importMemory(kSceneGeometry),
+                pass.use(g.importMemory(kSceneGeometry),
                          rg::Access{ctx->asBuildStage2(),
                                     ctx->asReadAccess2(),
                                     VK_IMAGE_LAYOUT_UNDEFINED, false});
                 // The instance buffer, when tlas_gen.comp wrote part of it.
                 if (tlasGenActive_) {
-                    pass.use(tg.importBuffer("tlas.instances", tlasInstancesBuffers[currentFrame].handle),
+                    pass.use(g.importBuffer("tlas.instances", tlasInstancesBuffers[currentFrame].handle),
                              rg::Access{ctx->asBuildStage2(), VK_ACCESS_2_SHADER_READ_BIT | ctx->asReadAccess2(),
                                         VK_IMAGE_LAYOUT_UNDEFINED, false});
                 }
-                pass.use(tg.importBuffer("tlas", tlasBuffer.handle),
+                pass.use(g.importBuffer("tlas", tlasBuffer.handle),
                          rg::Access{ctx->asBuildStage2(),
                                     ctx->asReadAccess2() |
                                             ctx->asWriteAccess2(),
@@ -3960,21 +3943,10 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             // prepass).
             addHeadPasses(g);
             addDeformAndTlasPasses(g);
-            if (asyncFrame_) {
-                // The async-compute pilot: the shade's G-buffer-free inputs go
-                // to computeGraph_ (it already holds the ocean BLAS rebuild and
-                // the TLAS refit), "async.join" stands in for all of it at the
-                // end of graphics 1, and the G-buffer passes are graphics 2.
-                if (asyncMoveDispatch_) addSceneDispatchPasses(computeGraph_, DispatchPart::AsyncOnly);
-                auto join = g.addPass("async.join", nullptr);
-                computeGraph_.declareAsPass(g, join);
-                asyncSplits_[0] = static_cast<uint32_t>(g.passCount());
-            }
             addGbufferPasses(g);
             // The water's mirror view's G-buffer (no ray query), ahead of the
             // shade that marches it.
             addWaterMirrorPasses(g);
-            if (asyncFrame_) asyncSplits_[1] = static_cast<uint32_t>(g.passCount());
 
             // Hybrid debug view: the chosen G-buffer channel is resolved
             // straight to the swapchain and the primary's frame is finished.
@@ -4037,7 +4009,7 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             // field billboards' transmittance and glow, the hybrid overlay and
             // the lens/sensor stage (addTailPasses).
             (void) setIdx;
-            addSceneDispatchPasses(g, asyncFrame_ && asyncMoveDispatch_ ? DispatchPart::SkipAsync : DispatchPart::All);
+            addSceneDispatchPasses(g);
             addSplatPasses(g);
             addUpscaleAndPostPasses(g, imageIndex, ext, ptExt, exposureBits, preExp);
             addTailPasses(g, imageIndex);

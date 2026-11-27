@@ -662,15 +662,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
             THREEPP_CPUPROF_NAMED(seSubmit, "scene.S3c_slotSubmit");
             // No host wait: the frame recorded next is submitted after this
             // batch on the same queue, and its graph's entry barrier orders it.
-            // Under the async-compute pilot the TLAS builds on another queue,
-            // outside that order: there the batch is waited for, as before.
-            if (asyncPilot_) {
-                flushOneShotBatch();
-                std::vector<VkAccelerationStructureInstanceKHR> none;
-                applyBlasCompactionRemap(none);// compacted records were in no TLAS yet
-            } else {
-                flushOneShotBatchAsync();
-            }
+            flushOneShotBatchAsync();
             seSubmit.stop();
             const bool texturesAdded = materialTextures.size() != texCount0 || freeTextureSlots.size() != texFree0;
             for (auto& [mesh, r] : meshRows) r.rec = recordOf(*r.proto);
@@ -1022,13 +1014,7 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
                 rows[b].fp = slotFingerprintOf(m);
                 rows[b].stableId = stableIdIfAssigned(m);
             }
-            if (asyncPilot_) {
-                flushOneShotBatch();
-                std::vector<VkAccelerationStructureInstanceKHR> none;
-                applyBlasCompactionRemap(none);
-            } else {
-                flushOneShotBatchAsync();
-            }
+            flushOneShotBatchAsync();
             const bool texturesAdded = materialTextures.size() != texCount0 || freeTextureSlots.size() != texFree0;
 
             dAssets.stop();
@@ -1556,14 +1542,8 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
             if (batch) {
                 THREEPP_CPUPROF("scene.E4_admitFlush");
                 // As the slot edit's batch: ahead of this frame on the queue,
-                // never waited for (the async-compute pilot waits).
-                if (asyncPilot_) {
-                    flushOneShotBatch();
-                    std::vector<VkAccelerationStructureInstanceKHR> none;
-                    applyBlasCompactionRemap(none);
-                } else {
-                    flushOneShotBatchAsync();
-                }
+                // never waited for.
+                flushOneShotBatchAsync();
             }
             admitPendingSpans_ = pending;
             if (landed == 0u) return;

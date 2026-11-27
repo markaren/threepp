@@ -249,10 +249,7 @@ void VulkanRenderer::Impl::refreshDirtyMaterialTextures() {
                                 : 0u;
                 kv.second.version = sp->version();
             }
-            if (ownBatch) {
-                if (asyncPilot_) flushOneShotBatch();// the async-compute pilot waits, as the slot path does
-                else flushOneShotBatchAsync();
-            }
+            if (ownBatch) flushOneShotBatchAsync();
             // The bindless material array is referenced by the deferred-compute
             // set (binding 11) and the gbuffer raster set (binding 3). Neither
             // can be rewritten in place while in flight (no update-after-bind on
@@ -1126,7 +1123,6 @@ Image2D VulkanRenderer::Impl::buildSampledImageLevels(VkCommandBuffer cb,
             ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
             ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            vulkan::applyConcurrentSharing(ici);
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
             VmaAllocationCreateInfo aci{};
@@ -1277,7 +1273,6 @@ Image2D VulkanRenderer::Impl::buildSampledImage2D(VkCommandBuffer cb,
             ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
                               | (mipLevels > 1u ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u);
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            vulkan::applyConcurrentSharing(ici);
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
             VmaAllocationCreateInfo aci{};
@@ -1497,7 +1492,6 @@ Image2D VulkanRenderer::Impl::createStorageImage2D(uint32_t w, uint32_t h, VkFor
             ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | extraUsage;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            vulkan::applyConcurrentSharing(ici);
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
             VmaAllocationCreateInfo aci{};
@@ -1566,7 +1560,6 @@ Image2D VulkanRenderer::Impl::createAttachmentImage2D(uint32_t w, uint32_t h, Vk
             ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
             ici.usage         = usage;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            vulkan::applyConcurrentSharing(ici);
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
             check(vulkan::createImageMaybePooled(ctx->allocator(), pool, poolSpan, poolSlots, ici, &out.image,
@@ -1609,7 +1602,6 @@ Image2D VulkanRenderer::Impl::createImage3D(uint32_t w, uint32_t h, uint32_t dep
             ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
             ici.usage         = usage;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            vulkan::applyConcurrentSharing(ici);
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
             check(vulkan::createImageMaybePooled(ctx->allocator(), pool, poolSpan, poolSlots, ici, &out.image,

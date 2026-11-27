@@ -43,16 +43,6 @@ namespace threepp::vulkan {
     // file's own). Registers the view for the render graph's descriptor shadow.
     VkResult createImageView(VkDevice device, const VkImageViewCreateInfo* info,
                              const VkAllocationCallbacks* allocator, VkImageView* view);
-    // Same header: the async-compute pilot's CONCURRENT sharing switch.
-    void setConcurrentSharingFamilies(uint32_t a, uint32_t b);
-
-    int VulkanContext::asyncComputePilotMode() {
-        static const int mode = [] {
-            const long long n = env::integer("THREEPP_VK_ASYNC_PILOT").value_or(0);
-            return (n >= 1 && n <= 5) ? static_cast<int>(n) : 0;
-        }();
-        return mode;
-    }
 
 #if defined(THREEPP_WITH_DLSS)
     // Defined in DlssUpscaler.cpp (free function so this TU doesn't pull in
@@ -981,9 +971,6 @@ namespace threepp::vulkan {
             if ((q.queueFlags & VK_QUEUE_GRAPHICS_BIT) && queueFamilies_.graphics == UINT32_MAX) {
                 queueFamilies_.graphics = i;
             }
-            if ((q.queueFlags & VK_QUEUE_COMPUTE_BIT) && queueFamilies_.compute == UINT32_MAX) {
-                queueFamilies_.compute = i;
-            }
             VkBool32 presentSupport = VK_FALSE;
             if (!surfaceless_) {
                 vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice_, i, surface_, &presentSupport);
@@ -1005,38 +992,12 @@ namespace threepp::vulkan {
         if (queueFamilies_.graphics == UINT32_MAX || queueFamilies_.present == UINT32_MAX) {
             throw std::runtime_error("[VulkanContext] required queue families not present on GPU");
         }
-        // The async-compute pilot (THREEPP_VK_ASYNC_PILOT=1) wants a queue the
-        // graphics queue does not serialise against: a family with COMPUTE and
-        // without GRAPHICS (NVIDIA exposes one). Without the knob, or on a
-        // device with no such family (lavapipe), the choice above stands and
-        // computeQueue() is the graphics queue. Under the knob every buffer and
-        // image the central helpers create is CONCURRENT over the two families,
-        // so the pilot needs no ownership transfers.
-        if (asyncComputePilotRequested()) {
-            for (uint32_t i = 0; i < qn; ++i) {
-                const auto f = qprops[i].queueFlags;
-                if ((f & VK_QUEUE_COMPUTE_BIT) && !(f & VK_QUEUE_GRAPHICS_BIT)) {
-                    queueFamilies_.compute = i;
-                    break;
-                }
-            }
-            if (queueFamilies_.compute != queueFamilies_.graphics && queueFamilies_.compute != UINT32_MAX) {
-                setConcurrentSharingFamilies(queueFamilies_.graphics, queueFamilies_.compute);
-            }
-            THREEPP_LOG(kLogDevice, Info) << "async compute pilot " << asyncComputePilotMode()
-                                          << ": compute family " << queueFamilies_.compute << ", graphics family "
-                                          << queueFamilies_.graphics
-                                          << (asyncComputeQueue()            ? " (separate queue)"
-                                              : asyncComputePilotMode() == 2 ? " (control: CONCURRENT resources, one queue)"
-                                                                             : " (same queue: the pilot is off)");
-        }
     }
 
     void VulkanContext::createLogicalDevice() {
         const float prio = 1.0f;
         std::set<uint32_t> uniqueFams{queueFamilies_.graphics,
-                                     queueFamilies_.present,
-                                     queueFamilies_.compute};
+                                     queueFamilies_.present};
         std::vector<VkDeviceQueueCreateInfo> qcis;
         for (uint32_t fam : uniqueFams) {
             if (fam == UINT32_MAX) continue;
@@ -1309,11 +1270,6 @@ namespace threepp::vulkan {
 
         vkGetDeviceQueue(device_, queueFamilies_.graphics, 0, &graphicsQueue_);
         vkGetDeviceQueue(device_, queueFamilies_.present, 0, &presentQueue_);
-        if (queueFamilies_.compute != UINT32_MAX) {
-            vkGetDeviceQueue(device_, queueFamilies_.compute, 0, &computeQueue_);
-        } else {
-            computeQueue_ = graphicsQueue_;
-        }
 
         // EXT_debug_utils object-name function — loaded once for the whole
         // app, used by setObjectName helpers. Null when the extension isn't
