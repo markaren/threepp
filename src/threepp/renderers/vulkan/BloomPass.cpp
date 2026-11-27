@@ -308,13 +308,19 @@ namespace threepp::vulkan {
                                   float bloomClamp) {
         if (bloomIntensity <= 0.0f) return;
 
+        // Between levels: bloom_down and bloom_up read the level written just
+        // before through a sampler2D, which synchronization2 counts as
+        // SHADER_SAMPLED_READ, not SHADER_STORAGE_READ, so both are in the
+        // destination scope (bloom_up also reads and writes its own level as
+        // a storage image).
         auto barrier = [&]() {
             VkMemoryBarrier2 mb{};
             mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
             mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+            mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                               VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             VkDependencyInfo di{};
             di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;

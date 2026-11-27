@@ -648,10 +648,14 @@ namespace threepp::vulkan {
             di.pMemoryBarriers    = &mb;
             vkCmdPipelineBarrier2(cb, &di);
         };
+        // Between levels: the next dispatch reads this level through a
+        // sampler2D (SHADER_SAMPLED_READ in synchronization2, not
+        // SHADER_STORAGE_READ), as BloomPass's pyramid does.
         auto computeBarrier = [&] {
             barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         };
 
         // The billboard draw wrote `src` as a COLOUR ATTACHMENT; make it visible
