@@ -5,6 +5,7 @@
 #include "threepp/renderers/Renderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/utils/ImageUtils.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #ifdef THREEPP_WITH_VULKAN
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -159,7 +160,8 @@ bool CameraSensor::writeImage(const std::filesystem::path& file) const {
 
     const auto w = static_cast<int>(width_);
     const auto h = static_cast<int>(height_);
-    const auto ext = file.extension().string();
+    // Lower-cased, as the renderers' own writers do: "shot.PNG" is a PNG.
+    const auto ext = utils::toLower(file.extension().string());
     const std::string path = file.string();// must outlive the c_str() below
 
     if (ext == ".png") {
