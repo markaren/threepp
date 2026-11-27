@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
     }
 
     // Gentle sun — the HDR already carries one (env CDF + MIS importance-sample
-    // it); this mostly drives the photon-mapped caustics on the sand floor.
+    // it); this mostly drives the caustics on the sand floor.
     auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 2.0f);
     sun->position.set(2.f, 1.f, 2.f);
     Object3D sunTarget;

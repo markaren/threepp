@@ -1,7 +1,7 @@
 # Consuming threepp from a package manager
 
 `threepp` is primarily a CMake package, and [CMake `FetchContent` is the recommended
-way to consume it](../README.md#cmake-fetchcontent-recommended) — it is the path the
+way to consume it](../README.md#using-threepp-in-your-project) — it is the path the
 project itself tests, and it lets you point at any tag, branch or commit.
 
 This page covers the two package-manager routes instead. Both go through
@@ -68,5 +68,5 @@ set_languages("c++20")
 The Conan package builds the library. The optional halves that need an external SDK or a
 build-time choice are not part of it — the Vulkan renderer, PhysX physics, the USD
 loader, the Python bindings, and the editor and player applications. Those need a CMake
-build of the repository; see [How to build](../README.md#how-to-build) and the preset table
+build of the repository; see [Building](../README.md#building) and the preset table
 there.

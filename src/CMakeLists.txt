@@ -1268,7 +1268,7 @@ if (THREEPP_WITH_VULKAN)
     # Fast deterministic shading for the event-camera pipeline. Reads the
     # raster G-buffer + material/light buffers, outputs a packed BGRA8
     # luma buffer matching the swapchain layout — feeds event_detect
-    # without the path tracer's stochastic noise.
+    # without the deferred shade's stochastic noise.
     compile_vulkan_shader(threepp "${_vk_shaders}/event_shade.comp" kEventShadeCompSpv)
     # Debug-view resolve: samples one G-buffer channel and writes a readable
     # visualization to the swapchain (setHybridDebugView). Replaces a raw blit
@@ -1469,16 +1469,16 @@ if (THREEPP_WITH_VULKAN)
     # buffer, the GPU stand-in for the CPU scan that guards every other BLAS
     # build (the host array is stale under interop). See VertexSanitizePipeline.
     compile_vulkan_shader(threepp "${_vk_shaders}/vertex_sanitize.comp" kVertexSanitizeCompSpv)
-    # Hybrid raster G-buffer prepass — produces depth/normal/motion/IDs
-    # for the path tracer to skip its primary BVH trace. See raygen.rgen
-    # for the consumer side.
+    # Raster G-buffer fragment stage — depth/normal/motion/IDs and the
+    # material channels the deferred shade (deferred_shade.comp) starts
+    # from instead of a primary ray.
     compile_vulkan_shader(threepp "${_vk_shaders}/gbuffer.frag" kGbufferFragSpv)
     # Indirect-drawing variant of the G-buffer vertex shader. Reads per-mesh
     # data (model matrix, attribute buffer device addresses, flags) from an
     # SSBO indexed by gl_DrawIDEXT, fetches vertices via buffer references —
     # lets the whole gbuf pass ship as 1-3 vkCmdDrawIndirect calls instead
-    # of N vkCmdDrawIndexed calls. Path B of the perf work; see
-    # recordRasterGbufPass for the dispatch side.
+    # of N vkCmdDrawIndexed calls; see recordRasterGbufPass for the
+    # dispatch side.
     compile_vulkan_shader(threepp "${_vk_shaders}/gbuffer_indirect.vert" kGbufferIndirectVertSpv)
     # ParticleField mesh representation: a SIBLING of gbuffer_indirect.vert
     # over the same render pass and the same fragment stage. It is separate
@@ -1555,7 +1555,7 @@ if (THREEPP_WITH_VULKAN)
     # image). See GbufResolve.{hpp,cpp}.
     compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve.comp" kGbufResolveCompSpv)
     compile_vulkan_shader(threepp "${_vk_shaders}/gbuf_resolve_depth.frag" kGbufResolveDepthFragSpv)
-    # Hybrid raster TAA: post-denoise temporal resolve. Reads taaInput +
+    # Hybrid raster TAA: the temporal resolve after the post composite. Reads taaInput +
     # history + gbufMotion → writes swapchain + new history.
     compile_vulkan_shader(threepp "${_vk_shaders}/taa_resolve.comp" kTaaResolveCompSpv)
     # Post-TAA RCAS sharpen (FidelityFX-style) — restores detail the temporal
@@ -1622,7 +1622,7 @@ if (THREEPP_WITH_VULKAN)
     compile_vulkan_shader(threepp "${_vk_shaders}/overlay_pane_sky.frag" kOverlayPaneSkyFragSpv)
     # HUD sprite (TextSprite + Sprite) — alpha-blended quad with per-sprite
     # combined-image-sampler binding. Walked from the user's HUD scene during
-    # the ortho overlay pass, post-PT/TAA, depth disabled.
+    # the ortho overlay pass, after TAA, depth disabled.
     compile_vulkan_shader(threepp "${_vk_shaders}/overlay_sprite.vert" kOverlaySpriteVertSpv)
     compile_vulkan_shader(threepp "${_vk_shaders}/overlay_sprite.frag" kOverlaySpriteFragSpv)
     # World-space particle billboards (ParticleSystem). The Vulkan backend has no
