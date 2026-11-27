@@ -1,0 +1,39 @@
+#version 450
+// Top-K by rank: every token counts the tokens that sort before it (a higher
+// score, or an equal score at a lower index) and, when that rank is below K,
+// writes its index to slot `rank`. The result is the K best tokens in
+// descending score order with ties broken by index: a total order, so the
+// selection never depends on scheduling. O(T^2) compares, which at T <= ~1300
+// tokens is far cheaper than a sort's passes; scores are staged through shared
+// memory in tiles. Bindings: 0 score [T], 1 sel [K] (uint token indices).
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint T, K, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly  buffer Score { float score[]; };
+layout(std430, binding = 1) writeonly buffer Sel   { uint  sel[]; };
+
+shared float tile[256];
+
+void main() {
+    uint t = gl_GlobalInvocationID.x;
+    uint lid = gl_LocalInvocationID.x;
+    float s = t < p.T ? score[t] : 0.0;
+    uint rank = 0u;
+    // Every invocation runs every tile (the bounds depend only on T), so the
+    // barriers stay in uniform control flow.
+    for (uint base = 0u; base < p.T; base += 256u) {
+        uint j = base + lid;
+        tile[lid] = j < p.T ? score[j] : 0.0;
+        barrier();
+        uint n = min(256u, p.T - base);
+        for (uint k = 0u; k < n; ++k) {
+            float o = tile[k];
+            rank += (o > s || (o == s && base + k < t)) ? 1u : 0u;
+        }
+        barrier();
+    }
+    if (t < p.T && rank < p.K) sel[rank] = t;
+}

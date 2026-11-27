@@ -1,0 +1,37 @@
+#version 450
+// Two-stage proposals, one thread per memory token: the token's grid anchor
+// (centre (gx+0.5)/W, (gy+0.5)/H, size 0.05) refined by the first-stage box head
+// with bbox reparam (centre += delta * anchor size, size = exp(delta) * anchor
+// size), and the token's best class logit, the key the top-K ranks by.
+// Bindings: 0 cls [T,NC], 1 delta [T,4], 2 coord [T,4] cx,cy,w,h, 3 score [T].
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint T, gridW, gridH, NC;
+} p;
+
+layout(std430, binding = 0) readonly  buffer Cls   { float cls[]; };
+layout(std430, binding = 1) readonly  buffer Delta { float delta[]; };
+layout(std430, binding = 2) writeonly buffer Coord { float coord[]; };
+layout(std430, binding = 3) writeonly buffer Score { float score[]; };
+
+void main() {
+    uint t = gl_GlobalInvocationID.x;
+    if (t >= p.T) return;
+    uint gx = t % p.gridW, gy = t / p.gridW;
+    precise float px = (float(gx) + 0.5) / float(p.gridW);
+    precise float py = (float(gy) + 0.5) / float(p.gridH);
+    const float pw = 0.05, ph = 0.05;// 0.05 * 2^level, single level 0
+
+    precise float cx = delta[t * 4u + 0u] * pw + px;
+    precise float cy = delta[t * 4u + 1u] * ph + py;
+    coord[t * 4u + 0u] = cx;
+    coord[t * 4u + 1u] = cy;
+    coord[t * 4u + 2u] = exp(delta[t * 4u + 2u]) * pw;
+    coord[t * 4u + 3u] = exp(delta[t * 4u + 3u]) * ph;
+
+    uint row = t * p.NC;
+    float m = cls[row];
+    for (uint c = 1u; c < p.NC; ++c) m = max(m, cls[row + c]);
+    score[t] = m;
+}

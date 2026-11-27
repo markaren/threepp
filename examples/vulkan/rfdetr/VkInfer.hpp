@@ -1,6 +1,6 @@
 #pragma once
 
-// Minimal Vulkan compute harness for the YOLOv8n inference port.
+// Minimal Vulkan compute harness for the RF-DETR inference port.
 //
 // Plays the role of a thin compute-pipeline + buffer wrapper on the Vulkan
 // side, but stays entirely example-local: it is constructed from the native
@@ -11,13 +11,16 @@
 // storage buffers only.
 //
 // Execution model: a whole inference is recorded into ONE command buffer
-// (beginFrame() -> many dispatch() -> endFrame()) and submitted once, like the
-// whole graph — not one submit per op. Each dispatch gets its own descriptor set
-// (from a per-frame pool) and a leading storage barrier so layer N+1 sees layer
-// N's writes. Intermediate activations live in a per-inference arena owned by
-// VkInfer (freed by resetArena() after readback), so a recorded buffer is never
-// destroyed while the single submit still references it. Weights and the
-// detection buffers are persistent owning VkTensors, separate from the arena.
+// (beginFrame() -> many dispatch() -> endFrame()), submitted once and waited on
+// with one fence — not one submit per op. Host input and output travel inside
+// that command buffer too (recordUpload() / recordReadback(), through
+// persistently mapped staging), so an inference makes no other round trip.
+// Each dispatch binds a descriptor set cached by (pipeline, buffers) and carries
+// a leading storage barrier so layer N+1 sees layer N's writes. Intermediate
+// activations live in a per-inference arena owned by VkInfer (rewound by
+// resetArena() after readback), so a recorded buffer is never destroyed while
+// the submit still references it. Weights are persistent owning VkTensors,
+// separate from the arena.
 
 #include <vulkan/vulkan.h>
 
@@ -135,6 +138,19 @@ namespace rfdetr {
                        VkBuffer srcB, void* dstB, VkDeviceSize bytesB);
         void zero(VkBuffer buf);
 
+        // ── host I/O inside the frame's one submit ─────────────────────────
+        // Size the frame staging before beginFrame(): the totals the frame will
+        // upload and read back (copies are padded to 16 bytes; 256 bytes of
+        // slack are added for that).
+        void reserveFrameIO(VkDeviceSize uploadBytes, VkDeviceSize readbackBytes);
+        // Host data -> dst: staged now, copied at this point of the command buffer.
+        void recordUpload(VkBuffer dst, const void* data, VkDeviceSize bytes);
+        // src -> host, copied after the work recorded so far. Returns the offset
+        // to pass to frameReadback() once endFrame() has returned.
+        VkDeviceSize recordReadback(VkBuffer src, VkDeviceSize bytes);
+        // What a recordReadback() of this frame copied; valid until the next beginFrame().
+        [[nodiscard]] const void* frameReadback(VkDeviceSize offset) const;
+
         [[nodiscard]] VkBuffer dummy() const { return dummy_.buffer; }
 
         // ── pipelines ──────────────────────────────────────────────────────
@@ -146,7 +162,7 @@ namespace rfdetr {
         void resetDescriptorCache();
 
         // ── batched dispatch ───────────────────────────────────────────────
-        void beginFrame();// reset per-frame descriptor pool + start command buffer
+        void beginFrame();// rewind the arena + frame I/O, start the command buffer
         void recordFill(VkBuffer dst, VkDeviceSize bytes);// zero-fill recorded into the frame
         // Device→device copy recorded into the frame (no submit/wait); leading
         // barrier makes prior compute writes to src visible. Lets a value stay
@@ -155,7 +171,7 @@ namespace rfdetr {
         void dispatch(const VkPipe& pipe, const std::vector<VkBuffer>& ssbos,
                       const void* push, uint32_t pushBytes,
                       uint32_t gx, uint32_t gy, uint32_t gz);
-        void endFrame();// end + submit + wait
+        void endFrame();// end + submit + fence wait
 
         // GPU timestamp between dispatches (no-op unless RFDETR_PROFILE is set).
         // endFrame() prints per-mark GPU deltas, isolating GPU time from CPU
@@ -202,6 +218,15 @@ namespace rfdetr {
         VkTensor dummy_;
         VkTensor uploadStaging_;  // persistent host-visible upload scratch
         VkTensor readbackStaging_;// persistent host-cached readback scratch
+
+        // Frame I/O staging, mapped for their whole life (separate from the
+        // one-shot staging above, which a one-shot call may reuse mid-frame).
+        VkTensor frameUpload_, frameReadback_;
+        void* frameUploadMapped_ = nullptr;
+        void* frameReadbackMapped_ = nullptr;
+        VkDeviceSize frameUploadCursor_ = 0, frameReadbackCursor_ = 0;
+        bool frameHasReadback_ = false;
+        VkFence frameFence_ = VK_NULL_HANDLE;
 
         // Profiling timestamps (enabled by RFDETR_PROFILE).
         VkQueryPool tsPool_ = VK_NULL_HANDLE;

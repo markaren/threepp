@@ -165,10 +165,42 @@ RF-DETR-Nano is small, so the GPU runs at ~7% of fp32 peak regardless.
 - fp16 / cooperative-matrix gave no speedup (memory-bandwidth-bound, established on
   RT-DETR).
 
-**Remaining levers:** merge backbone+enc into one submit (~1 ms); split-K GEMM for
-the N=384 occupancy (the real ~17 ms-backbone lever, but high-effort, uncertain,
-and still won't beat cuBLAS). The host side is essentially tapped out — descriptor
-caching proved the host isn't the bottleneck; the GEMMs are.
+**Remaining levers (as of May):** merge backbone+enc into one submit (~1 ms); split-K
+GEMM for the N=384 occupancy. Split-K has since landed (re-measured below). The belief
+that the host side was tapped out did not hold: see the one-submit rewrite below.
+
+### One submit per inference (2026-11-27, RTX 5080)
+
+An inference used to make seven host round trips: the input upload, the backbone frame,
+the first-stage head frame, its readback, the query upload, the decoder frame and the
+head readback. Between them the host resized and normalized the image, ran the top-300
+partial sort, computed 153,600 sin/cos for the query embedding, and allocated a fresh
+buffer for the backbone output. On the 5080 that host work was 35 % of Nano's end-to-end
+time (5.6 of 16.0 ms) and 29 % of Medium's (9.5 of 33.3 ms).
+
+Now the preprocess (`preprocess.comp`), the proposals (`proposals.comp`), the top-K
+(`topk_rank.comp`: each token counts the tokens ranked before it, ties by token index)
+and the reference + sine embedding (`query_refs.comp`) are compute shaders; the input and
+the head outputs are copied inside the command buffer (`VkInfer::recordUpload` /
+`recordReadback`); and the frame ends with one submit and one fence wait.
+
+| bus.jpg, RTX 5080, fp32 | before | after |
+|---|---|---|
+| Nano end-to-end (median of 3 interleaved runs x 200) | 16.03 ms | 11.81 ms |
+| Nano GPU per inference | 10.45 ms | 10.59 ms |
+| Medium end-to-end (median of 3 interleaved runs x 100) | 33.33 ms | 26.33 ms |
+| Medium GPU per inference | 23.8 ms | 24.8 ms |
+
+GPU time rises a little because the input copy now runs inside the frame. The validation
+output is identical to the old path at printed precision, the bus.jpg detections are
+identical to 4 decimals, and a run under the validation layer with synchronization
+validation logs nothing. What is left on the host (~1.2 ms) is recording ~300 dispatches,
+the RGBA copy into staging and the sigmoid/threshold; recording the command buffer once
+and replaying it is the next lever.
+
+Split-K re-measured on the 5080: Nano backbone 12.03 → 9.01 ms GPU (end-to-end 19.9 →
+16.2 ms), Medium 22.8 → 21.3 ms. It helps both variants on this card, so it stays on for
+all of them and the `RF_NOSPLITK` switch is gone.
 
 ---
 

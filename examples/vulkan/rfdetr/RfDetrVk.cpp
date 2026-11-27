@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -36,6 +35,10 @@
 #include "threepp/renderers/vulkan/shaders/scale_add.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/linear_splitk.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/reduce_splitk.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/preprocess.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/proposals.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/topk_rank.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/query_refs.comp.rfdetr.spv.h"
 
 using threepp::VulkanRenderer;
 
@@ -67,6 +70,10 @@ namespace {
     struct QkvSpliceParams { uint32_t M, D, _p0, _p1; };
     struct OffPreParams    { uint32_t Nq, numHeads, numLevels, numPoints; };
     struct MsDeformParams  { uint32_t Nq, H, d, L, P, _p0, _p1, _p2; };
+    struct PreprocessParams{ uint32_t W, H, R, _p0; };
+    struct ProposalParams  { uint32_t T, gridW, gridH, NC; };
+    struct TopKParams      { uint32_t T, K, _p0, _p1; };
+    struct QueryRefParams  { uint32_t Nq, _p0, _p1, _p2; };
 
     uint32_t divCeil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 }// namespace
@@ -118,13 +125,16 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
     scaleAddPipe_         = vk_.createPipe(kRfScaleAddSpv,  sizeof(kRfScaleAddSpv),  4, sizeof(LayerScaleParams));
     linearSplitKPipe_     = vk_.createPipe(kRfLinearSplitKSpv, sizeof(kRfLinearSplitKSpv), 3, sizeof(SplitKParams));
     reduceSplitKPipe_     = vk_.createPipe(kRfReduceSplitKSpv, sizeof(kRfReduceSplitKSpv), 3, sizeof(ReduceParams));
+    preprocessPipe_       = vk_.createPipe(kRfPreprocessSpv, sizeof(kRfPreprocessSpv), 2, sizeof(PreprocessParams));
+    proposalsPipe_        = vk_.createPipe(kRfProposalsSpv,  sizeof(kRfProposalsSpv),  4, sizeof(ProposalParams));
+    topkRankPipe_         = vk_.createPipe(kRfTopkRankSpv,   sizeof(kRfTopkRankSpv),   2, sizeof(TopKParams));
+    queryRefsPipe_        = vk_.createPipe(kRfQueryRefsSpv,  sizeof(kRfQueryRefsSpv),  7, sizeof(QueryRefParams));
 
     // Partial-sum scratch sized for the largest split-K linear we route: splitK=4
     // planes of [maxTokens, N<=512]. Scales with the variant's token count (Nano
     // ~580, Medium ~1300). One buffer reused across calls; barriers serialize access.
     splitKPartialFloats_ = uint64_t(4) * uint64_t(cfg_.maxTokens()) * 512ull;
     splitKPartials_ = vk_.createOwnedRaw(VkDeviceSize(splitKPartialFloats_) * sizeof(float));
-    useSplitK_ = std::getenv("RF_NOSPLITK") == nullptr;
 
     // Deformable-attention spatial_shapes [grid,grid] + level_start [0] are constant
     // for the single-scale P4 decoder — upload once here instead of twice per layer.
@@ -135,6 +145,12 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
     vk_.upload(msShapeBuf_.buffer, shapeInit, sizeof(shapeInit));
     msStartBuf_ = vk_.createOwnedRaw(sizeof(startInit));
     vk_.upload(msStartBuf_.buffer, &startInit, sizeof(startInit));
+
+    // Frequencies of the decoder's sine query embedding (query_refs.comp).
+    std::array<float, 128> dimt{};
+    for (uint32_t k = 0; k < 128; ++k) dimt[k] = std::pow(10000.0f, 2.0f * float(k / 2) / 128.0f);
+    dimtBuf_ = vk_.createOwnedRaw(sizeof(dimt));
+    vk_.upload(dimtBuf_.buffer, dimt.data(), sizeof(dimt));
 }
 
 RfDetrVk::~RfDetrVk() {
@@ -165,6 +181,10 @@ RfDetrVk::~RfDetrVk() {
     vk_.destroyPipe(scaleAddPipe_);
     vk_.destroyPipe(linearSplitKPipe_);
     vk_.destroyPipe(reduceSplitKPipe_);
+    vk_.destroyPipe(preprocessPipe_);
+    vk_.destroyPipe(proposalsPipe_);
+    vk_.destroyPipe(topkRankPipe_);
+    vk_.destroyPipe(queryRefsPipe_);
 }
 
 void RfDetrVk::loadWeights(const std::string& path) {
@@ -218,11 +238,12 @@ void RfDetrVk::loadWeights(const std::string& path) {
             weights_.emplace(p + "qkv.bias", std::move(tb));
         }
     }
-    // refpoint_embed is a constant — cache the first cfg_.numQueries rows on the CPU so
-    // the decoder doesn't read it back from the GPU on every inference.
-    auto rp = w.data.find("refpoint_embed.weight");
-    if (rp != w.data.end() && rp->second.size() >= size_t(cfg_.numQueries) * 4)
-        learnedRefCpu_.assign(rp->second.begin(), rp->second.begin() + size_t(cfg_.numQueries) * 4);
+    // query_refs.comp reads the first cfg_.numQueries rows of refpoint_embed [N,4].
+    auto rp = w.shapes.find("refpoint_embed.weight");
+    if (rp == w.shapes.end() || rp->second.size() != 2 || rp->second[0] < uint32_t(cfg_.numQueries) ||
+        rp->second[1] != 4u)
+        throw std::runtime_error("RfDetrVk: checkpoint has no refpoint_embed [>=" +
+                                 std::to_string(cfg_.numQueries) + ", 4]");
 
     std::cout << "RfDetrVk::loadWeights: " << weights_.size() << " GPU tensors (fp32)\n";
 }
@@ -285,7 +306,7 @@ Tensor RfDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::st
     // multiply the workgroup count, then reduce. Guarded so the partials fit scratch.
     const uint32_t splitK = 4u;
     const uint32_t kChunk = divCeil(K, splitK);
-    if (useSplitK_ && N <= 512u && K >= 256u && M >= 256u &&
+    if (N <= 512u && K >= 256u && M >= 256u &&
         static_cast<uint64_t>(splitK) * M * N <= splitKPartialFloats_) {
         SplitKParams sp{M, N, K, splitK, kChunk, 0u, 0u, 0u};
         std::vector<VkBuffer> pssbos = {x.buffer, wt.buffer, splitKPartials_.buffer};
@@ -477,12 +498,6 @@ Tensor RfDetrVk::projector_(const std::array<Tensor, 4>& taps, uint32_t grid) {
 
 // ── decoder primitives ──
 
-Tensor RfDetrVk::uploadArena_(const std::vector<uint32_t>& shape, const float* data) {
-    Tensor t = vk_.createTensorV(shape);
-    vk_.upload(t.buffer, data, t.bytes());
-    return t;
-}
-
 Tensor RfDetrVk::relu_(const Tensor& x) {
     uint32_t n = x.numel();
     GeluParams gp{n, 0u, 0u, 0u};
@@ -545,274 +560,218 @@ Tensor RfDetrVk::msDeformAttn_(const Tensor& value, uint32_t H, uint32_t W,
     return out;
 }
 
-// Two-stage deformable decoder + heads. memory = proj0 in [HW, 256] token layout.
-void RfDetrVk::decoder_(const Tensor& memory, uint32_t gridH, uint32_t gridW, ForwardOut& out) {
+// Two-stage deformable decoder + heads, recorded into the open frame: nothing
+// in here waits on the host. memory = proj0 in [HW, 256] token layout.
+RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const Tensor& memory) {
     const uint32_t D = cfg_.hiddenDim, Nq = cfg_.numQueries, NC = cfg_.numClasses;
-    const uint32_t totalTokens = gridH * gridW;
+    const uint32_t grid = cfg_.grid(), totalTokens = grid * grid;
 
-    // ── Frame A: enc_output projection + first-stage class/bbox over all tokens ──
-    std::vector<float> encClass(size_t(totalTokens) * NC), encBboxDelta(size_t(totalTokens) * 4);
-    {
-        vk_.beginFrame();
-        Tensor om = layerNorm_(linear_(memory, "transformer.enc_output.0.weight", "transformer.enc_output.0.bias"),
-                               "transformer.enc_output_norm.0.weight", "transformer.enc_output_norm.0.bias", D);
-        Tensor cls = linear_(om, "transformer.enc_out_class_embed.0.weight", "transformer.enc_out_class_embed.0.bias");
-        Tensor bbx = bboxMLP_(om, "transformer.enc_out_bbox_embed.0");
-        vk_.endFrame();
-        // One GPU round-trip for both first-stage outputs instead of two.
-        vk_.readback2(cls.buffer, encClass.data(), cls.bytes(),
-                      bbx.buffer, encBboxDelta.data(), bbx.bytes());
-        vk_.resetArena();
-    }
+    // enc_output projection + first-stage class/bbox heads over all tokens.
+    Tensor om = layerNorm_(linear_(memory, "transformer.enc_output.0.weight", "transformer.enc_output.0.bias"),
+                           "transformer.enc_output_norm.0.weight", "transformer.enc_output_norm.0.bias", D);
+    Tensor cls = linear_(om, "transformer.enc_out_class_embed.0.weight", "transformer.enc_out_class_embed.0.bias");
+    Tensor bbx = bboxMLP_(om, "transformer.enc_out_bbox_embed.0");
 
-    // learned refpoint_embed[:Nq] (modulates the two-stage proposals via reparam),
-    // cached on the CPU at load — no per-inference readback.
-    const std::vector<float>& learnedRef = learnedRefCpu_;
+    // Grid proposals -> reparam coords + each token's best class logit.
+    Tensor encCoord = vk_.createTensorV({totalTokens, 4u});
+    Tensor encScore = vk_.createTensorV({totalTokens});
+    { ProposalParams pp{totalTokens, grid, grid, NC};
+      vk_.dispatch(proposalsPipe_, {cls.buffer, bbx.buffer, encCoord.buffer, encScore.buffer},
+                   &pp, sizeof(pp), divCeil(totalTokens, 64), 1, 1); }
+    // The top-Nq tokens by that logit, best first (equal logits by token index).
+    Tensor sel = vk_.createTensorV({Nq});// uint32 token indices
+    { TopKParams tp{totalTokens, Nq, 0u, 0u};
+      vk_.dispatch(topkRankPipe_, {encScore.buffer, sel.buffer}, &tp, sizeof(tp), divCeil(totalTokens, 256), 1, 1); }
+    // Decoder reference (fixed across layers: lite_refpoint_refine) = the learned
+    // refpoint_embed[:Nq] reparametrised on the selected proposals, and its sine
+    // embedding, the input of ref_point_head.
+    Tensor refT   = vk_.createTensorV({Nq, 4u});
+    Tensor refXyT = vk_.createTensorV({Nq, 2u});
+    Tensor qsineT = vk_.createTensorV({Nq, 512u});
+    { QueryRefParams qrp{Nq, 0u, 0u, 0u};
+      vk_.dispatch(queryRefsPipe_, {sel.buffer, encCoord.buffer, weights_.at("refpoint_embed.weight").buffer,
+                                    dimtBuf_.buffer, refT.buffer, refXyT.buffer, qsineT.buffer},
+                   &qrp, sizeof(qrp), divCeil(512u, 128u), Nq, 1); }
+    vk_.markTimestamp("select");
 
-    // ── CPU: grid proposals → reparam coords → top-Nq by max class logit ──
-    std::vector<float> encCoord(size_t(totalTokens) * 4);
-    for (uint32_t gy = 0; gy < gridH; ++gy)
-        for (uint32_t gx = 0; gx < gridW; ++gx) {
-            uint32_t t = gy * gridW + gx;
-            float px = (float(gx) + 0.5f) / float(gridW), py = (float(gy) + 0.5f) / float(gridH);
-            const float pw = 0.05f, ph = 0.05f;// 0.05 * 2^lvl, lvl=0
-            const float* d = &encBboxDelta[size_t(t) * 4];
-            encCoord[t * 4 + 0] = d[0] * pw + px;
-            encCoord[t * 4 + 1] = d[1] * ph + py;
-            encCoord[t * 4 + 2] = std::exp(d[2]) * pw;
-            encCoord[t * 4 + 3] = std::exp(d[3]) * ph;
-        }
-    std::vector<std::pair<float, uint32_t>> sc(totalTokens);
-    for (uint32_t t = 0; t < totalTokens; ++t) {
-        float m = encClass[size_t(t) * NC];
-        for (uint32_t c = 1; c < NC; ++c) m = std::max(m, encClass[size_t(t) * NC + c]);
-        sc[t] = {m, t};
-    }
-    std::partial_sort(sc.begin(), sc.begin() + Nq, sc.end(),
-                      [](const auto& a, const auto& b) { return a.first > b.first; });
-
-    // Decoder reference (fixed across layers: lite_refpoint_refine) + sine query_pos.
-    std::vector<float> refCpu(size_t(Nq) * 4), refXyCpu(size_t(Nq) * 2), qsine(size_t(Nq) * 512);
-    const float twoPi = 2.0f * 3.14159265358979323846f;
-    const uint32_t dim = 128;
-    std::vector<float> dimt(dim);
-    for (uint32_t j = 0; j < dim; ++j) dimt[j] = std::pow(10000.0f, 2.0f * float(j / 2) / float(dim));
-    auto sineEmbed = [&](float v, float* dst) {// v already includes the 2π scale
-        for (uint32_t k = 0; k < dim / 2; ++k) {
-            dst[2 * k]     = std::sin(v / dimt[2 * k]);
-            dst[2 * k + 1] = std::cos(v / dimt[2 * k + 1]);
-        }
-    };
-    for (uint32_t i = 0; i < Nq; ++i) {
-        const float* ts = &encCoord[size_t(sc[i].second) * 4];
-        const float* lr = &learnedRef[size_t(i) * 4];
-        float cx = lr[0] * ts[2] + ts[0];
-        float cy = lr[1] * ts[3] + ts[1];
-        float w  = std::exp(lr[2]) * ts[2];
-        float h  = std::exp(lr[3]) * ts[3];
-        refCpu[i * 4 + 0] = cx; refCpu[i * 4 + 1] = cy; refCpu[i * 4 + 2] = w; refCpu[i * 4 + 3] = h;
-        refXyCpu[i * 2 + 0] = cx; refXyCpu[i * 2 + 1] = cy;
-        float* qs = &qsine[size_t(i) * 512];// order: pos_y, pos_x, pos_w, pos_h
-        sineEmbed(cy * twoPi, qs + 0);
-        sineEmbed(cx * twoPi, qs + 128);
-        sineEmbed(w  * twoPi, qs + 256);
-        sineEmbed(h  * twoPi, qs + 384);
-    }
-
-    // ── Frame B: query_pos + 3 decoder layers (refs fixed → single frame) + heads ──
+    // query_pos + the decoder layers (refs fixed) + heads.
     Tensor tgtInit{weights_.at("query_feat.weight").buffer, {Nq, D}};// first Nq rows
-    std::vector<float> bboxDeltaCpu(size_t(Nq) * 4);
-    {
-        vk_.beginFrame();
-        // Batch the four per-inference decoder inputs into one submit (was 4 separate
-        // upload() drains mid-frame).
-        Tensor qsineT = vk_.createTensorV({Nq, 512u});
-        Tensor refT   = vk_.createTensorV({Nq, 4u});
-        Tensor refXyT = vk_.createTensorV({Nq, 2u});
-        std::vector<uint32_t> lvl = {gridH, gridW};
-        Tensor lvlT = vk_.createRaw(2 * sizeof(uint32_t));
-        vk_.uploadMany({
-                {qsineT.buffer, qsine.data(), qsineT.bytes()},
-                {refT.buffer, refCpu.data(), refT.bytes()},
-                {refXyT.buffer, refXyCpu.data(), refXyT.bytes()},
-                {lvlT.buffer, lvl.data(), VkDeviceSize(2 * sizeof(uint32_t))},
-        });
+    Tensor qp = relu_(linear_(qsineT, "transformer.decoder.ref_point_head.layers.0.weight",
+                                      "transformer.decoder.ref_point_head.layers.0.bias"));
+    qp = linear_(qp, "transformer.decoder.ref_point_head.layers.1.weight",
+                     "transformer.decoder.ref_point_head.layers.1.bias");
 
-        Tensor qp = relu_(linear_(qsineT, "transformer.decoder.ref_point_head.layers.0.weight",
-                                          "transformer.decoder.ref_point_head.layers.0.bias"));
-        qp = linear_(qp, "transformer.decoder.ref_point_head.layers.1.weight",
-                         "transformer.decoder.ref_point_head.layers.1.bias");
+    Tensor tgt = tgtInit;
+    for (int layer = 0; layer < cfg_.decLayers; ++layer) {
+        std::string p = "transformer.decoder.layers." + std::to_string(layer);
+        // self-attention (combined QKV; q=k=tgt+query_pos, v=tgt)
+        Tensor yqk = linear_(add_(tgt, qp), p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias");
+        Tensor yt  = linear_(tgt, p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias");
+        Tensor qkv = vk_.createTensorV({Nq, 3u * D});
+        QkvSpliceParams sp{Nq, D, 0u, 0u};
+        { std::vector<VkBuffer> s = {yqk.buffer, yt.buffer, qkv.buffer};
+          vk_.dispatch(qkvSplicePipe_, s, &sp, sizeof(sp), divCeil(Nq * 3u * D, 64), 1, 1); }
+        Tensor sSm   = softmaxRows_(attnScores_(qkv, Nq, cfg_.saHeads), cfg_.saHeads * Nq, Nq);
+        Tensor heads = attnApply_(qkv, sSm, Nq, cfg_.saHeads);
+        Tensor attnOut = linear_(heads, p + ".self_attn.out_proj.weight", p + ".self_attn.out_proj.bias");
+        Tensor n1 = layerNorm_(add_(tgt, attnOut), p + ".norm1.weight", p + ".norm1.bias", D);
 
-        Tensor tgt = tgtInit;
-        for (int layer = 0; layer < cfg_.decLayers; ++layer) {
-            std::string p = "transformer.decoder.layers." + std::to_string(layer);
-            // self-attention (combined QKV; q=k=tgt+query_pos, v=tgt)
-            Tensor yqk = linear_(add_(tgt, qp), p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias");
-            Tensor yt  = linear_(tgt, p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias");
-            Tensor qkv = vk_.createTensorV({Nq, 3u * D});
-            QkvSpliceParams sp{Nq, D, 0u, 0u};
-            { std::vector<VkBuffer> s = {yqk.buffer, yt.buffer, qkv.buffer};
-              vk_.dispatch(qkvSplicePipe_, s, &sp, sizeof(sp), divCeil(Nq * 3u * D, 64), 1, 1); }
-            Tensor sSm   = softmaxRows_(attnScores_(qkv, Nq, cfg_.saHeads), cfg_.saHeads * Nq, Nq);
-            Tensor heads = attnApply_(qkv, sSm, Nq, cfg_.saHeads);
-            Tensor attnOut = linear_(heads, p + ".self_attn.out_proj.weight", p + ".self_attn.out_proj.bias");
-            Tensor n1 = layerNorm_(add_(tgt, attnOut), p + ".norm1.weight", p + ".norm1.bias", D);
+        // cross-attention (deformable, single level)
+        Tensor cq = add_(n1, qp);
+        Tensor value = linear_(memory, p + ".cross_attn.value_proj.weight", p + ".cross_attn.value_proj.bias");
+        Tensor rawOff = linear_(cq, p + ".cross_attn.sampling_offsets.weight", p + ".cross_attn.sampling_offsets.bias");
+        Tensor rawAw  = linear_(cq, p + ".cross_attn.attention_weights.weight", p + ".cross_attn.attention_weights.bias");
+        rawAw.shape = {Nq * uint32_t(cfg_.caHeads), uint32_t(cfg_.decPoints)};// softmax over L*P (=P, since L=1) per head
+        Tensor awSm = softmaxRows_(rawAw, Nq * cfg_.caHeads, cfg_.decPoints);
+        awSm.shape = {Nq, uint32_t(cfg_.caHeads * cfg_.decPoints)};
+        { OffPreParams opp{Nq, uint32_t(cfg_.caHeads), 1u, uint32_t(cfg_.decPoints)};
+          uint32_t stride = cfg_.caHeads * 1u * cfg_.decPoints * 2u;
+          std::vector<VkBuffer> s = {refT.buffer, msShapeBuf_.buffer, rawOff.buffer};
+          vk_.dispatch(offsetPreprocessPipe_, s, &opp, sizeof(opp), divCeil(Nq * stride, 64), 1, 1); }
+        Tensor crossOut  = msDeformAttn_(value, grid, grid, refXyT, rawOff, awSm, cfg_.caHeads);
+        Tensor crossProj = linear_(crossOut, p + ".cross_attn.output_proj.weight", p + ".cross_attn.output_proj.bias");
+        Tensor n2 = layerNorm_(add_(n1, crossProj), p + ".norm2.weight", p + ".norm2.bias", D);
 
-            // cross-attention (deformable, single level)
-            Tensor cq = add_(n1, qp);
-            Tensor value = linear_(memory, p + ".cross_attn.value_proj.weight", p + ".cross_attn.value_proj.bias");
-            Tensor rawOff = linear_(cq, p + ".cross_attn.sampling_offsets.weight", p + ".cross_attn.sampling_offsets.bias");
-            Tensor rawAw  = linear_(cq, p + ".cross_attn.attention_weights.weight", p + ".cross_attn.attention_weights.bias");
-            rawAw.shape = {Nq * uint32_t(cfg_.caHeads), uint32_t(cfg_.decPoints)};// softmax over L*P (=P, since L=1) per head
-            Tensor awSm = softmaxRows_(rawAw, Nq * cfg_.caHeads, cfg_.decPoints);
-            awSm.shape = {Nq, uint32_t(cfg_.caHeads * cfg_.decPoints)};
-            { OffPreParams opp{Nq, uint32_t(cfg_.caHeads), 1u, uint32_t(cfg_.decPoints)};
-              uint32_t stride = cfg_.caHeads * 1u * cfg_.decPoints * 2u;
-              std::vector<VkBuffer> s = {refT.buffer, lvlT.buffer, rawOff.buffer};
-              vk_.dispatch(offsetPreprocessPipe_, s, &opp, sizeof(opp), divCeil(Nq * stride, 64), 1, 1); }
-            Tensor crossOut  = msDeformAttn_(value, gridH, gridW, refXyT, rawOff, awSm, cfg_.caHeads);
-            Tensor crossProj = linear_(crossOut, p + ".cross_attn.output_proj.weight", p + ".cross_attn.output_proj.bias");
-            Tensor n2 = layerNorm_(add_(n1, crossProj), p + ".norm2.weight", p + ".norm2.bias", D);
-
-            // FFN
-            Tensor ff = relu_(linear_(n2, p + ".linear1.weight", p + ".linear1.bias"));
-            ff = linear_(ff, p + ".linear2.weight", p + ".linear2.bias");
-            tgt = layerNorm_(add_(n2, ff), p + ".norm3.weight", p + ".norm3.bias", D);
-        }
-        Tensor hs = layerNorm_(tgt, "transformer.decoder.norm.weight", "transformer.decoder.norm.bias", D);
-        Tensor logits = linear_(hs, "class_embed.weight", "class_embed.bias");
-        Tensor bboxDelta = bboxMLP_(hs, "bbox_embed");
-        vk_.endFrame();
-        out.predLogits.resize(logits.numel());
-        // One round-trip for both head outputs.
-        vk_.readback2(logits.buffer, out.predLogits.data(), logits.bytes(),
-                      bboxDelta.buffer, bboxDeltaCpu.data(), bboxDelta.bytes());
-        vk_.resetArena();
+        // FFN
+        Tensor ff = relu_(linear_(n2, p + ".linear1.weight", p + ".linear1.bias"));
+        ff = linear_(ff, p + ".linear2.weight", p + ".linear2.bias");
+        tgt = layerNorm_(add_(n2, ff), p + ".norm3.weight", p + ".norm3.bias", D);
     }
-
-    // pred_boxes = reparam(bbox_embed(hs), ref) with the fixed decoder reference.
-    out.predBoxes.resize(size_t(Nq) * 4);
-    for (uint32_t i = 0; i < Nq; ++i) {
-        const float* d = &bboxDeltaCpu[size_t(i) * 4];
-        const float* r = &refCpu[size_t(i) * 4];
-        out.predBoxes[i * 4 + 0] = d[0] * r[2] + r[0];
-        out.predBoxes[i * 4 + 1] = d[1] * r[3] + r[1];
-        out.predBoxes[i * 4 + 2] = std::exp(d[2]) * r[2];
-        out.predBoxes[i * 4 + 3] = std::exp(d[3]) * r[3];
-    }
+    Tensor hs = layerNorm_(tgt, "transformer.decoder.norm.weight", "transformer.decoder.norm.bias", D);
+    Tensor logits = linear_(hs, "class_embed.weight", "class_embed.bias");
+    Tensor bboxDelta = bboxMLP_(hs, "bbox_embed");
+    vk_.markTimestamp("decoder");
+    return HeadTensors{logits, bboxDelta, refT};
 }
 
-RfDetrVk::ForwardOut RfDetrVk::runForward(const std::vector<float>& chw, bool captureIntermediates) {
-    const uint32_t R = cfg_.resolution;
-    if (chw.size() != size_t(3) * R * R)
-        throw std::runtime_error("RfDetrVk::runForward: input must be 3*384*384 floats");
+VkDeviceSize RfDetrVk::headReadbackBytes_() const {
+    const VkDeviceSize Nq = VkDeviceSize(cfg_.numQueries);
+    return (Nq * VkDeviceSize(cfg_.numClasses) + Nq * 4 + Nq * 4) * sizeof(float);
+}
 
-    vk_.beginFrame();
-    Tensor input = vk_.createTensorV({3u, R, R});
-    vk_.upload(input.buffer, chw.data(), chw.size() * sizeof(float));
-    auto pe  = patchEmbed_(input);    // [384, 24, 24]
+Tensor RfDetrVk::recordBackbone_(const Tensor& input, BackboneTensors& keep) {
+    keep.patch = patchEmbed_(input);          // [384, 24, 24]
     vk_.markTimestamp("patch");
-    auto emb = buildEmbeddings_(pe);  // [4, 145, 384] windowed tokens
+    keep.embed = buildEmbeddings_(keep.patch);// [4, 145, 384] windowed tokens
     vk_.markTimestamp("embed");
 
     // Flatten the windowed tokens to [M, C] (window-major) for the layer loop.
     const uint32_t C = cfg_.embedDim;
-    const uint32_t M = emb.numel() / C;
-    Tensor tok = emb;
+    const uint32_t M = keep.embed.numel() / C;
+    Tensor tok = keep.embed;
     tok.shape = {M, C};
 
-    // 12 DINOv2 blocks; full attention at layers {3,6,9}. Capture layers 0 & 3
-    // for debugging and the tap outputs at layers {2,5,8,11} for the projector.
+    // 12 DINOv2 blocks; full attention at layers {3,6,9}. Keep layers 0 & 3
+    // for validation and the tap outputs at layers {2,5,8,11} for the projector.
     static const char* kVitLbl[12] = {"vit0","vit1","vit2","vit3","vit4","vit5",
                                       "vit6","vit7","vit8","vit9","vit10","vit11"};
-    Tensor vit0, vit3;
     std::array<Tensor, 4> tapHidden;
     const int tapLayers[4] = {2, 5, 8, 11};
     for (int i = 0; i < cfg_.numLayers; ++i) {
         bool global = (i == 3 || i == 6 || i == 9);
         tok = vitLayer_(tok, i, global);
-        if (i == 0) vit0 = tok;
-        if (i == 3) vit3 = tok;
+        if (i == 0) keep.vit0 = tok;
+        if (i == 3) keep.vit3 = tok;
         for (int t = 0; t < 4; ++t)
             if (i == tapLayers[t]) tapHidden[t] = tok;
         vk_.markTimestamp(kVitLbl[i]);
     }
 
     // Each tap: final ViT LayerNorm (per-token over C), then de-window to [C,G,G].
-    std::array<Tensor, 4> taps;
     for (int t = 0; t < 4; ++t) {
         Tensor ln = layerNorm_(tapHidden[t], "backbone.0.encoder.encoder.layernorm.weight",
                                "backbone.0.encoder.encoder.layernorm.bias", C);
-        taps[t] = unwindow_(ln, C, cfg_.grid());
+        keep.taps[t] = unwindow_(ln, C, cfg_.grid());
     }
     vk_.markTimestamp("taps");
-    Tensor proj0 = projector_(taps, cfg_.grid());
+    keep.proj0 = projector_(keep.taps, cfg_.grid());
     vk_.markTimestamp("proj");
-    // Flatten proj0 [256,G,G] -> memory tokens [G*G,256] and stash in an owning
-    // buffer so it survives the decoder's per-frame arena resets.
-    Tensor memTok = transposeChw2Tokens_(proj0);
-    VkTensor memoryOwned = vk_.createOwnedRaw(VkDeviceSize(memTok.numel()) * sizeof(float));
-    vk_.recordCopy(memoryOwned.buffer, memTok.buffer, memTok.bytes());
-    vk_.endFrame();
+    // proj0 [256,G,G] -> memory tokens [G*G,256]. It can stay in the arena: the
+    // decoder is recorded into the same frame, before the arena is rewound.
+    return transposeChw2Tokens_(keep.proj0);
+}
+
+RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureIntermediates) {
+    BackboneTensors bb;
+    Tensor memory = recordBackbone_(input, bb);
+    HeadTensors heads = recordDecoder_(memory);
+    const VkDeviceSize offLogits = vk_.recordReadback(heads.logits.buffer, heads.logits.bytes());
+    const VkDeviceSize offDelta  = vk_.recordReadback(heads.bboxDelta.buffer, heads.bboxDelta.bytes());
+    const VkDeviceSize offRef    = vk_.recordReadback(heads.ref.buffer, heads.ref.bytes());
+    vk_.endFrame();// the inference's one submit and wait
 
     ForwardOut out;
+    out.predLogits.resize(heads.logits.numel());
+    std::memcpy(out.predLogits.data(), vk_.frameReadback(offLogits), heads.logits.bytes());
+
+    // pred_boxes = reparam(bbox_embed(hs), ref) with the fixed decoder reference.
+    const uint32_t Nq = cfg_.numQueries;
+    const auto* delta = static_cast<const float*>(vk_.frameReadback(offDelta));
+    const auto* ref = static_cast<const float*>(vk_.frameReadback(offRef));
+    out.predBoxes.resize(size_t(Nq) * 4);
+    for (uint32_t i = 0; i < Nq; ++i) {
+        const float* d = delta + size_t(i) * 4;
+        const float* r = ref + size_t(i) * 4;
+        out.predBoxes[i * 4 + 0] = d[0] * r[2] + r[0];
+        out.predBoxes[i * 4 + 1] = d[1] * r[3] + r[1];
+        out.predBoxes[i * 4 + 2] = std::exp(d[2]) * r[2];
+        out.predBoxes[i * 4 + 3] = std::exp(d[3]) * r[3];
+    }
+
     if (captureIntermediates) {// validation only — the detect path skips these readbacks
-        out.patchEmbed.resize(pe.numel());
-        vk_.readback(pe.buffer, out.patchEmbed.data(), pe.bytes());
-        out.patchDim = {pe.C(), pe.H(), pe.W()};
-        out.embed.resize(emb.numel());
-        vk_.readback(emb.buffer, out.embed.data(), emb.bytes());
-        out.embedDim = {emb.C(), emb.H(), emb.W()};
-        out.vit0.resize(vit0.numel());
-        vk_.readback(vit0.buffer, out.vit0.data(), vit0.bytes());
-        out.vit3.resize(vit3.numel());
-        vk_.readback(vit3.buffer, out.vit3.data(), vit3.bytes());
-        out.vitDim = {emb.C(), emb.H(), emb.W()};// [4,145,384]
-        for (int t = 0; t < 4; ++t) {
-            out.taps[t].resize(taps[t].numel());
-            vk_.readback(taps[t].buffer, out.taps[t].data(), taps[t].bytes());
-        }
-        out.tapDim = {taps[0].C(), taps[0].H(), taps[0].W()};// [384,24,24]
-        out.proj0.resize(proj0.numel());
-        vk_.readback(proj0.buffer, out.proj0.data(), proj0.bytes());
-        out.proj0Dim = {proj0.C(), proj0.H(), proj0.W()};// [256,24,24]
+        auto grab = [&](const Tensor& t, std::vector<float>& dst) {
+            dst.resize(t.numel());
+            vk_.readback(t.buffer, dst.data(), t.bytes());
+        };
+        grab(bb.patch, out.patchEmbed);
+        out.patchDim = {bb.patch.C(), bb.patch.H(), bb.patch.W()};
+        grab(bb.embed, out.embed);
+        out.embedDim = {bb.embed.C(), bb.embed.H(), bb.embed.W()};
+        grab(bb.vit0, out.vit0);
+        grab(bb.vit3, out.vit3);
+        out.vitDim = {bb.embed.C(), bb.embed.H(), bb.embed.W()};// [4,145,384]
+        for (int t = 0; t < 4; ++t) grab(bb.taps[t], out.taps[t]);
+        out.tapDim = {bb.taps[0].C(), bb.taps[0].H(), bb.taps[0].W()};// [384,24,24]
+        grab(bb.proj0, out.proj0);
+        out.proj0Dim = {bb.proj0.C(), bb.proj0.H(), bb.proj0.W()};// [256,24,24]
     }
     vk_.resetArena();
-
-    // Two-stage deformable decoder + heads (memory is GPU-resident, owned).
-    Tensor memoryView{memoryOwned.buffer, {cfg_.grid() * cfg_.grid(), uint32_t(cfg_.hiddenDim)}};
-    decoder_(memoryView, cfg_.grid(), cfg_.grid(), out);
     return out;
 }
 
-// ImageNet preprocess (square resize → /255 → normalize) + sigmoid/threshold
-// postprocess. classId is the COCO category id (1..90); boxes are in image pixels.
+RfDetrVk::ForwardOut RfDetrVk::runForward(const std::vector<float>& chw, bool captureIntermediates) {
+    const uint32_t R = cfg_.resolution;
+    const VkDeviceSize bytes = VkDeviceSize(chw.size()) * sizeof(float);
+    if (chw.size() != size_t(3) * R * R)
+        throw std::runtime_error("RfDetrVk::runForward: input must be 3*R*R floats, R the variant's resolution");
+    vk_.reserveFrameIO(bytes, headReadbackBytes_());
+    vk_.beginFrame();
+    Tensor input = vk_.createTensorV({3u, R, R});
+    vk_.recordUpload(input.buffer, chw.data(), bytes);
+    return finishForward_(input, captureIntermediates);
+}
+
+// ImageNet preprocess (square resize → /255 → normalize) and the forward pass
+// run on the GPU as one submit; then sigmoid/threshold postprocess on the host.
+// classId is the COCO category id (1..90); boxes are in image pixels.
 std::vector<Detection> RfDetrVk::infer(const unsigned char* rgba, int width, int height,
                                        float scoreThresh) {
-    const int R = cfg_.resolution;
-    const float mean[3] = {0.485f, 0.456f, 0.406f}, istd[3] = {1.f / 0.229f, 1.f / 0.224f, 1.f / 0.225f};
-    std::vector<float> chw(size_t(3) * R * R);
-    for (int y = 0; y < R; ++y) {
-        float fy = (float(y) + 0.5f) * float(height) / float(R) - 0.5f;
-        int y0 = std::max(0, std::min(height - 1, int(std::floor(fy))));
-        int y1 = std::min(height - 1, y0 + 1);
-        float wy = std::max(0.f, std::min(1.f, fy - float(y0)));
-        for (int x = 0; x < R; ++x) {
-            float fx = (float(x) + 0.5f) * float(width) / float(R) - 0.5f;
-            int x0 = std::max(0, std::min(width - 1, int(std::floor(fx))));
-            int x1 = std::min(width - 1, x0 + 1);
-            float wx = std::max(0.f, std::min(1.f, fx - float(x0)));
-            for (int c = 0; c < 3; ++c) {
-                auto px = [&](int xx, int yy) { return float(rgba[(size_t(yy) * width + xx) * 4 + c]); };
-                float top = px(x0, y0) * (1 - wx) + px(x1, y0) * wx;
-                float bot = px(x0, y1) * (1 - wx) + px(x1, y1) * wx;
-                float v = (top * (1 - wy) + bot * wy) / 255.f;
-                chw[size_t(c) * R * R + size_t(y) * R + x] = (v - mean[c]) * istd[c];
-            }
-        }
+    const uint32_t R = cfg_.resolution;
+    const VkDeviceSize rgbaBytes = VkDeviceSize(width) * VkDeviceSize(height) * 4;
+    if (rgbaInput_.capacity < rgbaBytes) {
+        // A new buffer handle: the descriptor sets cached for the old one go stale.
+        rgbaInput_ = vk_.createOwnedRaw(rgbaBytes);
+        vk_.resetDescriptorCache();
     }
-
-    ForwardOut fw = runForward(chw, /*captureIntermediates=*/false);
+    vk_.reserveFrameIO(rgbaBytes, headReadbackBytes_());
+    vk_.beginFrame();
+    vk_.recordUpload(rgbaInput_.buffer, rgba, rgbaBytes);
+    Tensor input = vk_.createTensorV({3u, R, R});
+    { PreprocessParams pp{uint32_t(width), uint32_t(height), R, 0u};
+      vk_.dispatch(preprocessPipe_, {rgbaInput_.buffer, input.buffer}, &pp, sizeof(pp),
+                   divCeil(R, 16), divCeil(R, 16), 1); }
+    vk_.markTimestamp("preprocess");
+    ForwardOut fw = finishForward_(input, /*captureIntermediates=*/false);
 
     std::vector<Detection> dets;
     auto sigmoid = [](float x) { return 1.f / (1.f + std::exp(-x)); };

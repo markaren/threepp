@@ -70,6 +70,9 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
 - DINOv2-windowed ViT-S backbone + C2f projector + two-stage LW-DETR deformable decoder.
 - Full deep-dive, insights, bugs, and optimization log in `rfdetr/PORTING_NOTES.md`.
 - Bit-exact through the projector; ~42 FPS after optimization.
+- One submit per inference since 2026-11-27 (preprocess and top-K on the GPU): on an
+  RTX 5080, Nano 16.0 → 11.8 ms and Medium 33.3 → 26.3 ms end-to-end. The PyTorch
+  comparison above is still the 4070's.
 
 ---
 

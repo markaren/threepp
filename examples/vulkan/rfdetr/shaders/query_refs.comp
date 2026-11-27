@@ -1,0 +1,45 @@
+#version 450
+// Decoder queries from the selected proposals, one thread per (query i, sine
+// element j < 512): the reference box is the learned refpoint_embed[i]
+// reparametrised on proposal sel[i] (fixed across decoder layers:
+// lite_refpoint_refine), and its 512-d sine embedding, in the order pos_y,
+// pos_x, pos_w, pos_h (128 each, sin/cos interleaved), which ref_point_head
+// turns into query_pos. Element j < 4 also writes ref[i] and j < 2 refXy[i].
+// Bindings: 0 sel [Nq], 1 coord [T,4], 2 learned [>=Nq,4], 3 dimt [128],
+//           4 ref [Nq,4] cx,cy,w,h, 5 refXy [Nq,2], 6 sine [Nq,512].
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint Nq, _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly  buffer Sel     { uint  sel[]; };
+layout(std430, binding = 1) readonly  buffer Coord   { float coord[]; };
+layout(std430, binding = 2) readonly  buffer Learned { float learned[]; };
+layout(std430, binding = 3) readonly  buffer Dimt    { float dimt[]; };// 10000^(2*floor(k/2)/128)
+layout(std430, binding = 4) writeonly buffer Ref     { float ref[]; };
+layout(std430, binding = 5) writeonly buffer RefXy   { float refXy[]; };
+layout(std430, binding = 6) writeonly buffer Sine    { float sine[]; };
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    uint i = gl_GlobalInvocationID.y;
+    if (i >= p.Nq || j >= 512u) return;
+
+    uint t = sel[i];
+    float tx = coord[t * 4u + 0u], ty = coord[t * 4u + 1u];
+    float tw = coord[t * 4u + 2u], th = coord[t * 4u + 3u];
+    precise float cx = learned[i * 4u + 0u] * tw + tx;
+    precise float cy = learned[i * 4u + 1u] * th + ty;
+    float w = exp(learned[i * 4u + 2u]) * tw;
+    float h = exp(learned[i * 4u + 3u]) * th;
+
+    if (j < 4u) ref[i * 4u + j] = j == 0u ? cx : j == 1u ? cy : j == 2u ? w : h;
+    if (j < 2u) refXy[i * 2u + j] = j == 0u ? cx : cy;
+
+    uint g = j / 128u, k = j % 128u;
+    float val = g == 0u ? cy : g == 1u ? cx : g == 2u ? w : h;
+    precise float v = val * 6.2831855;// 2*pi rounded to float, as the reference
+    float a = v / dimt[k];
+    sine[i * 512u + j] = (k & 1u) == 0u ? sin(a) : cos(a);
+}

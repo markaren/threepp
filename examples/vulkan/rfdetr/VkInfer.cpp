@@ -31,8 +31,6 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
     // the frame command buffer (which may be mid-recording when an upload runs).
     vkCheck(vkCreateCommandPool(device_, &cpci, nullptr, &oneShotPool_), "create one-shot command pool");
 
-    // One descriptor set per dispatch in a frame; a YOLOv8n pass is a few
-    // hundred dispatches. Reset per beginFrame().
     // Descriptor sets are cached and reused across inferences (not reset per frame),
     // so the pool must hold every unique (pipeline, buffers) set for the whole run.
     VkDescriptorPoolSize ps{};
@@ -50,6 +48,12 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     zero(dummy_.buffer);
 
+    // endFrame() waits on this, not on the whole queue: the queue is the
+    // renderer's, and its frames in flight are none of the inference's business.
+    VkFenceCreateInfo fci{};
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    vkCheck(vkCreateFence(device_, &fci, nullptr, &frameFence_), "create frame fence");
+
     tsEnabled_ = std::getenv("RFDETR_PROFILE") != nullptr;
     if (tsEnabled_) {
         VkPhysicalDeviceProperties props{};
@@ -65,6 +69,7 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
 
 VkInfer::~VkInfer() {
     arenaSlots_.clear();// free pooled buffers before pools/device teardown
+    if (frameFence_) vkDestroyFence(device_, frameFence_, nullptr);
     if (tsPool_) vkDestroyQueryPool(device_, tsPool_, nullptr);
     if (descPool_) vkDestroyDescriptorPool(device_, descPool_, nullptr);
     if (oneShotPool_) vkDestroyCommandPool(device_, oneShotPool_, nullptr);
@@ -302,6 +307,81 @@ void VkInfer::recordCopy(VkBuffer dst, VkBuffer src, VkDeviceSize bytes) {
     vkCmdCopyBuffer(frameCb_, src, dst, 1, &region);
 }
 
+void VkInfer::reserveFrameIO(VkDeviceSize uploadBytes, VkDeviceSize readbackBytes) {
+    if (recording_) throw std::runtime_error("VkInfer::reserveFrameIO inside beginFrame()/endFrame()");
+    // Growing frees the old buffer, which is safe here: the last frame that used
+    // it has been waited on. Freeing a mapped allocation unmaps it.
+    uploadBytes += 256;
+    readbackBytes += 256;
+    if (frameUpload_.capacity < uploadBytes) {
+        frameUpload_ = allocBuffer(uploadBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkCheck(vkMapMemory(device_, frameUpload_.memory, 0, VK_WHOLE_SIZE, 0, &frameUploadMapped_),
+                "map frame upload staging");
+    }
+    if (frameReadback_.capacity < readbackBytes) {
+        // HOST_CACHED for the same reason as the one-shot readback staging.
+        try {
+            frameReadback_ = allocBuffer(readbackBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                                 VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        } catch (const std::runtime_error&) {
+            frameReadback_ = allocBuffer(readbackBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        }
+        vkCheck(vkMapMemory(device_, frameReadback_.memory, 0, VK_WHOLE_SIZE, 0, &frameReadbackMapped_),
+                "map frame readback staging");
+    }
+}
+
+void VkInfer::recordUpload(VkBuffer dst, const void* data, VkDeviceSize bytes) {
+    if (!recording_) throw std::runtime_error("VkInfer::recordUpload outside beginFrame()/endFrame()");
+    const VkDeviceSize off = (frameUploadCursor_ + 15) & ~VkDeviceSize(15);
+    if (off + bytes > frameUpload_.capacity)
+        throw std::runtime_error("VkInfer::recordUpload: more than reserveFrameIO() reserved");
+    // Host writes to coherent memory before the submit are visible to it.
+    std::memcpy(static_cast<char*>(frameUploadMapped_) + off, data, size_t(bytes));
+    frameUploadCursor_ = off + bytes;
+
+    // dst may still be read by earlier work in this frame: order the copy after it.
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(frameCb_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &mb, 0, nullptr, 0, nullptr);
+    VkBufferCopy region{};
+    region.srcOffset = off;
+    region.size = bytes;
+    vkCmdCopyBuffer(frameCb_, frameUpload_.buffer, dst, 1, &region);
+    // The next dispatch's leading barrier makes the copy visible to its reads.
+}
+
+VkDeviceSize VkInfer::recordReadback(VkBuffer src, VkDeviceSize bytes) {
+    if (!recording_) throw std::runtime_error("VkInfer::recordReadback outside beginFrame()/endFrame()");
+    const VkDeviceSize off = (frameReadbackCursor_ + 15) & ~VkDeviceSize(15);
+    if (off + bytes > frameReadback_.capacity)
+        throw std::runtime_error("VkInfer::recordReadback: more than reserveFrameIO() reserved");
+    frameReadbackCursor_ = off + bytes;
+
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(frameCb_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &mb, 0, nullptr, 0, nullptr);
+    VkBufferCopy region{};
+    region.dstOffset = off;
+    region.size = bytes;
+    vkCmdCopyBuffer(frameCb_, src, frameReadback_.buffer, 1, &region);
+    frameHasReadback_ = true;// endFrame() adds the transfer -> host barrier
+    return off;
+}
+
+const void* VkInfer::frameReadback(VkDeviceSize offset) const {
+    return static_cast<const char*>(frameReadbackMapped_) + offset;
+}
+
 void VkInfer::readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
                         VkBuffer srcB, void* dstB, VkDeviceSize bytesB) {
     VkDeviceSize total = bytesA + bytesB;
@@ -395,6 +475,9 @@ void VkInfer::resetDescriptorCache() {
 
 void VkInfer::beginFrame() {
     arenaCursor_ = 0;// rewind the activation pool for this inference
+    frameUploadCursor_ = 0;
+    frameReadbackCursor_ = 0;
+    frameHasReadback_ = false;
     // NOTE: the descriptor pool is intentionally NOT reset — sets are cached and
     // reused across inferences (see dispatch()/dsCache_).
     if (frameCb_ == VK_NULL_HANDLE) {
@@ -481,13 +564,23 @@ void VkInfer::endFrame() {
     if (!recording_) return;
     const bool prof = tsEnabled_ && tsPool_ && tsCount_ > 0;
     if (prof) markTimestamp("end");
+    if (frameHasReadback_) {
+        // Make the readback copies visible to the host reads after the wait.
+        VkMemoryBarrier mb{};
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(frameCb_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                             0, 1, &mb, 0, nullptr, 0, nullptr);
+    }
     vkCheck(vkEndCommandBuffer(frameCb_), "end frame cmd buffer");
     VkSubmitInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &frameCb_;
-    vkCheck(vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE), "submit frame");
-    vkCheck(vkQueueWaitIdle(queue_), "wait frame");
+    vkCheck(vkQueueSubmit(queue_, 1, &si, frameFence_), "submit frame");
+    vkCheck(vkWaitForFences(device_, 1, &frameFence_, VK_TRUE, UINT64_MAX), "wait frame");
+    vkCheck(vkResetFences(device_, 1, &frameFence_), "reset frame fence");
     recording_ = false;
 
     if (prof) {

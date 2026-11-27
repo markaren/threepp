@@ -117,6 +117,10 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/scale_add.comp"            kRfScaleAddSpv  VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/linear_splitk.comp"        kRfLinearSplitKSpv VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/reduce_splitk.comp"        kRfReduceSplitKSpv VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/preprocess.comp"           kRfPreprocessSpv   VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/proposals.comp"            kRfProposalsSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/topk_rank.comp"            kRfTopkRankSpv     VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/query_refs.comp"           kRfQueryRefsSpv    VARIANT_SUFFIX rfdetr)
     endif ()
 
     add_example(NAME "vulkan_rfdetr_inference"
@@ -164,5 +168,10 @@ if (THREEPP_WITH_INFERENCE)
         # Split-K GEMM (partial accumulation + reduction) for low-N occupancy-bound linears.
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/linear_splitk.comp"        kRfLinearSplitKSpv VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/reduce_splitk.comp"        kRfReduceSplitKSpv VARIANT_SUFFIX rfdetr)
+        # GPU preprocess and two-stage query selection: one submit per inference.
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/preprocess.comp"           kRfPreprocessSpv   VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/proposals.comp"            kRfProposalsSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/topk_rank.comp"            kRfTopkRankSpv     VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/query_refs.comp"           kRfQueryRefsSpv    VARIANT_SUFFIX rfdetr)
     endif ()
 endif ()

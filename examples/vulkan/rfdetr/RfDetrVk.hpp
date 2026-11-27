@@ -76,8 +76,9 @@ namespace rfdetr {
         ForwardOut runForward(const std::vector<float>& chw, bool captureIntermediates = true);
 
         // End-to-end detection on an RGBA image: ImageNet preprocess (square resize
-        // to 384, /255, normalize) -> forward -> sigmoid + score-threshold + box
-        // de-normalization to the original image pixels. classId is the COCO id.
+        // to the variant's resolution, /255, normalize), forward pass and heads run
+        // on the GPU as one submit; the host then applies sigmoid + score-threshold
+        // + box de-normalization to the original image pixels. classId is the COCO id.
         std::vector<Detection> infer(const unsigned char* rgba, int width, int height,
                                      float scoreThresh = 0.5f);
 
@@ -93,19 +94,23 @@ namespace rfdetr {
         VkPipe transposeT2tPipe_, qkvSplicePipe_, reluPipe_, offsetPreprocessPipe_, msDeformAttnPipe_;
         VkPipe scaleAddPipe_;
         VkPipe linearSplitKPipe_, reduceSplitKPipe_;
+        VkPipe preprocessPipe_, proposalsPipe_, topkRankPipe_, queryRefsPipe_;
 
         // Scratch for split-K partial sums [splitK, M, N], reused across all
         // split-K linears (serialized by VkInfer's per-dispatch barriers).
         VkTensor splitKPartials_;
         uint64_t splitKPartialFloats_ = 0;// capacity of splitKPartials_ in floats
-        bool useSplitK_ = true;// off via env RF_NOSPLITK=1 for A/B baseline
 
         // Deformable-attention spatial_shapes [grid,grid] + level_start [0], constant
         // for the single-scale P4 decoder — uploaded once (ctor), not per layer.
+        // msShapeBuf_ doubles as the offset preprocess's level shape.
         VkTensor msShapeBuf_, msStartBuf_;
+        // Sine-embedding frequencies 10000^(2*floor(k/2)/128), k < 128 (ctor).
+        VkTensor dimtBuf_;
+        // The RGBA image infer() uploads; grows with the largest image seen.
+        VkTensor rgbaInput_;
 
         std::unordered_map<std::string, VkTensor> weights_;
-        std::vector<float> learnedRefCpu_;// refpoint_embed[:NUM_QUERIES] cached at load
 
         // ── ops ──
         Tensor conv_(const Tensor& x, const std::string& wKey, const std::string& bKey,
@@ -148,7 +153,6 @@ namespace rfdetr {
         Tensor projector_(const std::array<Tensor, 4>& taps, uint32_t grid);
 
         // ── decoder primitives ──
-        Tensor uploadArena_(const std::vector<uint32_t>& shape, const float* data);
         Tensor relu_(const Tensor& x);
         Tensor transposeChw2Tokens_(const Tensor& x);// [C,H,W] -> [H*W,C]
         Tensor bboxMLP_(const Tensor& x, const std::string& pfx);// 3-layer MLP, relu between
@@ -160,9 +164,28 @@ namespace rfdetr {
         Tensor msDeformAttn_(const Tensor& value, uint32_t H, uint32_t W,
                              const Tensor& refPtsXy, const Tensor& offsets, const Tensor& attnW,
                              uint32_t numHeads);
-        // Two-stage deformable decoder + heads; memory is proj0 in [HW,256] token layout.
-        // Fills out.predLogits / out.predBoxes. encClass/encBboxDelta read back from frame A.
-        void decoder_(const Tensor& memory, uint32_t gridH, uint32_t gridW, ForwardOut& out);
+        // ── one inference = one frame ──
+        // The backbone stages the validation path reads back.
+        struct BackboneTensors {
+            Tensor patch, embed, vit0, vit3, proj0;
+            std::array<Tensor, 4> taps;
+        };
+        // What the host needs after the frame: class logits [Nq,NC], the box head's
+        // deltas [Nq,4] and the fixed decoder reference [Nq,4] they apply to.
+        struct HeadTensors {
+            Tensor logits, bboxDelta, ref;
+        };
+        [[nodiscard]] VkDeviceSize headReadbackBytes_() const;
+        // Patch embed -> 12 ViT blocks -> taps -> projector, recorded into the open
+        // frame; returns proj0 as decoder memory tokens [G*G, 256].
+        Tensor recordBackbone_(const Tensor& input, BackboneTensors& keep);
+        // Two-stage deformable decoder + heads, recorded into the open frame:
+        // first-stage heads over every memory token, top-Nq proposals, the fixed
+        // reference + its sine embedding, the decoder layers, the final heads.
+        HeadTensors recordDecoder_(const Tensor& memory);
+        // Records backbone + decoder behind `input` (already in the open frame),
+        // ends the frame and assembles ForwardOut from the readbacks.
+        ForwardOut finishForward_(const Tensor& input, bool captureIntermediates);
     };
 
 }// namespace rfdetr

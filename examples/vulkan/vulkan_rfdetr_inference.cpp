@@ -2,7 +2,10 @@
 ///
 /// Usage:
 ///   vulkan_rfdetr_inference <image> <weights>               run detection + visualize
+///   vulkan_rfdetr_inference <image> <weights> --bench <N>   time N inferences, print, exit
 ///   vulkan_rfdetr_inference --validate <weights> <ref.bin>  numeric self-check
+///
+///   --bench, --validate and --shot run in a hidden window.
 ///
 ///   image    – JPEG/PNG input image
 ///   weights  – scripts/rfdetr-nano.weights   (export_rfdetr_weights.py)
@@ -29,6 +32,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -121,7 +125,7 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
 // ── Detection mode: run inference and visualize boxes over the image ──
 static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetrVk& model,
                         const std::string& imgPath, const std::string& weightsPath,
-                        const std::string& shotPath) {
+                        const std::string& shotPath, int benchRuns) {
     ImageLoader imgLoader;
     auto imgOpt = imgLoader.load(imgPath, 4, false);
     if (!imgOpt) { std::cerr << "ERROR: cannot load image '" << imgPath << "'\n"; return 1; }
@@ -144,14 +148,34 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
         do { dets = model.infer(rgba.data(), int(img.width()), int(img.height()), 0.5f); }
         while (std::chrono::duration<double>(clk::now() - wt0).count() < 2.0);
     }
-    constexpr int kRuns = 50;
+    const int runs = benchRuns > 0 ? benchRuns : 50;
+    std::vector<double> times(static_cast<size_t>(runs));
     double total = 0.0;
-    for (int i = 0; i < kRuns; ++i) {
+    for (int i = 0; i < runs; ++i) {
         auto t0 = clk::now();
         dets = model.infer(rgba.data(), int(img.width()), int(img.height()), 0.5f);
-        total += std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+        times[size_t(i)] = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+        total += times[size_t(i)];
     }
-    const double ms = total / kRuns;
+    const double ms = total / runs;
+
+    if (benchRuns > 0) {
+        // The distribution, not just the mean: one slow outlier (a driver hiccup)
+        // moves a mean of short runs but not the median.
+        std::vector<double> sorted = times;
+        std::sort(sorted.begin(), sorted.end());
+        auto at = [&](double q) { return sorted[size_t(q * double(sorted.size() - 1) + 0.5)]; };
+        std::cout << std::fixed << std::setprecision(2)
+                  << "bench: " << runs << " runs  median " << at(0.5) << " ms  mean " << ms
+                  << "  p10 " << at(0.1) << "  p90 " << at(0.9) << "  min " << sorted.front() << "\n";
+        for (auto& d : dets) {
+            const char* name = (d.classId >= 0 && d.classId < 91) ? kCoco91[d.classId] : "?";
+            std::cout << "  " << std::left << std::setw(16) << name << std::right
+                      << "  conf " << std::setprecision(4) << d.confidence << "  [" << std::setprecision(1)
+                      << d.x1 << ", " << d.y1 << ", " << d.x2 << ", " << d.y2 << "]\n";
+        }
+        return 0;
+    }
 
     std::cout << "\nDetections (" << dets.size() << ") in " << std::fixed << std::setprecision(1)
               << ms << " ms  (" << (1000.0 / ms) << " FPS):\n";
@@ -230,15 +254,28 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --bench <N>: time N inferences after the warmup, print them, exit (no viewer).
+    int benchRuns = 0;
+    for (size_t i = 0; i + 1 < args.size();) {
+        if (args[i] == "--bench") {
+            benchRuns = std::max(1, std::atoi(args[i + 1].c_str()));
+            args.erase(args.begin() + i, args.begin() + i + 2);
+        } else {
+            ++i;
+        }
+    }
+
     const bool validate = !args.empty() && args[0] == "--validate";
     if ((validate && args.size() < 3) || (!validate && args.size() < 2)) {
-        std::cerr << "Usage: " << argv[0] << " [--variant nano|small|medium] <image> <weights> [--shot out.png]\n"
+        std::cerr << "Usage: " << argv[0] << " [--variant nano|small|medium] <image> <weights> [--shot out.png | --bench N]\n"
                   << "   or: " << argv[0] << " [--variant nano|small|medium] --validate <weights> <ref.bin>\n";
         return 1;
     }
 
     Canvas::Parameters params;
     params.title("RF-DETR Vulkan Inference").size(900, 900);
+    // Nobody looks at these runs: a hidden window keeps the keyboard focus where it was.
+    params.headless(validate || benchRuns > 0 || !shotPath.empty());
     Canvas canvas(params);
     VulkanRenderer renderer(canvas);
     renderer.setClearColor(Color(0x1a1a2e));
@@ -247,7 +284,7 @@ int main(int argc, char** argv) {
         rfdetr::RfDetrVk model(renderer, variant);
         if (validate)
             return runValidation(model, args[1], args[2]);
-        return runDetection(canvas, renderer, model, args[0], args[1], shotPath);
+        return runDetection(canvas, renderer, model, args[0], args[1], shotPath, benchRuns);
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
         return 1;
