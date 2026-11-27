@@ -119,7 +119,7 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &depthPipeLayout_),
               "vkCreatePipelineLayout(gbufResolveDepth)");
 
-        VkShaderModule vm = createShaderModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert)");
+        VkShaderModule vm = createShaderModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert for gbuf_resolve_depth)");
         VkShaderModule fm = createShaderModule(d, kGbufResolveDepthFragSpv, sizeof(kGbufResolveDepthFragSpv), "vkCreateShaderModule(gbuf_resolve_depth.frag)");
 
         VkPipelineShaderStageCreateInfo stages[2]{};

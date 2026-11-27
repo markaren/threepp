@@ -765,7 +765,7 @@ void OverlayPass::createPaneSkyPipeline() {
               "vkCreatePipelineLayout(paneSky)");
     }
 
-    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert)");
+    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert for overlay_pane_sky)");
     VkShaderModule fragModule = createShaderModule(ctx_.device(), kOverlayPaneSkyFragSpv, sizeof(kOverlayPaneSkyFragSpv), "vkCreateShaderModule(overlay_pane_sky.frag)");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
