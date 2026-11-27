@@ -110,9 +110,6 @@ namespace threepp::vulkan::impl {
     static_assert(sizeof(GpuPointLight) == 40);
     static_assert(sizeof(GpuSpotLight)  == 60);
     static_assert(sizeof(GpuRectLight)  == 60);
-    // splat_common.glsl declares a prefix of this block and skips to the
-    // environment knobs with a float array sized from it: a size change here
-    // moves that skip (it ends 96 bytes before the end).
     static_assert(sizeof(GpuLightsUbo)  == 1440);
 
     struct GpuClusterLight {

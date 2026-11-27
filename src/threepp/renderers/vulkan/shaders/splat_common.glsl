@@ -257,33 +257,10 @@ layout(set = 0, binding = 17) uniform usampler2D gbufIds;
 #define CLOUD_UBO_BINDING 19
 #include "cloud_ubo.glsl"
 
-// Only the leading `ambient` and the sun list are read; a uniform block may be
-// shorter than the buffer bound to it, and the offsets of what it does declare
-// still match — so the point/spot/rect tail stays undeclared. The fields that
-// ARE declared must keep the exact order and types deferred_shade.comp and
-// particle_light.comp give them, or every offset after the first mismatch is
-// garbage.
-#include "light_structs.glsl"
-layout(set = 0, binding = 20, scalar) uniform LightsUbo {
-    vec3     ambient;
-    uint     dirCount;
-    DirLight dirLights[8];
-    // Skips the point/spot/rect lists and the hemi rows (bytes 208..1296 of
-    // GpuLightsUbo) to reach the environment knobs at the tail. KEEP IN SYNC
-    // with GpuLightsUbo's size (VulkanGpuLayouts.hpp): its static_assert
-    // names this skip.
-    float    lightsSkipToEnvKnobs[272];
-    vec3     envRotC0;// scene.environmentRotation, world -> env
-    vec3     envRotC1;
-    vec3     envRotC2;
-    float    envIntensity;// scene.environmentIntensity
-    vec3     bgRotC0;
-    vec3     bgRotC1;
-    vec3     bgRotC2;
-    float    bgIntensity;
-    float    bgBlurriness;
-    uint     envKnobFlags;
-} lights;
+// The lights block at this set's binding 20: `ambient`, the sun list and the
+// environment knobs are what the splats read.
+#define LIGHTS_UBO_BINDING 20
+#include "lights_ubo.glsl"
 
 layout(set = 0, binding = 21) uniform sampler2D envTex;// prefiltered PMREM chain
 
