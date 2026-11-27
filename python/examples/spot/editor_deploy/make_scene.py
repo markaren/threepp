@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_SPOT)))
 # See make_spot_urdf: usually a no-op, and THREEPP_DLL_DIR is for a .pyd copied out of its build.
 _dll = os.environ.get("THREEPP_DLL_DIR",
                       os.path.join(os.path.dirname(os.path.dirname(_SPOT)), "threepp"))
-if os.path.isdir(_dll):
+if os.name == "nt" and os.path.isdir(_dll):   # add_dll_directory exists only on Windows
     os.add_dll_directory(_dll)
 
 from spot_deploy import DEFAULT, LEGS, STIFF_GAINS   # noqa: E402

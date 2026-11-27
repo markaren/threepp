@@ -34,7 +34,7 @@ sys.path.insert(0, _HERE)
 # .pyd was copied somewhere else — a git worktree, say — and THREEPP_DLL_DIR points back at the
 # checkout that actually built it.
 _dll = os.environ.get("THREEPP_DLL_DIR", os.path.join(_PYROOT, "threepp"))
-if os.path.isdir(_dll):
+if os.name == "nt" and os.path.isdir(_dll):   # add_dll_directory exists only on Windows
     os.add_dll_directory(_dll)
 
 import torch                                                              # noqa: E402
