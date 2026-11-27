@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include "threepp/utils/FileBytes.hpp"
 #include "threepp/utils/Log.hpp"
 #include <vector>
 
@@ -313,18 +314,13 @@ namespace threepp {
     DDSLoader::~DDSLoader() = default;
 
     std::shared_ptr<Texture> DDSLoader::load(const std::filesystem::path& path, bool flipY) {
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file) {
-            THREEPP_LOG(kLog, Error) << "Cannot open " << path.string();
+        const auto data = utils::readFileBytes(path);
+        if (!data) {
+            THREEPP_LOG(kLog, Error) << "Cannot read " << path.string();
             return nullptr;
         }
-        const auto fileSize = file.tellg();
-        file.seekg(0);
-        std::vector<uint8_t> data(static_cast<size_t>(fileSize));
-        file.read(reinterpret_cast<char*>(data.data()), fileSize);
-        file.close();
 
-        auto tex = parseDDS(data.data(), data.size(), flipY);
+        auto tex = parseDDS(data->data(), data->size(), flipY);
         if (tex) tex->name = path.stem().string();
         return tex;
     }

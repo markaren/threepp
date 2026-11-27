@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <vector>
 
 using namespace threepp;
@@ -63,6 +65,24 @@ TEST_CASE("DDSLoader still accepts a valid minimal file") {
     // 4x4 DXT1 = one 8-byte block.
     DDSLoader loader;
     CHECK(loader.loadFromMemory(craftDds(4, 4, 1, 8)) != nullptr);
+}
+
+TEST_CASE("DDSLoader reads a file from disk") {
+
+    // load(path) reads the file whole (utils::readFileBytes) and parses it as
+    // loadFromMemory does; a file that is not there is a null texture.
+    const auto bytes = craftDds(4, 4, 1, 8);
+    const auto path  = std::filesystem::temp_directory_path() / "threepp_ddsloader_test.dds";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    DDSLoader loader;
+    const auto tex = loader.load(path);
+    std::filesystem::remove(path);
+    REQUIRE(tex != nullptr);
+    CHECK(tex->name == "threepp_ddsloader_test");
+    CHECK(loader.load(path) == nullptr);
 }
 
 TEST_CASE("DDSLoader caps an absurd mip count") {

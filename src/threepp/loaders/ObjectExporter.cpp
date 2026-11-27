@@ -35,6 +35,7 @@
 #include "threepp/textures/CubeTexture.hpp"
 
 #include "ObjectJsonConstants.hpp"
+#include "threepp/utils/FileBytes.hpp"
 #include "threepp/loaders/AssetSource.hpp"
 #include "threepp/loaders/SplatLoader.hpp"
 #include "threepp/objects/SplatCloud.hpp"
@@ -168,8 +169,6 @@ namespace {
                "not document nodes, it will not be in the saved document";
     }
 
-    std::optional<std::vector<unsigned char>> readFile(const std::filesystem::path& path);
-
     // ------------------------------------------------------------ splat clouds
 
     // A userData string, or empty when the key is absent or not a string.
@@ -255,7 +254,7 @@ namespace {
         if (meta.archive) {
 
             if (sourceIsFile) {
-                if (auto bytes = readFile(std::filesystem::u8path(source))) {
+                if (auto bytes = utils::readFileBytes(std::filesystem::u8path(source))) {
                     const auto ext = std::filesystem::u8path(source).extension().string();
                     path = std::string(archiveSplatDir) + object.uuid + (ext.empty() ? ".ply" : ext);
                     meta.archive->add(path, std::move(*bytes));
@@ -464,29 +463,6 @@ namespace {
         return "data:image/png;base64," + utils::base64Encode(*png);
     }
 
-    // The texture's source file, verbatim. An archive stores these bytes rather
-    // than re-encoding the pixels: they are already compressed, in a format
-    // chosen for the image, and a PNG round-trip through stb would be both
-    // slower and (for a photographic JPEG) larger.
-    std::optional<std::vector<unsigned char>> readFile(const std::filesystem::path& path) {
-
-        std::ifstream in(path, std::ios::binary | std::ios::ate);
-        if (!in) return std::nullopt;
-
-        const std::streamoff end = in.tellg();
-        if (end < 0) return std::nullopt;
-
-        std::vector<unsigned char> bytes(static_cast<std::size_t>(end));
-        in.seekg(0, std::ios::beg);
-        if (end > 0) {
-
-            in.read(reinterpret_cast<char*>(bytes.data()), end);
-            if (in.gcount() != end) return std::nullopt;
-        }
-
-        return bytes;
-    }
-
     // ------------------------------------------------------------ textures
 
     std::string writeTexture(Texture& texture, Meta& meta);
@@ -523,7 +499,12 @@ namespace {
 
         if (canReference(texture)) {
 
-            if (auto bytes = readFile(texture.sourceFile)) {
+            // The texture's source file, verbatim. An archive stores these
+            // bytes rather than re-encoding the pixels: they are already
+            // compressed, in a format chosen for the image, and a PNG
+            // round-trip through stb would be both slower and (for a
+            // photographic JPEG) larger.
+            if (auto bytes = utils::readFileBytes(texture.sourceFile)) {
 
                 const auto name = base + texture.sourceFile.extension().generic_string();
                 meta.archive->add(name, std::move(*bytes));
@@ -1509,7 +1490,7 @@ namespace {
 
             } else {
 
-                bytes = readFile(source);
+                bytes = utils::readFileBytes(source);
             }
 
             if (!bytes) continue;

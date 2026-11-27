@@ -10,6 +10,7 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 #include "threepp/math/Color.hpp"
+#include "threepp/utils/FileBytes.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/objects/Skeleton.hpp"
@@ -94,23 +95,7 @@ namespace threepp::objectjson {
                 return archive->read(url);
             }
 
-            const auto path = resourcePath.empty() ? std::filesystem::path(url) : resourcePath / url;
-
-            std::ifstream in(path, std::ios::binary | std::ios::ate);
-            if (!in) return std::nullopt;
-
-            const std::streamoff end = in.tellg();
-            if (end < 0) return std::nullopt;
-
-            std::vector<unsigned char> bytes(static_cast<std::size_t>(end));
-            in.seekg(0, std::ios::beg);
-            if (end > 0) {
-
-                in.read(reinterpret_cast<char*>(bytes.data()), end);
-                if (in.gcount() != end) return std::nullopt;
-            }
-
-            return bytes;
+            return utils::readFileBytes(resourcePath.empty() ? std::filesystem::path(url) : resourcePath / url);
         }
     };
 
