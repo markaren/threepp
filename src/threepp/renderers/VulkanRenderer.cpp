@@ -1806,6 +1806,33 @@ namespace threepp {
         return true;
     }
 
+    bool VulkanRenderer::readWakeField(const DisplacedMesh& mesh, uint32_t layer, std::vector<float>& state,
+                                       std::vector<float>& velocity, uint32_t& resolution) {
+        auto& impl = *core();
+        auto* ctx  = impl.ctx.get();
+        if (!ctx) return false;
+        const auto it = impl.displacedStates.find(&mesh);
+        if (it == impl.displacedStates.end() || !it->second || !it->second->wake) return false;
+        const auto& w = *it->second->wake;
+        if (layer >= w.layers) return false;
+
+        // stateA (rgba16f) and velA (rg16f): what the step leaves and the shade samples.
+        const uint32_t n      = w.res;
+        const size_t   texels = static_cast<size_t>(n) * n;
+        const auto toFloats = [&](const std::vector<uint8_t>& bytes, size_t channels, std::vector<float>& out) {
+            out.resize(texels * channels);
+            for (size_t i = 0; i < texels * channels; ++i) {
+                uint16_t h;
+                std::memcpy(&h, bytes.data() + i * 2u, sizeof(h));
+                out[i] = halfBitsToFloat(h);
+            }
+        };
+        toFloats(copyGeneralImageToHost(*ctx, w.image[0], n, n, layer, 8u, "readWakeField(state)"), 4u, state);
+        toFloats(copyGeneralImageToHost(*ctx, w.image[3], n, n, layer, 4u, "readWakeField(velocity)"), 2u, velocity);
+        resolution = n;
+        return true;
+    }
+
     bool VulkanRenderer::readGridSmoke(const ParticleField& field, GridSmokeState& out) {
         auto& impl = *core();
         auto* ctx  = impl.ctx.get();

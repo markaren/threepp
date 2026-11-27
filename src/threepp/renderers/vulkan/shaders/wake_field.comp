@@ -3,9 +3,12 @@
 #extension GL_EXT_buffer_reference                       : require
 #extension GL_EXT_buffer_reference2                      : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_KHR_shader_subgroup_basic                  : require
+#extension GL_KHR_shader_subgroup_vote                   : require
 #extension GL_GOOGLE_include_directive                   : enable
 
 #include "ocean_wake_lists.glsl"
+#include "ocean_wake_tiles.glsl"
 
 // The ocean's wake field, one step of one patch (DisplacedMesh::WakeField).
 //
@@ -14,7 +17,11 @@
 //     state    R foam   G aeration   B turbulence (m/s)   A lane
 //     velocity RG the water's mean flow over the ground (m/s, world x / z)
 //
-// Three dispatches a step, each over the whole patch:
+// Three dispatches a step. A producer's patch takes them over the 8 x 8 tiles
+// wake_tiles.comp lists, a workgroup a tile: those whose water can change
+// this step, and those to set back to still water. Every other tile's texels
+// are zero after a step over the whole patch too, so the images are the
+// same. A shore window takes them over the whole window:
 //
 //   0 ADVECT   Carry both fields with the flow, semi-Lagrangian: this texel's
 //              water came from x - v dt. v is the mean flow plus a turbulent
@@ -58,13 +65,13 @@ layout(set = 0, binding = 3, rgba16f) uniform writeonly image2DArray dstState;
 layout(set = 0, binding = 4, rg16f)   uniform writeonly image2DArray dstVel;
 layout(set = 0, binding = 5) uniform sampler2DArray rippleSlopes;// the ripples, as the last step left them (rippleBreaking)
 
-// 24 bytes, mirrored by WakeFieldPipeline::PushConstants.
+// 32 bytes, mirrored by WakeFieldPipeline::PushConstants.
 layout(push_constant, scalar) uniform Pc {
     uint64_t tableAddr;
     uint     layer;
-    uint     mode;        // 0 advect, 1 correct, 2 settle
-    uint     sourceCount; // the table's this step (SETTLE reads its patch's list, ocean_wake_lists.glsl)
-    uint     _pad;
+    uint     mode;     // 0 advect, 1 correct, 2 settle
+    uint64_t listAddr; // the patch's tiles this step (wake_tiles.comp), a workgroup each; 0 = every texel
+    uint64_t flagsAddr;// SETTLE marks the listed tiles it leaves water in (WAKE_TILE_NZ); 0 = none
 } pc;
 
 float wkHash(ivec3 p) {
@@ -161,12 +168,30 @@ bool insideLast(vec2 uv, int res) {
 
 void main() {
     WakeTable tb = WakeTable(pc.tableAddr);
-    const int   res = int(tb.res);
-    const ivec2 px  = ivec2(gl_GlobalInvocationID.xy);
+    const int res = int(tb.res);
+    // A listed step's workgroup is one tile of the list. A tile to clear was
+    // written by the last step and can hold no water after this one: it
+    // takes what this dispatch writes there in a step over every texel,
+    // zero.
+    ivec2 px        = ivec2(gl_GlobalInvocationID.xy);
+    uint  tile      = 0u;
+    bool  clearTile = false;
+    if (pc.listAddr != 0ul) {
+        const uint e    = WakeTileWords(pc.listAddr).w[gl_WorkGroupID.x];
+        const uint side = (uint(res) + 7u) / 8u;
+        tile      = e & ~WAKE_TILE_CLEAR;
+        clearTile = (e & WAKE_TILE_CLEAR) != 0u;
+        px        = ivec2(tile % side, tile / side) * 8 + ivec2(gl_LocalInvocationID.xy);
+    }
     if (px.x >= res || px.y >= res) return;
     const int       li    = int(pc.layer);
     const float     layer = float(pc.layer);
     const ivec3     dst   = ivec3(px, li);
+    if (clearTile) {
+        imageStore(dstState, dst, vec4(0.0));
+        if (pc.mode != 1u) imageStore(dstVel, dst, vec4(0.0));// (CORRECT writes no flow)
+        return;
+    }
     const WakePatch p     = tb.patches[pc.layer];
     const vec2  origin     = vec2(p.originX, p.originZ);
     const vec2  prevOrigin = vec2(p.prevOriginX, p.prevOriginZ);
@@ -369,6 +394,13 @@ void main() {
         const float ulp = exp2(floor(log2(s.a)) - 10.0);
         s.a += (wkHash(ivec3(px, int(tb.timeSec * 977.0) + li * 131)) - 0.5) * ulp;
     }
-    imageStore(dstState, dst, max(s, vec4(0.0)));
+    const vec4 so = max(s, vec4(0.0));
+    imageStore(dstState, dst, so);
     imageStore(dstVel, dst, vec4(v, 0.0, 0.0));
+    // The tile holds water: the next step's list starts from it
+    // (wake_tiles.comp). A workgroup is one tile, so is each of its subgroups.
+    if (pc.flagsAddr != 0ul) {
+        const bool wet = any(notEqual(so, vec4(0.0))) || any(notEqual(v, vec2(0.0)));
+        if (subgroupAny(wet) && subgroupElect()) atomicOr(WakeTileWords(pc.flagsAddr).w[tile], WAKE_TILE_NZ);
+    }
 }

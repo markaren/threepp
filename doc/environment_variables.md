@@ -279,6 +279,7 @@ starting with `0` forces the feature off for every ocean, anything else forces i
 | `THREEPP_WAKE_BREAK_SLOPE1` | number | the field's `rippleBreakSlope[1]` (0.45) | Slope at which a wake ripple crest is fully broken. | once | |
 | `THREEPP_WAKE_BREAK_FOAM` | number | the field's `rippleBreakFoam` (0.30) | Foam film a fully broken wake crest lays in the field. | once | |
 | `THREEPP_WAKE_BREAK_AIR` | number | the field's `rippleBreakAir` (0.20) | Bubbles a fully broken wake crest lays in the field. | once | |
+| `THREEPP_WAKE_DENSE` | flag | off | On steps every 8x8 tile of each producer's wake patch instead of the tiles whose water can change (`wake_tiles.comp`): the step over every texel, which the sparse step equals texel for texel (`tests/renderers/VulkanWakeSparse_test.cpp` compares them). | per step | A/B hatch |
 
 ## Diagnostics, timings and dumps
 

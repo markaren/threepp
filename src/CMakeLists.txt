@@ -1455,6 +1455,8 @@ if (THREEPP_WITH_VULKAN)
     # and paddles leave on the water, in world-anchored patches. See
     # WakeFieldPipeline.{hpp,cpp} and shaders/ocean_wake.glsl.
     compile_vulkan_shader(threepp "${_vk_shaders}/wake_field.comp" kWakeFieldCompSpv)
+    # The tiles of a producer's patch its step writes (wake_tiles.comp).
+    compile_vulkan_shader(threepp "${_vk_shaders}/wake_tiles.comp" kWakeTilesCompSpv)
     # Its ripples: a spectrum a patch, turned and forced (wake_ripple.comp),
     # through the ocean's own inverse FFT.
     compile_vulkan_shader(threepp "${_vk_shaders}/wake_ripple.comp" kWakeRippleCompSpv)

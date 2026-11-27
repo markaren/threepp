@@ -10,6 +10,7 @@
 #include "threepp/renderers/vulkan/shaders/shore_source.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/wake_field.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/wake_ripple.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/wake_tiles.comp.spv.h"
 
 #include <algorithm>
 #include <cmath>
@@ -19,8 +20,9 @@
 
 namespace threepp::vulkan {
 
-    static_assert(sizeof(WakeFieldPipeline::PushConstants) == 24,
-                  "WakeFieldPipeline::PushConstants must match the Pc of wake_field.comp and wake_ripple.comp (24 bytes)");
+    static_assert(sizeof(WakeFieldPipeline::PushConstants) == 32,
+                  "WakeFieldPipeline::PushConstants must match the Pc of wake_field.comp and wake_ripple.comp (32 bytes)");
+    static_assert(sizeof(WakeFieldPipeline::TilesPush) == 64, "wake_tiles.comp's Pc");
     static_assert(sizeof(WakeFieldPipeline::ShoreCapturePush) == 56, "shore_capture.comp's Pc");
     static_assert(sizeof(WakeFieldPipeline::ShoreJfaPush) == 40, "shore_jfa.comp's Pc");
     static_assert(sizeof(WakeFieldPipeline::ShoreSourcePush) == 112, "shore_source.comp's Pc");
@@ -43,6 +45,33 @@ namespace threepp::vulkan {
         static_assert(kTableBytes == 88 + 76 * kWakeTablePatches + 72 * 256 && DisplacedMesh::kMaxWakeSources == 256,
                       "ocean_wake_lists.glsl's OCEAN_WAKE_LISTS_OFFSET and OCEAN_WAKE_MAX_SOURCES");
         constexpr VkDeviceSize kListBytes = sizeof(WakeSourceListsGpu) + kWakeListIndices * sizeof(uint32_t);
+
+        // The producers' tiles (State::tiles): a 16-byte dispatch a producer's
+        // layer, then two arrays of flags, the lists and the ripples' cells,
+        // each a word a tile (a cell) of every producer's layer.
+        using State = WakeFieldPipeline::State;
+        constexpr VkDeviceSize kTileArgsBytes = 16;
+        VkDeviceSize tileCount(const State& st) {
+            return VkDeviceSize(st.tileSide) * st.tileSide;
+        }
+        VkDeviceSize tileArgsOffset(uint32_t layer) {
+            return layer * kTileArgsBytes;
+        }
+        VkDeviceSize tileFlagsOffset(const State& st, uint32_t parity, uint32_t layer) {
+            return st.appLayers * kTileArgsBytes + (VkDeviceSize(parity) * st.appLayers + layer) * tileCount(st) * 4u;
+        }
+        VkDeviceSize tileListOffset(const State& st, uint32_t layer) {
+            return st.appLayers * kTileArgsBytes + (2u * VkDeviceSize(st.appLayers) + layer) * tileCount(st) * 4u;
+        }
+        VkDeviceSize tileCellsOffset(const State& st, uint32_t layer) {
+            return st.appLayers * kTileArgsBytes + 3u * VkDeviceSize(st.appLayers) * tileCount(st) * 4u +
+                   VkDeviceSize(layer) * st.cellSide * st.cellSide * 4u;
+        }
+        // A carry of the hull's flow past this many texels in one step lists
+        // every tile of the patch (wake_tiles.comp's loop over the last step's
+        // flags grows with it).
+        constexpr double kTileReachMax = 60.0;
+        constexpr double kPi           = 3.14159265358979323846;
 
         // Whether the field's step (wake_field.comp, SETTLE) can take anything
         // from source `s` at a texel of patch `g`: false only where its loop
@@ -208,6 +237,8 @@ namespace threepp::vulkan {
         if (dsLayout_)             vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (ripplePipeline_)       vkDestroyPipeline(d, ripplePipeline_, nullptr);
         if (ripplePipelineLayout_) vkDestroyPipelineLayout(d, ripplePipelineLayout_, nullptr);
+        if (tilesPipeline_)        vkDestroyPipeline(d, tilesPipeline_, nullptr);
+        if (tilesPipelineLayout_)  vkDestroyPipelineLayout(d, tilesPipelineLayout_, nullptr);
         if (rippleDsLayout_)       vkDestroyDescriptorSetLayout(d, rippleDsLayout_, nullptr);
         if (descPool_)             vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)              vkDestroySampler(d, sampler_, nullptr);
@@ -289,6 +320,20 @@ namespace threepp::vulkan {
             check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &ripplePipelineLayout_),
                   "vkCreatePipelineLayout(wakeRipple)");
             ripplePipeline_ = createFieldPipeline(ctx_, ripplePipelineLayout_, kWakeRippleCompSpv, "wakeRipple");
+        }
+
+        // wake_tiles.comp: a producer's tiles, all through buffer addresses.
+        {
+            VkPushConstantRange tr{};
+            tr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            tr.size       = sizeof(TilesPush);
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &tr;
+            check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &tilesPipelineLayout_),
+                  "vkCreatePipelineLayout(wakeTiles)");
+            tilesPipeline_ = createFieldPipeline(ctx_, tilesPipelineLayout_, kWakeTilesCompSpv, "wakeTiles");
         }
 
         // An ocean: three sets for the field (one per dispatch of a step) and
@@ -623,6 +668,23 @@ namespace threepp::vulkan {
                                         VMA_MEMORY_USAGE_AUTO);
             ctx_.setObjectName(st->bendTemp.handle, "ocean.shore.bendTemp");
         }
+
+        // The producers' tiles (the shore's windows are stepped whole): 1.3 MB
+        // for six producers at 1024 a side with ripples at 512. A patch of
+        // more tiles than a dispatch can count workgroups (2048 a side is
+        // 65536, and a device may take 65535) is stepped whole.
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(ctx_.physicalDevice(), &props);
+        const uint32_t side = (st->res + 7u) / 8u;
+        if (st->appLayers > 0u && uint64_t(side) * side <= props.limits.maxComputeWorkGroupCount[0]) {
+            st->tileSide = side;
+            st->cellSide = st->rippleRes / 8u;
+            st->tiles    = createBuffer(ctx_.allocator(), ctx_.device(), tileCellsOffset(*st, st->appLayers),
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        VMA_MEMORY_USAGE_AUTO);
+            ctx_.setObjectName(st->tiles.handle, "ocean.wake.tiles");
+        }
         return st;
     }
 
@@ -632,6 +694,8 @@ namespace threepp::vulkan {
             if (img) clearToGeneral(cb, img);
         }
         vkCmdFillBuffer(cb, st.table.handle, 0, VK_WHOLE_SIZE, 0u);
+        // No tile holds water, and the ripples' cells are flat (their images are zero).
+        if (st.tiles.handle) vkCmdFillBuffer(cb, st.tiles.handle, 0, VK_WHOLE_SIZE, 0u);
         // No window's depth laid (live 0, res 0): the gains are 1 until one is.
         if (st.shoreDepth.handle) vkCmdFillBuffer(cb, st.shoreDepth.handle, 0, VK_WHOLE_SIZE, 0u);
         if (st.rippleRes > 0u) {
@@ -661,6 +725,8 @@ namespace threepp::vulkan {
         if (st.ds[0]) vkFreeDescriptorSets(d, descPool_, uint32_t(st.ds.size()), st.ds.data());
         st.ds = {};
         destroyBuffer(ctx_.allocator(), st.table);
+        destroyBuffer(ctx_.allocator(), st.tiles);
+        st.tileSide = st.cellSide = 0;
 
         if (st.shoreOn) {
             const VkDescriptorSet sets[5] = {st.captureDs[0], st.captureDs[1], st.jfaDs[0], st.jfaDs[1], st.sourceDs};
@@ -967,44 +1033,127 @@ namespace threepp::vulkan {
             lists.head.count[r] = listed - lists.head.first[r];
         }
 
+        // The producers' tiles (wake_tiles.comp). A patch's `reach` is how far
+        // round a texel whose water is still its step reads, in texels:
+        // ADVECT's bilinear tap and a texel more for the rounding, then the
+        // flow its hull makes (wakeHullFlow) carried over dt. A source panel
+        // of strength s = Q / (2 a T), rounded by r, moves the water at most
+        // |s| (asinh(a / r) / (2 pi) + atan(a / r) / pi) anywhere (u_t and u_n
+        // at their largest, h >= r; their weakening with depth is at most 1),
+        // and the flow is the panels' sum. A carry past kTileReachMax texels,
+        // or THREEPP_WAKE_DENSE, lists every tile.
+        const bool dense = env::flag("THREEPP_WAKE_DENSE");
+        std::array<uint32_t, DisplacedMesh::kMaxWakePatches> reach{};
+        std::array<uint32_t, DisplacedMesh::kMaxWakePatches> every{};
+        for (uint32_t i = 0; i < st.appLayers; ++i) {
+            if (!(liveMask & (1u << i))) continue;
+            double flow = 0.0;
+            for (uint32_t k = 0; k < sourceCount; ++k) {
+                const DisplacedMesh::WakeSource& s = up.sources[k];
+                if (s.flux == 0.0f || s.patch != static_cast<int32_t>(i)) continue;
+                const double a = std::max(std::hypot(double(s.ax), double(s.az)), 0.05);
+                const double T = std::max(double(s.draft), 0.1);
+                const double r = std::max(double(s.radius), 0.1);
+                flow += std::abs(double(s.flux)) / (2.0 * a * T) *
+                        (std::asinh(a / r) / (2.0 * kPi) + std::atan(a / r) / kPi);
+            }
+            const double carry = flow * dt / tb.patches[i].texel;
+            const bool   all   = dense || !(carry <= kTileReachMax);
+            every[i] = all ? 1u : 0u;
+            reach[i] = all ? 0u : 2u + static_cast<uint32_t>(std::ceil(1.01 * carry));
+        }
+
         // The table, in the command stream: last frame's water shade may still
-        // be reading the old one, and this frame's must read the new.
-        VkBufferMemoryBarrier bmb{};
-        bmb.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        bmb.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-        bmb.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-        bmb.buffer              = st.table.handle;
-        bmb.size                = VK_WHOLE_SIZE;
-        bmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 1, &bmb, 0, nullptr);
+        // be reading the old one, and this frame's must read the new. The
+        // tiles' dispatches start empty (wake_tiles.comp counts x), once the
+        // last step's indirect reads of them are done.
+        std::array<VkBufferMemoryBarrier, 2> bmb{};
+        for (VkBufferMemoryBarrier& b : bmb) {
+            b.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            b.size                = VK_WHOLE_SIZE;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        }
+        bmb[0].buffer        = st.table.handle;
+        bmb[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        bmb[0].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        bmb[1].buffer        = st.tiles.handle;
+        bmb[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        bmb[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        const uint32_t barriers = st.tiles.handle ? 2u : 1u;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, barriers, bmb.data(), 0, nullptr);
         vkCmdUpdateBuffer(cb, st.table.handle, 0,
                           sizeof(WakeTableGpu) + sourceCount * sizeof(DisplacedMesh::WakeSource), &up);
         vkCmdUpdateBuffer(cb, st.table.handle, kTableBytes, sizeof(WakeSourceListsGpu) + listed * sizeof(uint32_t),
                           &lists);
-        bmb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        bmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 0, nullptr, 1, &bmb, 0, nullptr);
+        if (st.tiles.handle) {
+            std::array<uint32_t, 4 * DisplacedMesh::kMaxWakePatches> args{};// x, y, z and a word
+            for (uint32_t i = 0; i < st.appLayers; ++i) args[4 * i + 1] = args[4 * i + 2] = 1u;
+            vkCmdUpdateBuffer(cb, st.tiles.handle, 0, st.appLayers * kTileArgsBytes, args.data());
+        }
+        // (and to wake_tiles.comp the last step's flags, SETTLE's, and the
+        // ripples' cells, SLOPES')
+        bmb[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        bmb[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        bmb[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        bmb[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, barriers, bmb.data(), 0, nullptr);
         if (liveMask == 0u) return {};
+
+        // Each producer's tiles this step, from the last step's flags into
+        // this step's (State::tileParity).
+        const uint32_t producers = st.tiles.handle ? liveMask & ((1u << st.appLayers) - 1u) : 0u;
+        if (producers != 0u) {
+            const uint32_t last = st.tileParity, next = st.tileParity ^ 1u;
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tilesPipeline_);
+            for (uint32_t i = 0; i < st.appLayers; ++i) {
+                if (!(producers & (1u << i))) continue;
+                TilesPush tp{};
+                tp.tableAddr = st.table.address;
+                tp.argsAddr  = st.tiles.address + tileArgsOffset(i);
+                tp.lastAddr  = st.tiles.address + tileFlagsOffset(st, last, i);
+                tp.nextAddr  = st.tiles.address + tileFlagsOffset(st, next, i);
+                tp.listAddr  = st.tiles.address + tileListOffset(st, i);
+                tp.gridAddr  = st.cellSide > 0u ? st.tiles.address + tileCellsOffset(st, i) : 0u;
+                tp.layer     = i;
+                tp.reach     = reach[i];
+                tp.every     = every[i];
+                vkCmdPushConstants(cb, tilesPipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(tp), &tp);
+                vkCmdDispatch(cb, static_cast<uint32_t>((tileCount(st) + 63u) / 64u), 1, 1);
+            }
+            memoryBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            st.tileParity = next;
+        }
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
         const uint32_t groups = (st.res + 7u) / 8u;
         PushConstants pc{};
-        pc.tableAddr   = st.table.address;
-        pc.sourceCount = sourceCount;
+        pc.tableAddr = st.table.address;
         for (uint32_t mode = 0; mode < 3; ++mode) {
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &st.ds[mode], 0, nullptr);
             pc.mode = mode;
             for (uint32_t i = 0; i < st.layers; ++i) {
                 if (!(liveMask & (1u << i))) continue;
                 pc.layer = i;
+                // A producer's listed tiles (tileParity names this step's
+                // flags now), a shore window whole.
+                const bool listed = i < st.appLayers && st.tiles.handle != VK_NULL_HANDLE;
+                pc.tiles = listed ? st.tiles.address + tileListOffset(st, i) : 0u;
+                pc.flags = listed ? st.tiles.address + tileFlagsOffset(st, st.tileParity, i) : 0u;
                 vkCmdPushConstants(cb, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                vkCmdDispatch(cb, groups, groups, 1);
+                if (listed) {
+                    vkCmdDispatchIndirect(cb, st.tiles.handle, tileArgsOffset(i));
+                } else {
+                    vkCmdDispatch(cb, groups, groups, 1);
+                }
             }
             computeBarrier(cb);
         }
+        pc.tiles = pc.flags = 0u;// (recordRipples sets its own)
 
         return {rippleMask, heightMask, pc};
     }
@@ -1022,6 +1171,9 @@ namespace threepp::vulkan {
                                     &st.rippleDs[layer], 0, nullptr);
             pc.layer = layer;
             pc.mode  = mode;
+            // SLOPES leaves each cell's steepest slope for the next step's tiles
+            pc.tiles = (mode == 2u && st.cellSide > 0u) ? st.tiles.address + tileCellsOffset(st, layer) : 0u;
+            pc.flags = 0u;
             vkCmdPushConstants(cb, ripplePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
             vkCmdDispatch(cb, groups, groups, 1);
         };

@@ -427,6 +427,12 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # every reflection.
     add_vulkan_test(VulkanEmissiveCastsLight_test SRC)
 
+    # The wake field's sparse step (wake_tiles.comp) leaves what a step over
+    # every texel leaves (THREEPP_WAKE_DENSE), texel for texel: a ship's
+    # thickness, a boat that jumps, a kayak's paddles, an empty patch, breaking
+    # ripples and a stalled step.
+    add_vulkan_test(VulkanWakeSparse_test)
+
     # The specular light of an emissive mesh on a glossy floor: a light whose
     # NEE strata are too sparse for the lobe is drawn by the reflection ray (its
     # mirrored image, where the strata drew one highlight each), and a moving
