@@ -278,6 +278,65 @@ convenience-`predict()` columns).
 
 ---
 
+## 9. Pose: RF-DETR Keypoint (2026-11-27, RTX 5080)
+
+`--variant keypoint` runs Roboflow's RF-DETR Keypoint preview (Apache 2.0; COCO people with
+their 17 keypoints) on the same harness. Weights: `scripts/export_rfdetr_weights.py --variant
+keypoint --checkpoint rf-detr-keypoint-preview-xlarge.pth`; references:
+`scripts/capture_rfdetr_activations.py --variant keypoint --checkpoint <pth> [--image bus.jpg]`.
+The architecture was read from the `rfdetr` 1.12.1 source (`models/transformer.py`,
+`models/lwdetr.py`, `models/postprocess.py`).
+
+**Same as the detectors:** the backbone, now at patch 12 (576 px input: 48×48 = 2304 patches,
+four windows of 577 tokens), the projector, the two-stage selection (100 queries, two logits:
+class 0 and person), the four instance decoder layers and the box head.
+
+**New:**
+- A second projector (`backbone.0.cross_attn_projector`, same C2f + LayerNorm, own weights) on
+  the same taps. Only the keypoint cross-attention reads it.
+- 17 keypoint queries per instance. Their initial value depends on learned weights only, so
+  the exporter computes it once (`derived.keypoint_queries`).
+- After each layer's instance FFN: group self-attention over each instance and its 17
+  keypoints (8 heads of 32; the instance token carries no position, keypoint j its learned
+  `keypoint_pos_embed[j]`; the instance takes the answer through a learned scalar layer
+  scale), keypoint deformable cross-attention into the second projector around the
+  instance's reference box (query = keypoint state + the instance's query_pos), and a
+  keypoint FFN (256→1024→256).
+- A keypoint head (MLP 256→256→256→8): x/y in reference-box units, findable and visible
+  logits, the precision-Cholesky factors (log l11, l21, log l22) and a class-logit
+  contribution, summed over the 17 keypoints into the person logit.
+
+Three small kernels carry the new data movement: `repeat_rows.comp` (a per-instance row per
+keypoint: reference box, query_pos), `group_pack.comp` / `group_unpack.comp` (instance + its
+keypoints as one group of 18 rows, and back). The group attention reuses the three-pass ViT
+attention kernels at head dim 32.
+
+**Read, not guessed:** the encoder-stage keypoint branch (`keypoint_query_initializer_enc`,
+`enc_out_keypoint_embed`) only feeds training losses; the keypoint states get no final norm;
+the class mask over a group blocks nothing when one class has keypoints (the loader checks,
+and rejects multi-class schemas, which would need masked attention). The postprocess fuses
+every selected score with the keypoints' uncertainty, `sigmoid(log s − 0.2·T)` with T the
+findability-weighted log mean covariance trace (T = 0 for class 0, which has no keypoints).
+There is no NMS: on bus.jpg a half-visible person at the left edge comes back as 36
+overlapping detections between 0.26 and 0.43, so the demo keeps `predict()`'s threshold of
+0.5 rather than the 0.25 of Roboflow's examples.
+
+**Validation.** Noise reference: patch embedding to both projectors within 1.2e-4 (taps) and
+3e-6 (projectors) max abs error; the decoder diverges there as §5 predicts. bus.jpg
+reference: decoder reference boxes 9e-6, instance states 3.3e-4, keypoint states 1.8e-3,
+logits 4.5e-4, boxes 4e-5; keypoint head x/y ≤ 2.4e-5, the uncertainty channels ≤ 1e-2;
+no query row diverges. The host postprocess run on the reference tensor gives rfdetr's
+PostProcess output at printed precision: three people at 0.7745, 0.7522 and 0.6694, every
+keypoint equal to 0.1 px. From the JPEG (stb_image decode, GPU resize) the third score is
+0.6739: the input path differs from PIL + torch, the model does not.
+
+**Cost.** 42 ms end-to-end on bus.jpg (median of 100 runs), 38 ms of it GPU: the ViT ~24 ms,
+the two projectors ~6 ms, the decoder ~7.6 ms; GEMMs are ~23 ms of the total. That is twice
+Medium at the same input size, because patch 12 gives 2304 patches to Medium's 1296 and the
+global attention grows with their square. Roboflow quotes 9.8 ms on a T4 with TensorRT fp16.
+
+---
+
 ## 8. Reusable takeaways
 
 - Validation-first against captured activations is the difference between a

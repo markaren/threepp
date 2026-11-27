@@ -11,23 +11,36 @@
 
 namespace rfdetr {
 
+    struct Keypoint {
+        float x, y;// image pixels
+        float conf;// sigmoid of the keypoint's findable logit
+    };
+
     struct Detection {
         int   classId;
         float confidence;
         float x1, y1, x2, y2;
+        // RfDetrVariant::Keypoint: the class's keypoints in schema order (COCO-17
+        // for a person); empty for the detection variants.
+        std::vector<Keypoint> keypoints;
     };
 
-    enum class RfDetrVariant { Nano, Small, Medium };
+    enum class RfDetrVariant { Nano, Small, Medium, Keypoint };
 
-    /// Per-variant architecture config. Nano/Small/Medium share the
+    /// Per-variant architecture config. Every variant shares the
     /// dinov2_windowed_small backbone (384-d, 6 heads, 12 layers) and a single-scale
-    /// P4 projector; they differ only in input resolution and decoder depth.
-    /// forVariant() pins the numbers from the rfdetr package (rfdetr/config.py).
+    /// P4 projector; Nano/Small/Medium differ only in input resolution and decoder
+    /// depth. Keypoint (RF-DETR Keypoint, pose estimation) patchifies at 12, keeps
+    /// 100 queries over 2 classes (class 0 and person) and adds GroupPose keypoint
+    /// queries: numKeypoints per instance, refined by every decoder layer against
+    /// a second projector's features. forVariant() pins the numbers from the
+    /// rfdetr package (rfdetr/config.py).
     struct RfDetrConfig {
         int resolution = 384, patch = 16;
         int embedDim = 384, numLayers = 12, numHeads = 6, numWindows = 2;
         int hiddenDim = 256, numQueries = 300, decLayers = 2;
         int saHeads = 8, caHeads = 16, decPoints = 2, dimFF = 2048, numClasses = 91;
+        int numKeypoints = 0;// keypoint queries per instance; 0 = detection only
         std::array<int, 4> tapLayers{2, 5, 8, 11};
 
         [[nodiscard]] uint32_t grid() const { return uint32_t(resolution / patch); }
@@ -37,15 +50,15 @@ namespace rfdetr {
         static RfDetrConfig forVariant(RfDetrVariant v);
     };
 
-    /// RF-DETR-Nano object detector on the Vulkan compute pipeline. Port of the
+    /// RF-DETR object detector on the Vulkan compute pipeline. Port of the
     /// LWDETR / DINOv2-windowed-ViT model (rfdetr package): the windowed ViT
     /// backbone (patch-embed + CLS token + 12 transformer layers w/ LayerScale,
     /// 2x2 windowed attention with global layers {3,6,9}, no register tokens),
     /// the C2f projector (tap layers 3/6/9/final -> single P4), and a two-stage
-    /// deformable decoder (L=1, reparam bbox).
-    ///
-    /// Built in phases; current surface validates the backbone+projector against
-    /// the captured proj.0 reference.
+    /// deformable decoder (L=1, reparam bbox). The Keypoint variant adds the
+    /// pose branch: a second projector on the same taps, keypoint queries per
+    /// instance (group self-attention with their instance, deformable
+    /// cross-attention into the second projector, FFN) and a keypoint head.
     class RfDetrVk {
     public:
         explicit RfDetrVk(threepp::VulkanRenderer& renderer,
@@ -56,8 +69,8 @@ namespace rfdetr {
 
         void loadWeights(const std::string& path);
 
-        // Phase-1 validation: run the patch embedding (+ backbone as wired so far)
-        // on a [3,384,384] CHW input and read back the projector P4 feature.
+        // Validation: the forward pass on a [3,R,R] CHW input (R = the variant's
+        // resolution), with the stages the reference captures read back.
         struct ForwardOut {
             std::vector<float>     patchEmbed;// [EMBED_DIM, GRID, GRID]
             std::array<uint32_t, 3> patchDim{};
@@ -72,6 +85,13 @@ namespace rfdetr {
             std::array<uint32_t, 3> proj0Dim{};
             std::vector<float>     predLogits;// [NUM_QUERIES, NUM_CLASSES]
             std::vector<float>     predBoxes; // [NUM_QUERIES, 4] (cx,cy,w,h normalized)
+            // Keypoint variant only (empty otherwise):
+            std::vector<float>     projKp0;      // second (keypoint) projector output [256,G,G]
+            std::vector<float>     decHs;        // decoder output after the final norm [Nq,256]
+            std::vector<float>     decRef;       // decoder reference boxes [Nq,4]
+            std::vector<float>     decKp;        // last layer's keypoint states [Nq,K,256]
+            std::vector<float>     predKeypoints;// [Nq,K,8]: x, y (normalized), findable, visible,
+                                                 // log_l11, l21, log_l22, class-logit contribution
         };
         ForwardOut runForward(const std::vector<float>& chw, bool captureIntermediates = true);
 
@@ -79,8 +99,19 @@ namespace rfdetr {
         // to the variant's resolution, /255, normalize), forward pass and heads run
         // on the GPU as one submit; the host then applies sigmoid + score-threshold
         // + box de-normalization to the original image pixels. classId is the COCO id.
+        // The Keypoint variant postprocesses like rfdetr's PostProcess: the top
+        // num-queries (query, class) pairs, each score fused with the keypoints'
+        // predicted localisation uncertainty, then the threshold. DETR has no NMS:
+        // below ~0.45 a half-visible person can come back as many overlapping
+        // detections.
         std::vector<Detection> infer(const unsigned char* rgba, int width, int height,
                                      float scoreThresh = 0.5f);
+        // infer()'s host postprocess on a forward pass's heads, for an image of
+        // width x height pixels (the validator runs it on the reference input).
+        [[nodiscard]] std::vector<Detection> postprocess(const ForwardOut& fw, int width, int height,
+                                                         float scoreThresh) const;
+
+        [[nodiscard]] const RfDetrConfig& config() const { return cfg_; }
 
     private:
         VkInfer vk_;
@@ -95,10 +126,18 @@ namespace rfdetr {
         VkPipe scaleAddPipe_;
         VkPipe linearSplitKPipe_, reduceSplitKPipe_;
         VkPipe preprocessPipe_, proposalsPipe_, topkRankPipe_, queryRefsPipe_;
+        VkPipe repeatRowsPipe_, groupPackPipe_, groupUnpackPipe_;// keypoint decoder
         // Fused ViT attention (created when VkInfer::subgroupClustered() and head dim 64;
         // else scores + softmax + apply).
         VkPipe attnFlashPipe_;
         bool useFlashAttn_ = false;
+
+        // Keypoint variant, from the checkpoint's keypoint schema (_kp_active_mask
+        // [classes with a schema slot, max K]): the one class that has keypoints,
+        // and how many classes have a slot (the postprocess fuses the scores of all
+        // of them; a slot without keypoints adds no uncertainty).
+        int kpClass_ = -1;
+        int kpSchemaClasses_ = 0;
 
         // Scratch for split-K partial sums [splitK, M, N], reused across all
         // split-K linears (serialized by VkInfer's per-dispatch barriers).
@@ -132,10 +171,11 @@ namespace rfdetr {
         // Fused residual: out = residual + branch * gamma (LayerScale folded in).
         Tensor scaleAdd_(const Tensor& residual, const Tensor& branch, const std::string& gammaKey, uint32_t C);
         Tensor softmaxRows_(const Tensor& x, uint32_t rows, uint32_t n);
-        // Batched DINOv2 attention from a fused qkv [M,3D]: scores [B,H,T,T].
-        Tensor attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B);
-        // out[b,i,h*d+e] = Σ_j attn[b,h,i,j] * V (qkv offset 2D).
-        Tensor attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B);
+        // B independent attentions of T tokens, H heads of dim d, from a fused qkv
+        // [B*T, 3*H*d] (the ViT's windows, the keypoint decoder's groups): scores [B,H,T,T].
+        Tensor attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B, uint32_t H, uint32_t d);
+        // out[b,i,h*d+e] = Σ_j attn[b,h,i,j] * V (qkv offset 2*H*d).
+        Tensor attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B, uint32_t H, uint32_t d);
         // Both in one pass with an online softmax (attn_vit_flash.comp): out [B*T, D].
         Tensor attnVitFlash_(const Tensor& qkv, uint32_t T, uint32_t B);
         // One DINOv2 transformer block. global=true runs full attention (B=1,T=M).
@@ -155,8 +195,10 @@ namespace rfdetr {
         Tensor convX_(const Tensor& x, const std::string& pfx, int k, uint32_t HW, bool silu);
         Tensor bottleneck_(const Tensor& x, const std::string& pfx, uint32_t HW);
         Tensor c2f_(const Tensor& x, const std::string& pfx, uint32_t HW);
-        // Full projector: concat 4 taps -> C2f -> final channel LayerNorm -> [256,grid,grid].
-        Tensor projector_(const std::array<Tensor, 4>& taps, uint32_t grid);
+        // Projector `pfx` (backbone.0.projector, or the Keypoint variant's
+        // backbone.0.cross_attn_projector) on the concatenated taps [4C,grid,grid]:
+        // C2f -> final channel LayerNorm -> [256,grid,grid].
+        Tensor projector_(const Tensor& tapsCat, const std::string& pfx);
 
         // ── decoder primitives ──
         Tensor relu_(const Tensor& x);
@@ -170,25 +212,40 @@ namespace rfdetr {
         Tensor msDeformAttn_(const Tensor& value, uint32_t H, uint32_t W,
                              const Tensor& refPtsXy, const Tensor& offsets, const Tensor& attnW,
                              uint32_t numHeads);
+        // [R,W] -> [R*K,W]: row r*K+k is row r (a per-instance row per keypoint query).
+        Tensor repeatRows_(const Tensor& x, uint32_t K);
+        // The Keypoint variant's sub-layers of decoder layer `layer`, after the
+        // instance FFN (GroupPose): group self-attention of each instance with its
+        // K keypoint queries, keypoint deformable cross-attention into kpMemory
+        // around the instance's reference box, keypoint FFN. Updates the instance
+        // states tgt [Nq,256] and the keypoint states kp [Nq*K,256]. qpK, refK and
+        // refXyK are query_pos [Nq,256] and the reference [Nq,4] / its centre [Nq,2]
+        // repeated over the K keypoints.
+        void keypointLayer_(int layer, Tensor& tgt, Tensor& kp, const Tensor& qpK, const Tensor& refK,
+                            const Tensor& refXyK, const Tensor& kpMemory);
         // ── one inference = one frame ──
-        // The backbone stages the validation path reads back.
+        // The backbone stages the validation path reads back, and the decoder's
+        // memory tokens [G*G,256] (kpMemory: the Keypoint variant's second projector).
         struct BackboneTensors {
-            Tensor patch, embed, vit0, vit3, proj0;
+            Tensor patch, embed, vit0, vit3, proj0, projKp0;
             std::array<Tensor, 4> taps;
+            Tensor memory, kpMemory;
         };
         // What the host needs after the frame: class logits [Nq,NC], the box head's
-        // deltas [Nq,4] and the fixed decoder reference [Nq,4] they apply to.
+        // deltas [Nq,4] and the fixed decoder reference [Nq,4] they apply to; the
+        // Keypoint variant's keypoint head output kpOut [Nq*K,8]. hs and kp (the
+        // final instance / keypoint states) are read back only for validation.
         struct HeadTensors {
-            Tensor logits, bboxDelta, ref;
+            Tensor logits, bboxDelta, ref, kpOut, hs, kp;
         };
         [[nodiscard]] VkDeviceSize headReadbackBytes_() const;
-        // Patch embed -> 12 ViT blocks -> taps -> projector, recorded into the open
-        // frame; returns proj0 as decoder memory tokens [G*G, 256].
-        Tensor recordBackbone_(const Tensor& input, BackboneTensors& keep);
+        // Patch embed -> 12 ViT blocks -> taps -> projector(s), recorded into the
+        // open frame; fills keep, including the decoder memory tokens.
+        void recordBackbone_(const Tensor& input, BackboneTensors& keep);
         // Two-stage deformable decoder + heads, recorded into the open frame:
         // first-stage heads over every memory token, top-Nq proposals, the fixed
         // reference + its sine embedding, the decoder layers, the final heads.
-        HeadTensors recordDecoder_(const Tensor& memory);
+        HeadTensors recordDecoder_(const BackboneTensors& bb);
         // Records backbone + decoder behind `input` (already in the open frame),
         // ends the frame and assembles ForwardOut from the readbacks.
         ForwardOut finishForward_(const Tensor& input, bool captureIntermediates);

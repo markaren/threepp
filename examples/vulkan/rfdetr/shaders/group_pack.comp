@@ -1,0 +1,35 @@
+#version 450
+// GroupPose packing for the keypoint decoder's group self-attention: instance n
+// and its K keypoint queries become one group of 1+K consecutive rows,
+//   feat    = [inst_n; kp_n,0 .. kp_n,K-1]
+//   featPos = feat + [0; kpPos_0 .. kpPos_K-1]   (the instance token has no position)
+// Bindings: 0 inst [N,W], 1 kp [N*K,W], 2 kpPos [K,W], 3 feat [N*(1+K),W], 4 featPos.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint N, K, W, _p0;
+} p;
+
+layout(std430, binding = 0) readonly  buffer Inst    { float inst[]; };
+layout(std430, binding = 1) readonly  buffer Kp      { float kp[]; };
+layout(std430, binding = 2) readonly  buffer KpPos   { float kpPos[]; };
+layout(std430, binding = 3) writeonly buffer Feat    { float feat[]; };
+layout(std430, binding = 4) writeonly buffer FeatPos { float featPos[]; };
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint G = 1u + p.K;
+    if (idx >= p.N * G * p.W) return;
+    uint c = idx % p.W;
+    uint row = idx / p.W;
+    uint n = row / G, t = row % G;
+    if (t == 0u) {
+        float v = inst[n * p.W + c];
+        feat[idx] = v;
+        featPos[idx] = v;
+    } else {
+        float v = kp[(n * p.K + t - 1u) * p.W + c];
+        feat[idx] = v;
+        featPos[idx] = v + kpPos[(t - 1u) * p.W + c];
+    }
+}

@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
+#include <numeric>
 #include <stdexcept>
 
 #include "threepp/renderers/vulkan/shaders/conv2d.comp.rfdetr.spv.h"
@@ -40,6 +42,9 @@
 #include "threepp/renderers/vulkan/shaders/topk_rank.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/query_refs.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/attn_vit_flash.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/repeat_rows.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/group_pack.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/group_unpack.comp.rfdetr.spv.h"
 
 using threepp::VulkanRenderer;
 
@@ -75,19 +80,34 @@ namespace {
     struct ProposalParams  { uint32_t T, gridW, gridH, NC; };
     struct TopKParams      { uint32_t T, K, _p0, _p1; };
     struct QueryRefParams  { uint32_t Nq, _p0, _p1, _p2; };
+    struct RepeatParams    { uint32_t R, W, K, _p0; };
+    struct GroupParams     { uint32_t N, K, W, _p0; };
 
     uint32_t divCeil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
+    // A weight shape as text, for the loader's errors.
+    std::string shapeStr(const std::vector<uint32_t>& s) {
+        std::string out = "[";
+        for (size_t i = 0; i < s.size(); ++i) out += (i ? "," : "") + std::to_string(s[i]);
+        return out + "]";
+    }
 }// namespace
 
-// Per-variant overrides. Nano/Small/Medium share the dinov2_windowed_small
-// backbone + single-scale P4 head (the struct defaults = Nano); only input
-// resolution and decoder depth differ. Pinned from rfdetr/config.py.
+// Per-variant overrides. Every variant shares the dinov2_windowed_small backbone
+// + single-scale P4 head (the struct defaults = Nano); Nano/Small/Medium differ in
+// input resolution and decoder depth, Keypoint (RF-DETR Keypoint preview) also in
+// patch size, queries, classes (class 0 and person) and the 17 COCO keypoints per person.
+// Pinned from rfdetr/config.py.
 RfDetrConfig RfDetrConfig::forVariant(RfDetrVariant v) {
     RfDetrConfig c;// defaults are Nano
     switch (v) {
         case RfDetrVariant::Nano:   c.resolution = 384; c.decLayers = 2; break;
         case RfDetrVariant::Small:  c.resolution = 512; c.decLayers = 3; break;
         case RfDetrVariant::Medium: c.resolution = 576; c.decLayers = 4; break;
+        case RfDetrVariant::Keypoint:
+            c.resolution = 576; c.patch = 12; c.decLayers = 4;
+            c.numQueries = 100; c.numClasses = 2; c.numKeypoints = 17;
+            break;
     }
     return c;
 }
@@ -130,6 +150,11 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
     proposalsPipe_        = vk_.createPipe(kRfProposalsSpv,  sizeof(kRfProposalsSpv),  4, sizeof(ProposalParams), "proposals");
     topkRankPipe_         = vk_.createPipe(kRfTopkRankSpv,   sizeof(kRfTopkRankSpv),   2, sizeof(TopKParams), "topk_rank");
     queryRefsPipe_        = vk_.createPipe(kRfQueryRefsSpv,  sizeof(kRfQueryRefsSpv),  7, sizeof(QueryRefParams), "query_refs");
+    if (cfg_.numKeypoints > 0) {
+        repeatRowsPipe_   = vk_.createPipe(kRfRepeatRowsSpv,  sizeof(kRfRepeatRowsSpv),  2, sizeof(RepeatParams), "repeat_rows");
+        groupPackPipe_    = vk_.createPipe(kRfGroupPackSpv,   sizeof(kRfGroupPackSpv),   5, sizeof(GroupParams), "group_pack");
+        groupUnpackPipe_  = vk_.createPipe(kRfGroupUnpackSpv, sizeof(kRfGroupUnpackSpv), 3, sizeof(GroupParams), "group_unpack");
+    }
 
     // Fused attention when the device has clustered subgroup adds and the head dim
     // is the kernel's 64; otherwise scores + softmax + apply.
@@ -194,6 +219,9 @@ RfDetrVk::~RfDetrVk() {
     vk_.destroyPipe(proposalsPipe_);
     vk_.destroyPipe(topkRankPipe_);
     vk_.destroyPipe(queryRefsPipe_);
+    vk_.destroyPipe(repeatRowsPipe_);
+    vk_.destroyPipe(groupPackPipe_);
+    vk_.destroyPipe(groupUnpackPipe_);
 }
 
 void RfDetrVk::loadWeights(const std::string& path) {
@@ -218,6 +246,73 @@ void RfDetrVk::loadWeights(const std::string& path) {
                 "RfDetrVk: variant/weights mismatch - config expects dec_layers=" +
                 std::to_string(cfg_.decLayers) + " but checkpoint has " + std::to_string(ckptDecLayers) +
                 ". Pass the RfDetrVariant matching these weights.");
+    // Medium and Keypoint both have 4 decoder layers: the patch size and the
+    // keypoint head tell them apart.
+    const auto& patchW = weights_.at("backbone.0.encoder.encoder.embeddings.patch_embeddings.projection.weight").shape;
+    if (patchW.size() != 4 || patchW[2] != uint32_t(cfg_.patch) || patchW[3] != uint32_t(cfg_.patch))
+        throw std::runtime_error("RfDetrVk: variant/weights mismatch - config patchifies at " +
+                                 std::to_string(cfg_.patch) + " but the checkpoint's patch embedding is " +
+                                 shapeStr(patchW) + ". Pass the RfDetrVariant matching these weights.");
+    const bool ckptKeypoints = weights_.count("keypoint_embed.layers.0.weight") > 0;
+    if (ckptKeypoints != (cfg_.numKeypoints > 0))
+        throw std::runtime_error(ckptKeypoints
+                                         ? "RfDetrVk: the checkpoint has a keypoint head; pass RfDetrVariant::Keypoint"
+                                         : "RfDetrVk: RfDetrVariant::Keypoint needs RF-DETR Keypoint weights "
+                                           "(scripts/export_rfdetr_weights.py --variant keypoint)");
+
+    if (cfg_.numKeypoints > 0) {
+        const uint32_t K = uint32_t(cfg_.numKeypoints), D = uint32_t(cfg_.hiddenDim);
+        auto need = [&](const std::string& name, const std::vector<uint32_t>& shape) {
+            auto it = w.shapes.find(name);
+            if (it == w.shapes.end())
+                throw std::runtime_error("RfDetrVk: checkpoint has no " + name + " " + shapeStr(shape));
+            if (it->second != shape)
+                throw std::runtime_error("RfDetrVk: " + name + " is " + shapeStr(it->second) + ", expected " + shapeStr(shape));
+        };
+        need("transformer.decoder.keypoint_pos_embed", {K, D});
+        // The decoder's initial keypoint queries depend on learned weights only, so
+        // the exporter computes them once (scripts/export_rfdetr_weights.py).
+        need("derived.keypoint_queries", {uint32_t(cfg_.numQueries), K, D});
+
+        // The group self-attention runs unmasked: with keypoints on one class, the
+        // class mask over each group [1+K,1+K] blocks nothing.
+        need("transformer.decoder.keypoint_class_mask", {1u + K, 1u + K});
+        const auto& classMask = w.data.at("transformer.decoder.keypoint_class_mask");
+        if (std::any_of(classMask.begin(), classMask.end(), [](float v) { return v != 0.f; }))
+            throw std::runtime_error("RfDetrVk: the keypoint class mask blocks attention inside a group "
+                                     "(keypoints on more than one class), which this port does not do");
+
+        // The keypoint schema: one row per class with a slot, its active keypoints
+        // first. One class may have keypoints, all K of them.
+        auto am = w.shapes.find("_kp_active_mask");
+        if (am == w.shapes.end() || am->second.size() != 2 || am->second[1] != K ||
+            am->second[0] > uint32_t(cfg_.numClasses))
+            throw std::runtime_error("RfDetrVk: checkpoint has no keypoint schema _kp_active_mask [<=" +
+                                     std::to_string(cfg_.numClasses) + "," + std::to_string(K) + "]");
+        const auto& active = w.data.at("_kp_active_mask");
+        kpSchemaClasses_ = int(am->second[0]);
+        kpClass_ = -1;
+        for (int c = 0; c < kpSchemaClasses_; ++c) {
+            const float* row = active.data() + size_t(c) * K;
+            const auto n = std::count_if(row, row + K, [](float v) { return v != 0.f; });
+            if (n == 0) continue;
+            if (kpClass_ >= 0 || n != std::ptrdiff_t(K))
+                throw std::runtime_error("RfDetrVk: the keypoint schema puts keypoints on more than one class, "
+                                         "which this port does not do");
+            kpClass_ = c;
+        }
+        if (kpClass_ < 0) throw std::runtime_error("RfDetrVk: the keypoint schema has no keypoints");
+
+        // instance_kp_layer_scale is one scalar per layer; scaleAdd_ takes a gamma per channel.
+        for (int L = 0; L < cfg_.decLayers; ++L) {
+            const std::string name = "transformer.decoder.layers." + std::to_string(L) + ".instance_kp_layer_scale";
+            need(name, {1u});
+            const std::vector<float> gamma(D, w.data.at(name)[0]);
+            VkTensor t = vk_.createOwned({D});
+            vk_.upload(t.buffer, gamma.data(), gamma.size() * sizeof(float));
+            weights_.emplace(name + ".vec", std::move(t));
+        }
+    }
 
     // Pre-fuse per-layer Q/K/V projections into one [3D, D] weight (+ [3D] bias) so
     // each ViT block runs a single GEMM instead of three. Concatenated along the
@@ -385,8 +480,7 @@ Tensor RfDetrVk::softmaxRows_(const Tensor& x, uint32_t rows, uint32_t n) {
     return out;
 }
 
-Tensor RfDetrVk::attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B) {
-    const uint32_t H = cfg_.numHeads, d = cfg_.embedDim / cfg_.numHeads;
+Tensor RfDetrVk::attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B, uint32_t H, uint32_t d) {
     AttnVitParams ap{T, H, d, B, 1.0f / std::sqrt(float(d)), 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({B * H * T, T});
     std::vector<VkBuffer> ssbos = {qkv.buffer, out.buffer};
@@ -394,8 +488,7 @@ Tensor RfDetrVk::attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B) {
     return out;
 }
 
-Tensor RfDetrVk::attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B) {
-    const uint32_t H = cfg_.numHeads, d = cfg_.embedDim / cfg_.numHeads;
+Tensor RfDetrVk::attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B, uint32_t H, uint32_t d) {
     AttnVitParams ap{T, H, d, B, 1.0f / std::sqrt(float(d)), 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({B * T, H * d});
     std::vector<VkBuffer> ssbos = {attn.buffer, qkv.buffer, out.buffer};
@@ -432,9 +525,10 @@ Tensor RfDetrVk::vitLayer_(const Tensor& x, int layerIdx, bool global) {
     if (useFlashAttn_) {
         ctx = attnVitFlash_(qkv, T, B);
     } else {
-        Tensor scores = attnVitScores_(qkv, T, B);
-        Tensor probs  = softmaxRows_(scores, B * cfg_.numHeads * T, T);
-        ctx = attnVitApply_(probs, qkv, T, B);
+        const uint32_t H = cfg_.numHeads, d = C / H;
+        Tensor scores = attnVitScores_(qkv, T, B, H, d);
+        Tensor probs  = softmaxRows_(scores, B * H * T, T);
+        ctx = attnVitApply_(probs, qkv, T, B, H, d);
     }
     Tensor ao = linear_(ctx, pfx + "attention.output.dense.weight", pfx + "attention.output.dense.bias");
     Tensor x1 = scaleAdd_(x, ao, pfx + "layer_scale1.lambda1", C);// x + ao*lambda1
@@ -509,14 +603,10 @@ Tensor RfDetrVk::c2f_(const Tensor& x, const std::string& pfx, uint32_t HW) {
     return convX_(cat, pfx + ".cv2", 1, HW, true);    // [256, HW]
 }
 
-Tensor RfDetrVk::projector_(const std::array<Tensor, 4>& taps, uint32_t grid) {
-    const uint32_t HW = grid * grid;
-    const uint32_t C = cfg_.embedDim;
-    Tensor big = vk_.createTensorV({4u * C, grid, grid});// [1536, grid, grid]
-    for (uint32_t j = 0; j < 4; ++j) placeCh_(taps[j], big, C, HW, j * C);
-    Tensor c2fOut = c2f_(big, "backbone.0.projector.stages.0.0", HW);
-    return layerNormChw_(c2fOut, "backbone.0.projector.stages.0.1.weight",
-                         "backbone.0.projector.stages.0.1.bias", c2fOut.C(), HW, 0u);
+Tensor RfDetrVk::projector_(const Tensor& tapsCat, const std::string& pfx) {
+    const uint32_t HW = tapsCat.H() * tapsCat.W();
+    Tensor c2fOut = c2f_(tapsCat, pfx + ".stages.0.0", HW);
+    return layerNormChw_(c2fOut, pfx + ".stages.0.1.weight", pfx + ".stages.0.1.bias", c2fOut.C(), HW, 0u);
 }
 
 // ── decoder primitives ──
@@ -583,10 +673,82 @@ Tensor RfDetrVk::msDeformAttn_(const Tensor& value, uint32_t H, uint32_t W,
     return out;
 }
 
+Tensor RfDetrVk::repeatRows_(const Tensor& x, uint32_t K) {
+    const uint32_t W = x.shape.back(), R = x.numel() / W;
+    RepeatParams rp{R, W, K, 0u};
+    Tensor out = vk_.createTensorV({R * K, W});
+    vk_.dispatch(repeatRowsPipe_, {x.buffer, out.buffer}, &rp, sizeof(rp), divCeil(R * K * W, 256), 1, 1);
+    return out;
+}
+
+// RF-DETR Keypoint's per-layer keypoint processing (TransformerDecoderLayer.forward_post
+// after norm3, rfdetr/models/transformer.py), eval path: no inter-instance keypoint
+// attention, keypoint cross-attention on, keypoint dim = hidden dim (the in/out
+// projections around it are identities).
+void RfDetrVk::keypointLayer_(int layer, Tensor& tgt, Tensor& kp, const Tensor& qpK, const Tensor& refK,
+                              const Tensor& refXyK, const Tensor& kpMemory) {
+    const uint32_t D = cfg_.hiddenDim, Nq = cfg_.numQueries, K = cfg_.numKeypoints, G = 1u + K;
+    const uint32_t grid = cfg_.grid();
+    const std::string p = "transformer.decoder.layers." + std::to_string(layer);
+
+    // a. Group self-attention: each instance with its K keypoint queries, q = k =
+    //    feature + position (the instance token's position is zero), v = feature.
+    Tensor feat = vk_.createTensorV({Nq * G, D});
+    Tensor featPos = vk_.createTensorV({Nq * G, D});
+    { GroupParams gp{Nq, K, D, 0u};
+      vk_.dispatch(groupPackPipe_, {tgt.buffer, kp.buffer, weights_.at("transformer.decoder.keypoint_pos_embed").buffer,
+                                    feat.buffer, featPos.buffer},
+                   &gp, sizeof(gp), divCeil(Nq * G * D, 256), 1, 1); }
+    Tensor yqk = linear_(featPos, p + ".kp_inst_self_attn.in_proj_weight", p + ".kp_inst_self_attn.in_proj_bias");
+    Tensor yt  = linear_(feat, p + ".kp_inst_self_attn.in_proj_weight", p + ".kp_inst_self_attn.in_proj_bias");
+    Tensor qkv = vk_.createTensorV({Nq * G, 3u * D});
+    { QkvSpliceParams sp{Nq * G, D, 0u, 0u};
+      vk_.dispatch(qkvSplicePipe_, {yqk.buffer, yt.buffer, qkv.buffer}, &sp, sizeof(sp),
+                   divCeil(Nq * G * 3u * D, 64), 1, 1); }
+    const uint32_t H = cfg_.saHeads, d = D / H;
+    Tensor probs = softmaxRows_(attnVitScores_(qkv, G, Nq, H, d), Nq * H * G, G);
+    Tensor ctx = attnVitApply_(probs, qkv, G, Nq, H, d);
+    Tensor groupOut = linear_(ctx, p + ".kp_inst_self_attn.out_proj.weight", p + ".kp_inst_self_attn.out_proj.bias");
+    Tensor tgt2 = vk_.createTensorV({Nq, D});
+    Tensor kp2 = vk_.createTensorV({Nq * K, D});
+    { GroupParams gp{Nq, K, D, 0u};
+      vk_.dispatch(groupUnpackPipe_, {groupOut.buffer, tgt2.buffer, kp2.buffer}, &gp, sizeof(gp),
+                   divCeil(Nq * G * D, 256), 1, 1); }
+    // The instance takes the group's answer through a learned (tiny) layer scale.
+    tgt = layerNorm_(scaleAdd_(tgt, tgt2, p + ".instance_kp_layer_scale.vec", D),
+                     p + ".kp_inst_norm.weight", p + ".kp_inst_norm.bias", D);
+    kp = layerNorm_(add_(kp, kp2), p + ".kp_norm.weight", p + ".kp_norm.bias", D);
+
+    // b. Keypoint deformable cross-attention into the keypoint memory, sampled around
+    //    the instance's reference box; the query is the keypoint state plus its
+    //    instance's query_pos.
+    const uint32_t NK = Nq * K, Hc = cfg_.caHeads, P = cfg_.decPoints;
+    Tensor cq = add_(kp, qpK);
+    Tensor value = linear_(kpMemory, p + ".kp_cross_attn.value_proj.weight", p + ".kp_cross_attn.value_proj.bias");
+    Tensor rawOff = linear_(cq, p + ".kp_cross_attn.sampling_offsets.weight", p + ".kp_cross_attn.sampling_offsets.bias");
+    Tensor rawAw  = linear_(cq, p + ".kp_cross_attn.attention_weights.weight", p + ".kp_cross_attn.attention_weights.bias");
+    rawAw.shape = {NK * Hc, P};// softmax over the points of each head (one level)
+    Tensor awSm = softmaxRows_(rawAw, NK * Hc, P);
+    awSm.shape = {NK, Hc * P};
+    { OffPreParams opp{NK, Hc, 1u, P};
+      vk_.dispatch(offsetPreprocessPipe_, {refK.buffer, msShapeBuf_.buffer, rawOff.buffer}, &opp, sizeof(opp),
+                   divCeil(NK * Hc * P * 2u, 64), 1, 1); }
+    Tensor crossOut = msDeformAttn_(value, grid, grid, refXyK, rawOff, awSm, Hc);
+    Tensor crossProj = linear_(crossOut, p + ".kp_cross_attn.output_proj.weight", p + ".kp_cross_attn.output_proj.bias");
+    kp = layerNorm_(add_(kp, crossProj), p + ".kp_cross_attn_norm.weight", p + ".kp_cross_attn_norm.bias", D);
+
+    // c. Keypoint FFN.
+    Tensor ff = relu_(linear_(kp, p + ".kp_linear1.weight", p + ".kp_linear1.bias"));
+    ff = linear_(ff, p + ".kp_linear3.weight", p + ".kp_linear3.bias");
+    kp = layerNorm_(add_(kp, ff), p + ".kp_norm5.weight", p + ".kp_norm5.bias", D);
+}
+
 // Two-stage deformable decoder + heads, recorded into the open frame: nothing
 // in here waits on the host. memory = proj0 in [HW, 256] token layout.
-RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const Tensor& memory) {
+RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const BackboneTensors& bb) {
+    const Tensor& memory = bb.memory;
     const uint32_t D = cfg_.hiddenDim, Nq = cfg_.numQueries, NC = cfg_.numClasses;
+    const uint32_t K = cfg_.numKeypoints;
     const uint32_t grid = cfg_.grid(), totalTokens = grid * grid;
 
     // enc_output projection + first-stage class/bbox heads over all tokens.
@@ -624,6 +786,17 @@ RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const Tensor& memory) {
     qp = linear_(qp, "transformer.decoder.ref_point_head.layers.1.weight",
                      "transformer.decoder.ref_point_head.layers.1.bias");
 
+    // Keypoint variant: K keypoint queries per instance, initialised from the learned
+    // queries alone (image-independent, so precomputed at export), and the per-
+    // instance inputs of their cross-attention, fixed across layers like the reference.
+    Tensor kp, qpK, refK, refXyK;
+    if (K > 0) {
+        kp = Tensor{weights_.at("derived.keypoint_queries").buffer, {Nq * K, D}};
+        qpK = repeatRows_(qp, K);
+        refK = repeatRows_(refT, K);
+        refXyK = repeatRows_(refXyT, K);
+    }
+
     Tensor tgt = tgtInit;
     for (int layer = 0; layer < cfg_.decLayers; ++layer) {
         std::string p = "transformer.decoder.layers." + std::to_string(layer);
@@ -659,20 +832,25 @@ RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const Tensor& memory) {
         Tensor ff = relu_(linear_(n2, p + ".linear1.weight", p + ".linear1.bias"));
         ff = linear_(ff, p + ".linear2.weight", p + ".linear2.bias");
         tgt = layerNorm_(add_(n2, ff), p + ".norm3.weight", p + ".norm3.bias", D);
+
+        if (K > 0) keypointLayer_(layer, tgt, kp, qpK, refK, refXyK, bb.kpMemory);
     }
     Tensor hs = layerNorm_(tgt, "transformer.decoder.norm.weight", "transformer.decoder.norm.bias", D);
     Tensor logits = linear_(hs, "class_embed.weight", "class_embed.bias");
     Tensor bboxDelta = bboxMLP_(hs, "bbox_embed");
+    // The keypoint states get no final norm.
+    Tensor kpOut = K > 0 ? bboxMLP_(kp, "keypoint_embed") : Tensor{};// [Nq*K, 8]
     vk_.markTimestamp("decoder");
-    return HeadTensors{logits, bboxDelta, refT};
+    return HeadTensors{logits, bboxDelta, refT, kpOut, hs, kp};
 }
 
 VkDeviceSize RfDetrVk::headReadbackBytes_() const {
     const VkDeviceSize Nq = VkDeviceSize(cfg_.numQueries);
-    return (Nq * VkDeviceSize(cfg_.numClasses) + Nq * 4 + Nq * 4) * sizeof(float);
+    const VkDeviceSize kpOut = Nq * VkDeviceSize(cfg_.numKeypoints) * 8;
+    return (Nq * VkDeviceSize(cfg_.numClasses) + Nq * 4 + Nq * 4 + kpOut) * sizeof(float);
 }
 
-Tensor RfDetrVk::recordBackbone_(const Tensor& input, BackboneTensors& keep) {
+void RfDetrVk::recordBackbone_(const Tensor& input, BackboneTensors& keep) {
     keep.patch = patchEmbed_(input);          // [384, 24, 24]
     vk_.markTimestamp("patch");
     keep.embed = buildEmbeddings_(keep.patch);// [4, 145, 384] windowed tokens
@@ -707,20 +885,30 @@ Tensor RfDetrVk::recordBackbone_(const Tensor& input, BackboneTensors& keep) {
         keep.taps[t] = unwindow_(ln, C, cfg_.grid());
     }
     vk_.markTimestamp("taps");
-    keep.proj0 = projector_(keep.taps, cfg_.grid());
+    const uint32_t grid = cfg_.grid(), HW = grid * grid;
+    Tensor tapsCat = vk_.createTensorV({4u * C, grid, grid});// [1536, grid, grid]
+    for (uint32_t j = 0; j < 4; ++j) placeCh_(keep.taps[j], tapsCat, C, HW, j * C);
+    keep.proj0 = projector_(tapsCat, "backbone.0.projector");
     vk_.markTimestamp("proj");
     // proj0 [256,G,G] -> memory tokens [G*G,256]. It can stay in the arena: the
     // decoder is recorded into the same frame, before the arena is rewound.
-    return transposeChw2Tokens_(keep.proj0);
+    keep.memory = transposeChw2Tokens_(keep.proj0);
+    if (cfg_.numKeypoints > 0) {
+        // The keypoint cross-attention reads its own projection of the same taps.
+        keep.projKp0 = projector_(tapsCat, "backbone.0.cross_attn_projector");
+        keep.kpMemory = transposeChw2Tokens_(keep.projKp0);
+        vk_.markTimestamp("projkp");
+    }
 }
 
 RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureIntermediates) {
     BackboneTensors bb;
-    Tensor memory = recordBackbone_(input, bb);
-    HeadTensors heads = recordDecoder_(memory);
+    recordBackbone_(input, bb);
+    HeadTensors heads = recordDecoder_(bb);
     const VkDeviceSize offLogits = vk_.recordReadback(heads.logits.buffer, heads.logits.bytes());
     const VkDeviceSize offDelta  = vk_.recordReadback(heads.bboxDelta.buffer, heads.bboxDelta.bytes());
     const VkDeviceSize offRef    = vk_.recordReadback(heads.ref.buffer, heads.ref.bytes());
+    const VkDeviceSize offKp     = heads.kpOut.valid() ? vk_.recordReadback(heads.kpOut.buffer, heads.kpOut.bytes()) : 0;
     vk_.endFrame();// the inference's one submit and wait
 
     ForwardOut out;
@@ -741,6 +929,27 @@ RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureI
         out.predBoxes[i * 4 + 3] = std::exp(d[3]) * r[3];
     }
 
+    if (heads.kpOut.valid()) {
+        // pred_keypoints: xy = delta * ref_wh + ref_xy against the same reference, the
+        // other six channels as the head gave them. Channel 7 summed over a query's
+        // keypoints adds to the logit of the keypoints' class.
+        const uint32_t K = cfg_.numKeypoints, NC = cfg_.numClasses;
+        const auto* kpRaw = static_cast<const float*>(vk_.frameReadback(offKp));
+        out.predKeypoints.assign(kpRaw, kpRaw + heads.kpOut.numel());
+        for (uint32_t q = 0; q < Nq; ++q) {
+            const float* r = ref + size_t(q) * 4;
+            float boost = 0.f;
+            for (uint32_t k = 0; k < K; ++k) {
+                float* o = &out.predKeypoints[(size_t(q) * K + k) * 8];
+                o[0] = o[0] * r[2] + r[0];
+                o[1] = o[1] * r[3] + r[1];
+                boost += o[7];
+            }
+            out.predLogits[size_t(q) * NC + uint32_t(kpClass_)] += boost;
+        }
+        out.decRef.assign(ref, ref + size_t(Nq) * 4);
+    }
+
     if (captureIntermediates) {// validation only — the detect path skips these readbacks
         auto grab = [&](const Tensor& t, std::vector<float>& dst) {
             dst.resize(t.numel());
@@ -757,6 +966,11 @@ RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureI
         out.tapDim = {bb.taps[0].C(), bb.taps[0].H(), bb.taps[0].W()};// [384,24,24]
         grab(bb.proj0, out.proj0);
         out.proj0Dim = {bb.proj0.C(), bb.proj0.H(), bb.proj0.W()};// [256,24,24]
+        if (cfg_.numKeypoints > 0) {
+            grab(bb.projKp0, out.projKp0);
+            grab(heads.hs, out.decHs);
+            grab(heads.kp, out.decKp);
+        }
     }
     vk_.resetArena();
     return out;
@@ -794,22 +1008,84 @@ std::vector<Detection> RfDetrVk::infer(const unsigned char* rgba, int width, int
       vk_.dispatch(preprocessPipe_, {rgbaInput_.buffer, input.buffer}, &pp, sizeof(pp),
                    divCeil(R, 16), divCeil(R, 16), 1); }
     vk_.markTimestamp("preprocess");
-    ForwardOut fw = finishForward_(input, /*captureIntermediates=*/false);
+    return postprocess(finishForward_(input, /*captureIntermediates=*/false), width, height, scoreThresh);
+}
 
+std::vector<Detection> RfDetrVk::postprocess(const ForwardOut& fw, int width, int height, float scoreThresh) const {
     std::vector<Detection> dets;
     auto sigmoid = [](float x) { return 1.f / (1.f + std::exp(-x)); };
-    for (uint32_t q = 0; q < cfg_.numQueries; ++q) {
-        for (uint32_t c = 0; c < cfg_.numClasses; ++c) {
-            float s = sigmoid(fw.predLogits[size_t(q) * cfg_.numClasses + c]);
+    auto detection = [&](uint32_t q, uint32_t c, float s) {
+        const float* b = &fw.predBoxes[size_t(q) * 4];
+        float cx = b[0], cy = b[1], w = b[2], h = b[3];
+        return Detection{int(c), s,
+                         (cx - w * 0.5f) * float(width), (cy - h * 0.5f) * float(height),
+                         (cx + w * 0.5f) * float(width), (cy + h * 0.5f) * float(height), {}};
+    };
+    const uint32_t Nq = cfg_.numQueries, NC = cfg_.numClasses;
+    if (cfg_.numKeypoints == 0) {
+        for (uint32_t q = 0; q < Nq; ++q) {
+            for (uint32_t c = 0; c < NC; ++c) {
+                float s = sigmoid(fw.predLogits[size_t(q) * NC + c]);
+                if (s < scoreThresh) continue;
+                dets.push_back(detection(q, c, s));
+            }
+        }
+    } else {
+        // rfdetr's PostProcess for keypoint models (models/postprocess.py): the top
+        // num_select (= the query count) (query, class) pairs by probability, best
+        // first and ties by flat index; then every pair whose class has a schema
+        // slot gets its score fused with the keypoints' localisation uncertainty,
+        //   s' = min(sigmoid(log s - 0.2 T), nextafter(1, 0)),
+        // T the findability-weighted log mean trace of the covariances the head's
+        // precision-Cholesky factors imply (0 for a slot without keypoints).
+        const uint32_t K = cfg_.numKeypoints, pairs = Nq * NC;
+        std::vector<float> prob(pairs);
+        for (uint32_t i = 0; i < pairs; ++i) prob[i] = sigmoid(fw.predLogits[i]);
+        std::vector<uint32_t> order(pairs);
+        std::iota(order.begin(), order.end(), 0u);
+        std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return prob[a] > prob[b]; });
+
+        auto logSumExp = [](const float* v, uint32_t n) {
+            float m = -std::numeric_limits<float>::infinity();
+            for (uint32_t i = 0; i < n; ++i) m = std::max(m, v[i]);
+            if (!std::isfinite(m)) return m;
+            float s = 0.f;
+            for (uint32_t i = 0; i < n; ++i) s += std::exp(v[i] - m);
+            return m + std::log(s);
+        };
+        std::vector<float> weightedTrace(K), logW(K);
+        auto logMeanTrace = [&](uint32_t q) {
+            for (uint32_t k = 0; k < K; ++k) {
+                const float* o = &fw.predKeypoints[(size_t(q) * K + k) * 8];
+                const float logT1 = -2.f * o[4], logT2 = -2.f * o[6];
+                const float logT[3] = {logT1, logT2, 2.f * std::log(std::max(std::abs(o[5]), 1e-12f)) + logT1 + logT2};
+                logW[k] = std::log(std::max(sigmoid(o[2]), 1e-12f));
+                weightedTrace[k] = logSumExp(logT, 3) + logW[k];
+            }
+            return logSumExp(weightedTrace.data(), K) - logSumExp(logW.data(), K);
+        };
+
+        const float belowOne = std::nextafter(1.f, 0.f);
+        for (uint32_t n = 0; n < std::min(Nq, pairs); ++n) {
+            const uint32_t idx = order[n], q = idx / NC, c = idx % NC;
+            float s = prob[idx];
+            if (int(c) < kpSchemaClasses_) {
+                const float T = int(c) == kpClass_ ? logMeanTrace(q) : 0.f;
+                s = std::min(sigmoid(std::log(s) - 0.2f * T), belowOne);
+            }
             if (s < scoreThresh) continue;
-            const float* b = &fw.predBoxes[size_t(q) * 4];
-            float cx = b[0], cy = b[1], w = b[2], h = b[3];
-            dets.push_back(Detection{int(c), s,
-                                     (cx - w * 0.5f) * width, (cy - h * 0.5f) * height,
-                                     (cx + w * 0.5f) * width, (cy + h * 0.5f) * height});
+            Detection d = detection(q, c, s);
+            if (int(c) == kpClass_) {
+                d.keypoints.resize(K);
+                for (uint32_t k = 0; k < K; ++k) {
+                    const float* o = &fw.predKeypoints[(size_t(q) * K + k) * 8];
+                    d.keypoints[k] = Keypoint{o[0] * float(width), o[1] * float(height), sigmoid(o[2])};
+                }
+            }
+            dets.push_back(std::move(d));
         }
     }
-    std::sort(dets.begin(), dets.end(), [](const Detection& a, const Detection& b) { return a.confidence > b.confidence; });
+    std::stable_sort(dets.begin(), dets.end(), [](const Detection& a, const Detection& b) { return a.confidence > b.confidence; });
     return dets;
 }
 

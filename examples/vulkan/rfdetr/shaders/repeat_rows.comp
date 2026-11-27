@@ -1,0 +1,20 @@
+#version 450
+// Row repeat: out[r*K + k, :] = in[r, :] for k < K. Spreads a per-instance row
+// (its reference box, its query_pos) over the instance's K keypoint queries.
+// Bindings: 0 in [R, W], 1 out [R*K, W].
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint R, W, K, _p0;
+} p;
+
+layout(std430, binding = 0) readonly  buffer In  { float inp[]; };
+layout(std430, binding = 1) writeonly buffer Out { float outp[]; };
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= p.R * p.K * p.W) return;
+    uint c = idx % p.W;
+    uint row = idx / p.W;
+    outp[idx] = inp[(row / p.K) * p.W + c];
+}

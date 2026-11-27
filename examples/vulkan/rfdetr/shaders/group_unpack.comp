@@ -1,0 +1,24 @@
+#version 450
+// Inverse of group_pack.comp: the first row of each group of 1+K goes back to
+// the instance buffer, the other K rows to that instance's keypoint rows.
+// Bindings: 0 feat [N*(1+K),W], 1 inst [N,W], 2 kp [N*K,W].
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint N, K, W, _p0;
+} p;
+
+layout(std430, binding = 0) readonly  buffer Feat { float feat[]; };
+layout(std430, binding = 1) writeonly buffer Inst { float inst[]; };
+layout(std430, binding = 2) writeonly buffer Kp   { float kp[]; };
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint G = 1u + p.K;
+    if (idx >= p.N * G * p.W) return;
+    uint c = idx % p.W;
+    uint row = idx / p.W;
+    uint n = row / G, t = row % G;
+    if (t == 0u) inst[n * p.W + c] = feat[idx];
+    else         kp[(n * p.K + t - 1u) * p.W + c] = feat[idx];
+}

@@ -122,6 +122,9 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/topk_rank.comp"            kRfTopkRankSpv     VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/query_refs.comp"           kRfQueryRefsSpv    VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_vit_flash.comp"       kRfAttnFlashSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/repeat_rows.comp"          kRfRepeatRowsSpv   VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/group_pack.comp"           kRfGroupPackSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/group_unpack.comp"         kRfGroupUnpackSpv  VARIANT_SUFFIX rfdetr)
     endif ()
 
     add_example(NAME "vulkan_rfdetr_inference"
@@ -176,5 +179,8 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/query_refs.comp"           kRfQueryRefsSpv    VARIANT_SUFFIX rfdetr)
         # Fused ViT attention (online softmax), used when the device has clustered subgroup ops.
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_vit_flash.comp"       kRfAttnFlashSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/repeat_rows.comp"          kRfRepeatRowsSpv   VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/group_pack.comp"           kRfGroupPackSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/group_unpack.comp"         kRfGroupUnpackSpv  VARIANT_SUFFIX rfdetr)
     endif ()
 endif ()

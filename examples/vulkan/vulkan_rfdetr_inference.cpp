@@ -1,10 +1,12 @@
-/// RF-DETR-Nano Vulkan Object Detection Inference Example.
+/// RF-DETR Vulkan Object Detection / Pose Inference Example.
 ///
 /// Usage:
 ///   vulkan_rfdetr_inference <image> <weights>               run detection + visualize
 ///   vulkan_rfdetr_inference <image> <weights> --bench <N>   time N inferences, print, exit
 ///   vulkan_rfdetr_inference --validate <weights> <ref.bin>  numeric self-check
 ///
+///   --variant nano|small|medium|keypoint picks the model (default nano);
+///   keypoint is RF-DETR Keypoint: people with their 17 COCO keypoints.
 ///   --bench, --validate and --shot run in a hidden window.
 ///
 ///   image    – JPEG/PNG input image
@@ -15,7 +17,8 @@
 /// backbone + C2f projector + two-stage deformable decoder). The backbone and
 /// projector validate bit-exact against the captured PyTorch reference; the
 /// decoder matches except for the top-K proposal ordering, which is numerically
-/// unstable on the seeded-noise validation input (stable on real images).
+/// unstable on the seeded-noise validation input (stable on real images: capture
+/// with --image to validate the decoder).
 
 #include "threepp/threepp.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -54,6 +57,52 @@ static const char* kCoco91[91] = {
     "scissors","teddy bear","hair drier","toothbrush"
 };
 
+// The COCO person skeleton over the 17 keypoints (nose, eyes, ears, shoulders,
+// elbows, wrists, hips, knees, ankles; left before right).
+static const int kCocoSkeleton[19][2] = {
+    {15, 13}, {13, 11}, {16, 14}, {14, 12}, {11, 12}, {5, 11}, {6, 12}, {5, 6}, {5, 7}, {6, 8},
+    {7, 9}, {8, 10}, {1, 2}, {0, 1}, {0, 2}, {1, 3}, {2, 4}, {3, 5}, {4, 6}};
+// Keypoints below this confidence are not drawn (the threshold Roboflow's examples use).
+static constexpr float kKeypointThresh = 0.1f;
+
+// One detection's skeleton in the viewer's 640x640 y-up space: the limbs whose two
+// ends are confident, and a filled dot on every confident keypoint (a 1 px line alone
+// disappears on dark clothing).
+static std::shared_ptr<Object3D> makeSkeleton(const rfdetr::Detection& d, float sx, float sy, const Color& col) {
+    auto at = [&](int k) { return std::pair<float, float>{d.keypoints[k].x * sx, 640.f - d.keypoints[k].y * sy}; };
+    auto seen = [&](int k) { return k < int(d.keypoints.size()) && d.keypoints[k].conf >= kKeypointThresh; };
+    auto group = Group::create();
+
+    std::vector<float> limbs;
+    if (d.keypoints.size() == 17)
+        for (const auto& e : kCocoSkeleton) {
+            if (!seen(e[0]) || !seen(e[1])) continue;
+            auto [x0, y0] = at(e[0]);
+            auto [x1, y1] = at(e[1]);
+            limbs.insert(limbs.end(), {x0, y0, 0.2f, x1, y1, 0.2f});
+        }
+    if (!limbs.empty()) {
+        auto geo = BufferGeometry::create();
+        geo->setAttribute("position", FloatBufferAttribute::create(limbs, 3));
+        auto mat = LineBasicMaterial::create();
+        mat->color = col;
+        mat->depthTest = false;
+        group->add(LineSegments::create(geo, mat));
+    }
+
+    auto dotMat = SpriteMaterial::create();
+    dotMat->map = detviz::solidTexture(col);
+    for (int k = 0; k < int(d.keypoints.size()); ++k) {
+        if (!seen(k)) continue;
+        auto [x, y] = at(k);
+        auto dot = Sprite::create(dotMat);
+        dot->scale.set(6.f, 6.f, 1.f);
+        dot->position.set(x, y, 0.3f);
+        group->add(dot);
+    }
+    return group->children.empty() ? nullptr : group;
+}
+
 // ── Validation mode: diff every layer against the captured reference ──
 static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath, const std::string& refPath) {
     std::cout << "Loading weights '" << weightsPath << "' ..." << std::endl;
@@ -79,7 +128,7 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
             double d = std::abs(double(got[i]) - double(want[i]));
             maxAbs = std::max(maxAbs, d); sumAbs += d; sumRef += std::abs(double(want[i]));
         }
-        std::cout << "  " << std::left << std::setw(6) << name << std::right
+        std::cout << "  " << std::left << std::setw(7) << name << std::right
                   << "  maxAbsErr " << std::scientific << std::setprecision(3) << maxAbs
                   << "  relL1 " << (sumRef > 0 ? sumAbs / sumRef : 0.0)
                   << (maxAbs < 2e-2 ? "   OK" : "   CHECK") << "\n";
@@ -95,8 +144,16 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
     compare("tap2", fw.taps[2], "tap.2");
     compare("tap3", fw.taps[3], "tap.3");
     compare("proj0", fw.proj0, "proj.0");
+    const bool keypoints = model.config().numKeypoints > 0;
+    if (keypoints) {
+        compare("projkp", fw.projKp0, "projkp.0");
+        compare("dec.ref", fw.decRef, "dec.ref");
+        compare("dec.hs", fw.decHs, "dec.hs");
+        compare("dec.kp", fw.decKp, "dec.kp");
+    }
     compare("logits", fw.predLogits, "pred_logits");
     compare("boxes", fw.predBoxes, "pred_boxes");
+    if (keypoints) compare("kpts", fw.predKeypoints, "pred_keypoints");
 
     // Row-level diagnostic: the two-stage top-K selection is numerically unstable
     // on random (non-image) input — near-tied proposal scores get ordered
@@ -116,8 +173,41 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
         std::cout << "  " << name << ": " << bad << "/" << rows << " query rows diverge (>0.05)"
                   << " (top-K ordering on noise - see notes)\n";
     };
-    rowDiag("logits", fw.predLogits, "pred_logits", 91);
+    rowDiag("logits", fw.predLogits, "pred_logits", uint32_t(model.config().numClasses));
     rowDiag("boxes", fw.predBoxes, "pred_boxes", 4);
+    if (keypoints) rowDiag("kpts", fw.predKeypoints, "pred_keypoints", uint32_t(model.config().numKeypoints) * 8u);
+
+    // The keypoint head's channels differ in scale and in what they feed (the
+    // uncertainty rescoring reads 2 and 4-6), so its error is worth seeing per channel.
+    if (auto it = ref.data.find("pred_keypoints"); keypoints && it != ref.data.end() &&
+                                                    it->second.size() == fw.predKeypoints.size()) {
+        static const char* kChannel[8] = {"x", "y", "findable", "visible", "log_l11", "l21", "log_l22", "class"};
+        std::cout << "  kpts max abs error per channel:";
+        for (size_t c = 0; c < 8; ++c) {
+            double mx = 0;
+            for (size_t i = c; i < fw.predKeypoints.size(); i += 8)
+                mx = std::max(mx, std::abs(double(fw.predKeypoints[i]) - double(it->second[i])));
+            std::cout << "  " << kChannel[c] << " " << std::scientific << std::setprecision(1) << mx;
+        }
+        std::cout << "\n";
+    }
+
+    // The host postprocess on the reference input, to compare with rfdetr's
+    // PostProcess on the same tensor (none above the threshold on a noise input).
+    const int R = model.config().resolution;
+    const auto dets = model.postprocess(fw, R, R, 0.5f);
+    std::cout << "\nDetections on the reference input (" << R << "x" << R << " input pixels, score > 0.5): "
+              << dets.size() << "\n" << std::fixed;
+    for (const auto& d : dets) {
+        std::cout << "  class " << d.classId << "  conf " << std::setprecision(4) << d.confidence << "  ["
+                  << std::setprecision(1) << d.x1 << ", " << d.y1 << ", " << d.x2 << ", " << d.y2 << "]\n";
+        if (!d.keypoints.empty()) {
+            std::cout << "    keypoints (x y conf):";
+            for (const auto& k : d.keypoints)
+                std::cout << "  " << std::setprecision(1) << k.x << " " << k.y << " " << std::setprecision(2) << k.conf;
+            std::cout << "\n";
+        }
+    }
     std::cout.flush();
     return 0;
 }
@@ -138,6 +228,7 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
     auto& rgba = img.data<unsigned char>();
     using clk = std::chrono::steady_clock;
 
+    const float scoreThresh = 0.5f;// rfdetr's predict() default, for every variant
     std::vector<rfdetr::Detection> dets;
     // Sustained warmup: short bursty runs leave the GPU idle-clocked (~1/3 of boost),
     // which understates throughput and makes comparisons (esp. vs PyTorch, which boosts
@@ -145,7 +236,7 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
     // time enough runs to stay boosted throughout.
     {
         auto wt0 = clk::now();
-        do { dets = model.infer(rgba.data(), int(img.width()), int(img.height()), 0.5f); }
+        do { dets = model.infer(rgba.data(), int(img.width()), int(img.height()), scoreThresh); }
         while (std::chrono::duration<double>(clk::now() - wt0).count() < 2.0);
     }
     const int runs = benchRuns > 0 ? benchRuns : 50;
@@ -153,7 +244,7 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
     double total = 0.0;
     for (int i = 0; i < runs; ++i) {
         auto t0 = clk::now();
-        dets = model.infer(rgba.data(), int(img.width()), int(img.height()), 0.5f);
+        dets = model.infer(rgba.data(), int(img.width()), int(img.height()), scoreThresh);
         times[size_t(i)] = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
         total += times[size_t(i)];
     }
@@ -173,6 +264,12 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
             std::cout << "  " << std::left << std::setw(16) << name << std::right
                       << "  conf " << std::setprecision(4) << d.confidence << "  [" << std::setprecision(1)
                       << d.x1 << ", " << d.y1 << ", " << d.x2 << ", " << d.y2 << "]\n";
+            if (!d.keypoints.empty()) {
+                std::cout << "    keypoints (x y conf):";
+                for (const auto& k : d.keypoints)
+                    std::cout << "  " << std::setprecision(1) << k.x << " " << k.y << " " << std::setprecision(2) << k.conf;
+                std::cout << "\n";
+            }
         }
         return 0;
     }
@@ -203,11 +300,14 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
     const Font font = fontLoader.defaultFont();
 
     const float sx = 640.f / float(img.width()), sy = 640.f / float(img.height());
-    for (auto& d : dets) {
+    for (size_t i = 0; i < dets.size(); ++i) {
+        const auto& d = dets[i];
         float bx1 = d.x1 * sx, bx2 = d.x2 * sx;
         float by1 = 640.f - d.y2 * sy, by2 = 640.f - d.y1 * sy;// flip Y for ortho
-        const Color& col = detviz::kPalette[d.classId % 6];
+        // Colour by class; people with keypoints by detection, so overlapping skeletons stay apart.
+        const Color& col = detviz::kPalette[(d.keypoints.empty() ? size_t(d.classId) : i) % 6];
         scene->add(detviz::makeBoxLines(bx1, by1, bx2, by2, col));
+        if (auto skeleton = makeSkeleton(d, sx, sy, col)) scene->add(skeleton);
         const char* name = (d.classId >= 0 && d.classId < 91) ? kCoco91[d.classId] : "?";
         scene->add(detviz::makeLabel(font, detviz::labelText(name, d.confidence), col, bx1, by2));
     }
@@ -227,8 +327,8 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
 
-    // Optional --variant nano|small|medium (default nano), stripped from args so
-    // the positional <image>/<weights> handling below is unchanged.
+    // Optional --variant nano|small|medium|keypoint (default nano), stripped from
+    // args so the positional <image>/<weights> handling below is unchanged.
     auto variant = rfdetr::RfDetrVariant::Nano;
     for (size_t i = 0; i + 1 < args.size();) {
         if (args[i] == "--variant") {
@@ -236,7 +336,8 @@ int main(int argc, char** argv) {
             if (v == "nano") variant = rfdetr::RfDetrVariant::Nano;
             else if (v == "small") variant = rfdetr::RfDetrVariant::Small;
             else if (v == "medium") variant = rfdetr::RfDetrVariant::Medium;
-            else { std::cerr << "Unknown --variant '" << v << "' (nano|small|medium)\n"; return 1; }
+            else if (v == "keypoint") variant = rfdetr::RfDetrVariant::Keypoint;
+            else { std::cerr << "Unknown --variant '" << v << "' (nano|small|medium|keypoint)\n"; return 1; }
             args.erase(args.begin() + i, args.begin() + i + 2);
         } else {
             ++i;
@@ -267,8 +368,8 @@ int main(int argc, char** argv) {
 
     const bool validate = !args.empty() && args[0] == "--validate";
     if ((validate && args.size() < 3) || (!validate && args.size() < 2)) {
-        std::cerr << "Usage: " << argv[0] << " [--variant nano|small|medium] <image> <weights> [--shot out.png | --bench N]\n"
-                  << "   or: " << argv[0] << " [--variant nano|small|medium] --validate <weights> <ref.bin>\n";
+        std::cerr << "Usage: " << argv[0] << " [--variant nano|small|medium|keypoint] <image> <weights> [--shot out.png | --bench N]\n"
+                  << "   or: " << argv[0] << " [--variant nano|small|medium|keypoint] --validate <weights> <ref.bin>\n";
         return 1;
     }
 

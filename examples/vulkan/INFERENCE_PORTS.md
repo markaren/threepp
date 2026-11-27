@@ -75,6 +75,10 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
   comparison above is still the 4070's.
 - Fused ViT attention (one pass, online softmax) since 2026-11-27: Nano 12.5 → 10.2 ms and
   Medium 27.5 → 18.9 ms end-to-end on the same card (a busier machine than the line above).
+- Pose since 2026-11-27: `--variant keypoint` runs RF-DETR Keypoint (Roboflow's preview,
+  COCO people with 17 keypoints): a second projector and 17 keypoint queries per person in
+  the decoder, validated against PyTorch on bus.jpg down to the postprocessed keypoints.
+  42 ms end-to-end on the RTX 5080 (patch 12: 2304 patches). `rfdetr/PORTING_NOTES.md` §9.
 
 ---
 
@@ -100,5 +104,6 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
 - Weights/refs: `scripts/export_*_weights.py`, `scripts/capture_*_activations.py`.
 - Validation (RF-DETR; YOLO has none): `vulkan_rfdetr_inference --validate <weights> <ref.bin>`
   (per-layer element-wise diff).
-- Detection: `<exe> <image> <weights>`.
+- Detection: `<exe> <image> <weights>`; pose: `vulkan_rfdetr_inference --variant keypoint
+  <image> rfdetr-keypoint.weights` (export with `--variant keypoint --checkpoint <pth>`).
 - PyTorch baselines: `scripts/bench_rfdetr_pytorch.py`, `yolo_benchmark.py`.
