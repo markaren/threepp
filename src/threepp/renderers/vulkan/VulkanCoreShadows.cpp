@@ -1237,19 +1237,10 @@ namespace threepp {
     }
 
     void VulkanRenderer::Impl::createShadowPipeline() {
-        const auto module = [&](const uint32_t* code, size_t bytes, const char* what) {
-            VkShaderModuleCreateInfo ci{};
-            ci.sType         = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            ci.codeSize      = bytes;
-            ci.pCode         = code;
-            VkShaderModule m = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &ci, nullptr, &m), what);
-            return m;
-        };
-        VkShaderModule vert = module(kShadowDepthVertSpv, sizeof(kShadowDepthVertSpv),
-                                     "vkCreateShaderModule(shadow_depth.vert)");
-        VkShaderModule frag = module(kShadowDepthFragSpv, sizeof(kShadowDepthFragSpv),
-                                     "vkCreateShaderModule(shadow_depth.frag)");
+        VkShaderModule vert = createShaderModule(ctx->device(), kShadowDepthVertSpv, sizeof(kShadowDepthVertSpv),
+                                                 "vkCreateShaderModule(shadow_depth.vert)");
+        VkShaderModule frag = createShaderModule(ctx->device(), kShadowDepthFragSpv, sizeof(kShadowDepthFragSpv),
+                                                 "vkCreateShaderModule(shadow_depth.frag)");
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;

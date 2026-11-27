@@ -330,22 +330,12 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &reducePipeLayout_),
               "vkCreatePipelineLayout(bbglow.reduce)");
 
-        auto module = [&](const uint32_t* spv, size_t bytes, const char* label) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = bytes;
-            smci.pCode    = spv;
-            VkShaderModule m = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(d, &smci, nullptr, &m), label);
-            return m;
-        };
-        VkShaderModule vert = module(kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv),
-                                     "vkCreateShaderModule(bbglow.reduce.vert)");
-        VkShaderModule frag = module(kBillboardGlowDepthFragSpv, sizeof(kBillboardGlowDepthFragSpv),
-                                     "vkCreateShaderModule(bbglow.reduce.frag)");
-        VkShaderModule fragMs = module(kBillboardGlowDepthMsFragSpv,
-                                       sizeof(kBillboardGlowDepthMsFragSpv),
-                                       "vkCreateShaderModule(bbglow.reduce.frag.ms)");
+        VkShaderModule vert = createShaderModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv),
+                                                 "vkCreateShaderModule(bbglow.reduce.vert)");
+        VkShaderModule frag = createShaderModule(d, kBillboardGlowDepthFragSpv, sizeof(kBillboardGlowDepthFragSpv),
+                                                 "vkCreateShaderModule(bbglow.reduce.frag)");
+        VkShaderModule fragMs = createShaderModule(d, kBillboardGlowDepthMsFragSpv, sizeof(kBillboardGlowDepthMsFragSpv),
+                                                   "vkCreateShaderModule(bbglow.reduce.frag.ms)");
 
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

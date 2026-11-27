@@ -1291,20 +1291,8 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
             // vertex pulling. No vertex input bindings — the VS reads
             // positions / normals / UVs via buffer-device-address dereferences
             // keyed by gl_InstanceIndex into the DrawInfo SSBO at binding 4.
-            VkShaderModuleCreateInfo vciInd{};
-            vciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vciInd.codeSize = sizeof(kGbufferIndirectVertSpv);
-            vciInd.pCode    = kGbufferIndirectVertSpv;
-            VkShaderModule vertIndirectModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vciInd, nullptr, &vertIndirectModule),
-                  "vkCreateShaderModule(gbuffer_indirect.vert)");
-            VkShaderModuleCreateInfo fciInd{};
-            fciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fciInd.codeSize = sizeof(kGbufferFragSpv);
-            fciInd.pCode    = kGbufferFragSpv;
-            VkShaderModule fragIndModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fciInd, nullptr, &fragIndModule),
-                  "vkCreateShaderModule(gbuffer.frag for indirect)");
+            VkShaderModule vertIndirectModule = createShaderModule(ctx->device(), kGbufferIndirectVertSpv, sizeof(kGbufferIndirectVertSpv), "vkCreateShaderModule(gbuffer_indirect.vert)");
+            VkShaderModule fragIndModule = createShaderModule(ctx->device(), kGbufferFragSpv, sizeof(kGbufferFragSpv), "vkCreateShaderModule(gbuffer.frag for indirect)");
 
             VkPipelineShaderStageCreateInfo stagesInd[2]{};
             stagesInd[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1382,13 +1370,7 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
             // stage differs. It must be its own pipeline because
             // gbuffer_indirect.vert's contract is one instance per draw, and a
             // field is one draw with instanceCount = the device-side liveCount.
-            VkShaderModuleCreateInfo vciPf{};
-            vciPf.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vciPf.codeSize = sizeof(kParticleFieldGbufVertSpv);
-            vciPf.pCode    = kParticleFieldGbufVertSpv;
-            VkShaderModule vertPfModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vciPf, nullptr, &vertPfModule),
-                  "vkCreateShaderModule(particlefield_gbuf.vert)");
+            VkShaderModule vertPfModule = createShaderModule(ctx->device(), kParticleFieldGbufVertSpv, sizeof(kParticleFieldGbufVertSpv), "vkCreateShaderModule(particlefield_gbuf.vert)");
             VkPipelineShaderStageCreateInfo stagesPf[2] = {stagesInd[0], stagesInd[1]};
             stagesPf[0].module = vertPfModule;
             VkGraphicsPipelineCreateInfo gpciPf = gpciInd;
@@ -1485,20 +1467,8 @@ void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samp
             gpci.renderPass          = rasterGbufRenderPassMS;
             gpci.subpass             = 0;
 
-            VkShaderModuleCreateInfo vciInd{};
-            vciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vciInd.codeSize = sizeof(kGbufferIndirectVertSpv);
-            vciInd.pCode    = kGbufferIndirectVertSpv;
-            VkShaderModule vertIndirectModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vciInd, nullptr, &vertIndirectModule),
-                  "vkCreateShaderModule(gbuffer_indirect.vert MS)");
-            VkShaderModuleCreateInfo fciInd{};
-            fciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fciInd.codeSize = sizeof(kGbufferFragSpv);
-            fciInd.pCode    = kGbufferFragSpv;
-            VkShaderModule fragIndModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fciInd, nullptr, &fragIndModule),
-                  "vkCreateShaderModule(gbuffer.frag for indirect MS)");
+            VkShaderModule vertIndirectModule = createShaderModule(ctx->device(), kGbufferIndirectVertSpv, sizeof(kGbufferIndirectVertSpv), "vkCreateShaderModule(gbuffer_indirect.vert MS)");
+            VkShaderModule fragIndModule = createShaderModule(ctx->device(), kGbufferFragSpv, sizeof(kGbufferFragSpv), "vkCreateShaderModule(gbuffer.frag for indirect MS)");
 
             VkPipelineShaderStageCreateInfo stagesInd[2]{};
             stagesInd[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1558,13 +1528,7 @@ void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samp
                   "vkCreateGraphicsPipelines(rasterGbufDecalMS)");
 
             // ParticleField, MSAA. Same reasoning as the 1x path above.
-            VkShaderModuleCreateInfo vciPf{};
-            vciPf.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vciPf.codeSize = sizeof(kParticleFieldGbufVertSpv);
-            vciPf.pCode    = kParticleFieldGbufVertSpv;
-            VkShaderModule vertPfModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vciPf, nullptr, &vertPfModule),
-                  "vkCreateShaderModule(particlefield_gbuf.vert MS)");
+            VkShaderModule vertPfModule = createShaderModule(ctx->device(), kParticleFieldGbufVertSpv, sizeof(kParticleFieldGbufVertSpv), "vkCreateShaderModule(particlefield_gbuf.vert MS)");
             VkPipelineShaderStageCreateInfo stagesPf[2] = {stagesInd[0], stagesInd[1]};
             stagesPf[0].module = vertPfModule;
             VkGraphicsPipelineCreateInfo gpciPf = gpciInd;
@@ -1579,21 +1543,9 @@ void VulkanRenderer::Impl::createRasterGbufPipelineMS(VkSampleCountFlagBits samp
         }
 
 void VulkanRenderer::Impl::createOverlayPipeline() {
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kOverlayVertSpv);
-            vsmci.pCode    = kOverlayVertSpv;
-            VkShaderModule vertModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vertModule),
-                  "vkCreateShaderModule(overlay.vert)");
+            VkShaderModule vertModule = createShaderModule(ctx->device(), kOverlayVertSpv, sizeof(kOverlayVertSpv), "vkCreateShaderModule(overlay.vert)");
 
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kOverlayFragSpv);
-            fsmci.pCode    = kOverlayFragSpv;
-            VkShaderModule fragModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &fragModule),
-                  "vkCreateShaderModule(overlay.frag)");
+            VkShaderModule fragModule = createShaderModule(ctx->device(), kOverlayFragSpv, sizeof(kOverlayFragSpv), "vkCreateShaderModule(overlay.frag)");
 
             VkPipelineShaderStageCreateInfo stages[2]{};
             stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1832,21 +1784,9 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             // ── Colored line pipelines ──────────────────────────────────────
             // Different shader pair (overlay_color.vert/.frag) + 2 vertex
             // bindings: position at 0, color at 1.
-            VkShaderModuleCreateInfo cvsmci{};
-            cvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            cvsmci.codeSize = sizeof(kOverlayColorVertSpv);
-            cvsmci.pCode    = kOverlayColorVertSpv;
-            VkShaderModule cvert = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &cvsmci, nullptr, &cvert),
-                  "vkCreateShaderModule(overlay_color.vert)");
+            VkShaderModule cvert = createShaderModule(ctx->device(), kOverlayColorVertSpv, sizeof(kOverlayColorVertSpv), "vkCreateShaderModule(overlay_color.vert)");
 
-            VkShaderModuleCreateInfo cfsmci{};
-            cfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            cfsmci.codeSize = sizeof(kOverlayColorFragSpv);
-            cfsmci.pCode    = kOverlayColorFragSpv;
-            VkShaderModule cfrag = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &cfsmci, nullptr, &cfrag),
-                  "vkCreateShaderModule(overlay_color.frag)");
+            VkShaderModule cfrag = createShaderModule(ctx->device(), kOverlayColorFragSpv, sizeof(kOverlayColorFragSpv), "vkCreateShaderModule(overlay_color.frag)");
 
             VkPipelineShaderStageCreateInfo cStages[2]{};
             cStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1972,21 +1912,9 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             // same overlayPipelineLayout + 2-binding vertex input (pos + color)
             // as the colored line variants — a Points object without a "color"
             // attribute is skipped at draw-record time.
-            VkShaderModuleCreateInfo pvsmci{};
-            pvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            pvsmci.codeSize = sizeof(kOverlayPointVertSpv);
-            pvsmci.pCode    = kOverlayPointVertSpv;
-            VkShaderModule pvert = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &pvsmci, nullptr, &pvert),
-                  "vkCreateShaderModule(overlay_point.vert)");
+            VkShaderModule pvert = createShaderModule(ctx->device(), kOverlayPointVertSpv, sizeof(kOverlayPointVertSpv), "vkCreateShaderModule(overlay_point.vert)");
 
-            VkShaderModuleCreateInfo pfsmci{};
-            pfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            pfsmci.codeSize = sizeof(kOverlayPointFragSpv);
-            pfsmci.pCode    = kOverlayPointFragSpv;
-            VkShaderModule pfrag = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &pfsmci, nullptr, &pfrag),
-                  "vkCreateShaderModule(overlay_point.frag)");
+            VkShaderModule pfrag = createShaderModule(ctx->device(), kOverlayPointFragSpv, sizeof(kOverlayPointFragSpv), "vkCreateShaderModule(overlay_point.frag)");
 
             VkPipelineShaderStageCreateInfo pStages[2]{};
             pStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2026,21 +1954,9 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
             // surface wins per pixel, the same way the main G-buffer fills
             // depth. Runs each frame after recordRasterGbufPass.
             {
-                VkShaderModuleCreateInfo dvsmci{};
-                dvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                dvsmci.codeSize = sizeof(kOverlayDepthVertSpv);
-                dvsmci.pCode    = kOverlayDepthVertSpv;
-                VkShaderModule dvert = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &dvsmci, nullptr, &dvert),
-                      "vkCreateShaderModule(overlay_depth.vert)");
+                VkShaderModule dvert = createShaderModule(ctx->device(), kOverlayDepthVertSpv, sizeof(kOverlayDepthVertSpv), "vkCreateShaderModule(overlay_depth.vert)");
 
-                VkShaderModuleCreateInfo dfsmci{};
-                dfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                dfsmci.codeSize = sizeof(kOverlayDepthFragSpv);
-                dfsmci.pCode    = kOverlayDepthFragSpv;
-                VkShaderModule dfrag = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &dfsmci, nullptr, &dfrag),
-                      "vkCreateShaderModule(overlay_depth.frag)");
+                VkShaderModule dfrag = createShaderModule(ctx->device(), kOverlayDepthFragSpv, sizeof(kOverlayDepthFragSpv), "vkCreateShaderModule(overlay_depth.frag)");
 
                 VkPipelineShaderStageCreateInfo dStages[2]{};
                 dStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2202,20 +2118,8 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
                 check(vkCreatePipelineLayout(ctx->device(), &iPlci, nullptr, &overlayDepthImportLayout_),
                       "vkCreatePipelineLayout(overlayDepthImport)");
 
-                VkShaderModuleCreateInfo ivsmci{};
-                ivsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                ivsmci.codeSize = sizeof(kOverlayDepthImportVertSpv);
-                ivsmci.pCode    = kOverlayDepthImportVertSpv;
-                VkShaderModule ivert = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &ivsmci, nullptr, &ivert),
-                      "vkCreateShaderModule(overlay_depth_import.vert)");
-                VkShaderModuleCreateInfo ifsmci{};
-                ifsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                ifsmci.codeSize = sizeof(kOverlayDepthImportFragSpv);
-                ifsmci.pCode    = kOverlayDepthImportFragSpv;
-                VkShaderModule ifrag = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &ifsmci, nullptr, &ifrag),
-                      "vkCreateShaderModule(overlay_depth_import.frag)");
+                VkShaderModule ivert = createShaderModule(ctx->device(), kOverlayDepthImportVertSpv, sizeof(kOverlayDepthImportVertSpv), "vkCreateShaderModule(overlay_depth_import.vert)");
+                VkShaderModule ifrag = createShaderModule(ctx->device(), kOverlayDepthImportFragSpv, sizeof(kOverlayDepthImportFragSpv), "vkCreateShaderModule(overlay_depth_import.frag)");
 
                 VkPipelineShaderStageCreateInfo iStages[2]{};
                 iStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2335,20 +2239,8 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
                 check(vkCreatePipelineLayout(ctx->device(), &aaPlci, nullptr, &overlayInjectPipelineLayout_),
                       "vkCreatePipelineLayout(overlayInject)");
 
-                VkShaderModuleCreateInfo avsmci{};
-                avsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                avsmci.codeSize = sizeof(kOverlayFullscreenVertSpv);
-                avsmci.pCode    = kOverlayFullscreenVertSpv;
-                VkShaderModule avert = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &avsmci, nullptr, &avert),
-                      "vkCreateShaderModule(overlay_fullscreen.vert)");
-                VkShaderModuleCreateInfo afsmci{};
-                afsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                afsmci.codeSize = sizeof(kOverlayInjectFragSpv);
-                afsmci.pCode    = kOverlayInjectFragSpv;
-                VkShaderModule afrag = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &afsmci, nullptr, &afrag),
-                      "vkCreateShaderModule(overlay_inject.frag)");
+                VkShaderModule avert = createShaderModule(ctx->device(), kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert)");
+                VkShaderModule afrag = createShaderModule(ctx->device(), kOverlayInjectFragSpv, sizeof(kOverlayInjectFragSpv), "vkCreateShaderModule(overlay_inject.frag)");
 
                 VkPipelineShaderStageCreateInfo aStages[2]{};
                 aStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2489,20 +2381,8 @@ void VulkanRenderer::Impl::createOverlayPipeline() {
                 check(vkCreatePipelineLayout(ctx->device(), &sPlci, nullptr, &splatStampPipelineLayout_),
                       "vkCreatePipelineLayout(splatStamp)");
 
-                VkShaderModuleCreateInfo svsmci{};
-                svsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                svsmci.codeSize = sizeof(kOverlayFullscreenVertSpv);
-                svsmci.pCode    = kOverlayFullscreenVertSpv;
-                VkShaderModule svert = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &svsmci, nullptr, &svert),
-                      "vkCreateShaderModule(overlay_fullscreen.vert)");
-                VkShaderModuleCreateInfo sfsmci{};
-                sfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                sfsmci.codeSize = sizeof(kSplatOverlayDepthFragSpv);
-                sfsmci.pCode    = kSplatOverlayDepthFragSpv;
-                VkShaderModule sfrag = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &sfsmci, nullptr, &sfrag),
-                      "vkCreateShaderModule(splat_overlay_depth.frag)");
+                VkShaderModule svert = createShaderModule(ctx->device(), kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert)");
+                VkShaderModule sfrag = createShaderModule(ctx->device(), kSplatOverlayDepthFragSpv, sizeof(kSplatOverlayDepthFragSpv), "vkCreateShaderModule(splat_overlay_depth.frag)");
 
                 VkPipelineShaderStageCreateInfo sStages[2]{};
                 sStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2747,20 +2627,8 @@ void VulkanRenderer::Impl::createParticlePipeline() {
                       "vkCreateDescriptorPool(particle)");
             }
 
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kParticleVertSpv);
-            vsmci.pCode    = kParticleVertSpv;
-            VkShaderModule vert = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
-                  "vkCreateShaderModule(particle.vert)");
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kParticleFragSpv);
-            fsmci.pCode    = kParticleFragSpv;
-            VkShaderModule frag = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
-                  "vkCreateShaderModule(particle.frag)");
+            VkShaderModule vert = createShaderModule(ctx->device(), kParticleVertSpv, sizeof(kParticleVertSpv), "vkCreateShaderModule(particle.vert)");
+            VkShaderModule frag = createShaderModule(ctx->device(), kParticleFragSpv, sizeof(kParticleFragSpv), "vkCreateShaderModule(particle.frag)");
 
             VkPipelineShaderStageCreateInfo stages[2]{};
             stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2960,20 +2828,8 @@ void VulkanRenderer::Impl::createFieldBillboardPipeline() {
                                          &fieldBillboardPipelineLayout_),
                   "vkCreatePipelineLayout(fieldBillboard)");
 
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kParticleFieldBillboardVertSpv);
-            vsmci.pCode    = kParticleFieldBillboardVertSpv;
-            VkShaderModule vert = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
-                  "vkCreateShaderModule(particlefield_billboard.vert)");
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kParticleFieldBillboardFragSpv);
-            fsmci.pCode    = kParticleFieldBillboardFragSpv;
-            VkShaderModule frag = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
-                  "vkCreateShaderModule(particlefield_billboard.frag)");
+            VkShaderModule vert = createShaderModule(ctx->device(), kParticleFieldBillboardVertSpv, sizeof(kParticleFieldBillboardVertSpv), "vkCreateShaderModule(particlefield_billboard.vert)");
+            VkShaderModule frag = createShaderModule(ctx->device(), kParticleFieldBillboardFragSpv, sizeof(kParticleFieldBillboardFragSpv), "vkCreateShaderModule(particlefield_billboard.frag)");
 
             VkPipelineShaderStageCreateInfo stages[2]{};
             stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -3148,20 +3004,8 @@ void VulkanRenderer::Impl::createFieldGlowCompositePipeline() {
             check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &fieldGlowCompositeLayout_),
                   "vkCreatePipelineLayout(fieldGlowComposite)");
 
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kOverlayFullscreenVertSpv);
-            vsmci.pCode    = kOverlayFullscreenVertSpv;
-            VkShaderModule vert = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
-                  "vkCreateShaderModule(overlay_fullscreen.vert glow)");
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kParticleFieldGlowFragSpv);
-            fsmci.pCode    = kParticleFieldGlowFragSpv;
-            VkShaderModule frag = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
-                  "vkCreateShaderModule(particlefield_glow.frag)");
+            VkShaderModule vert = createShaderModule(ctx->device(), kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv), "vkCreateShaderModule(overlay_fullscreen.vert glow)");
+            VkShaderModule frag = createShaderModule(ctx->device(), kParticleFieldGlowFragSpv, sizeof(kParticleFieldGlowFragSpv), "vkCreateShaderModule(particlefield_glow.frag)");
 
             VkPipelineShaderStageCreateInfo stages[2]{};
             stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -3271,20 +3115,8 @@ void VulkanRenderer::Impl::createSpriteWorldPipeline() {
                 uploadHostVisible(ctx->allocator(), spriteQuadIdx_, idx, sizeof(idx));
             }
 
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kSprite3dVertSpv);
-            vsmci.pCode    = kSprite3dVertSpv;
-            VkShaderModule vert = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
-                  "vkCreateShaderModule(sprite3d.vert)");
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kOverlaySpriteFragSpv);
-            fsmci.pCode    = kOverlaySpriteFragSpv;
-            VkShaderModule frag = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
-                  "vkCreateShaderModule(overlay_sprite.frag for sprite3d)");
+            VkShaderModule vert = createShaderModule(ctx->device(), kSprite3dVertSpv, sizeof(kSprite3dVertSpv), "vkCreateShaderModule(sprite3d.vert)");
+            VkShaderModule frag = createShaderModule(ctx->device(), kOverlaySpriteFragSpv, sizeof(kOverlaySpriteFragSpv), "vkCreateShaderModule(overlay_sprite.frag for sprite3d)");
 
             VkPipelineShaderStageCreateInfo stages[2]{};
             stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

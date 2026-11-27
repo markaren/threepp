@@ -17,16 +17,6 @@ namespace threepp::vulkan {
 
     namespace {
 
-        VkShaderModule makeModule(VkDevice d, const uint32_t* spv, size_t bytes, const char* label) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = bytes;
-            smci.pCode    = spv;
-            VkShaderModule m = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(d, &smci, nullptr, &m), label);
-            return m;
-        }
-
         constexpr VkColorComponentFlags kRgb =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
         constexpr VkColorComponentFlags kRgba = kRgb | VK_COLOR_COMPONENT_A_BIT;
@@ -237,11 +227,11 @@ namespace threepp::vulkan {
     // two colour attachments and the blends the class comment lists.
     void BillboardHdrLayerPipelines::createSpritePipelines(VkPipelineLayout spriteLayout) {
         const VkDevice d = ctx_.device();
-        VkShaderModule vert = makeModule(d, kParticleFieldBillboardVertSpv, sizeof(kParticleFieldBillboardVertSpv),
-                                         "vkCreateShaderModule(bbhdr.sprite.vert)");
-        VkShaderModule frag = makeModule(d, kParticleFieldBillboardLayerFragSpv,
-                                         sizeof(kParticleFieldBillboardLayerFragSpv),
-                                         "vkCreateShaderModule(bbhdr.sprite.frag)");
+        VkShaderModule vert = createShaderModule(d, kParticleFieldBillboardVertSpv, sizeof(kParticleFieldBillboardVertSpv),
+                                                 "vkCreateShaderModule(bbhdr.sprite.vert)");
+        VkShaderModule frag = createShaderModule(d, kParticleFieldBillboardLayerFragSpv,
+                                                 sizeof(kParticleFieldBillboardLayerFragSpv),
+                                                 "vkCreateShaderModule(bbhdr.sprite.frag)");
 
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -359,10 +349,10 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &compositeLayout_),
               "vkCreatePipelineLayout(bbhdr.composite)");
 
-        VkShaderModule vert = makeModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv),
-                                         "vkCreateShaderModule(bbhdr.composite.vert)");
-        VkShaderModule frag = makeModule(d, kParticleFieldHdrLayerFragSpv, sizeof(kParticleFieldHdrLayerFragSpv),
-                                         "vkCreateShaderModule(bbhdr.composite.frag)");
+        VkShaderModule vert = createShaderModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv),
+                                                 "vkCreateShaderModule(bbhdr.composite.vert)");
+        VkShaderModule frag = createShaderModule(d, kParticleFieldHdrLayerFragSpv, sizeof(kParticleFieldHdrLayerFragSpv),
+                                                 "vkCreateShaderModule(bbhdr.composite.frag)");
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
@@ -459,12 +449,12 @@ namespace threepp::vulkan {
         plci.pSetLayouts    = &copyDsLayout_;
         check(vkCreatePipelineLayout(d, &plci, nullptr, &copyLayout_), "vkCreatePipelineLayout(bbhdr.copy)");
 
-        VkShaderModule vert   = makeModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv),
-                                           "vkCreateShaderModule(bbhdr.copy.vert)");
-        VkShaderModule frag   = makeModule(d, kBillboardLayerDepthFragSpv, sizeof(kBillboardLayerDepthFragSpv),
-                                           "vkCreateShaderModule(bbhdr.copy.frag)");
-        VkShaderModule fragMs = makeModule(d, kBillboardLayerDepthMsFragSpv, sizeof(kBillboardLayerDepthMsFragSpv),
-                                           "vkCreateShaderModule(bbhdr.copy.frag.ms)");
+        VkShaderModule vert   = createShaderModule(d, kOverlayFullscreenVertSpv, sizeof(kOverlayFullscreenVertSpv),
+                                                   "vkCreateShaderModule(bbhdr.copy.vert)");
+        VkShaderModule frag   = createShaderModule(d, kBillboardLayerDepthFragSpv, sizeof(kBillboardLayerDepthFragSpv),
+                                                   "vkCreateShaderModule(bbhdr.copy.frag)");
+        VkShaderModule fragMs = createShaderModule(d, kBillboardLayerDepthMsFragSpv, sizeof(kBillboardLayerDepthMsFragSpv),
+                                                   "vkCreateShaderModule(bbhdr.copy.frag.ms)");
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;

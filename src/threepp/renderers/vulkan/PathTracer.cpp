@@ -95,12 +95,7 @@ namespace threepp::vulkan {
 
         VkPipeline makeComputePipeline(VulkanContext& ctx, const uint32_t* spv, size_t bytes,
                                        VkPipelineLayout layout, const char* what) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = bytes;
-            smci.pCode    = spv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx.device(), &smci, nullptr, &mod), what);
+            const VkShaderModule mod = createShaderModule(ctx.device(), spv, bytes, what);
             VkPipelineShaderStageCreateInfo stage{};
             stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;

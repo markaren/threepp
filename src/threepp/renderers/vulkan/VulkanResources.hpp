@@ -32,6 +32,10 @@ namespace threepp::vulkan {
     void submitOneShot(VkDevice device, VkQueue queue, VkCommandPool pool, const char* what,
                        const std::function<void(VkCommandBuffer)>& record);
 
+    // A shader module from SPIR-V words (`bytes` long). A failure throws
+    // through check() with `what` as its label.
+    VkShaderModule createShaderModule(VkDevice device, const uint32_t* spv, size_t bytes, const char* what);
+
     // A compute pipeline from one SPIR-V module: the module is created, the
     // pipeline built on `layout` with entry point "main", and the module
     // destroyed again whether or not the pipeline came to be. `cache` may be

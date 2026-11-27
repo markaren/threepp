@@ -31,6 +31,16 @@ namespace threepp::vulkan {
         }
     }
 
+    VkShaderModule createShaderModule(VkDevice device, const uint32_t* spv, size_t bytes, const char* what) {
+        VkShaderModuleCreateInfo smci{};
+        smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = bytes;
+        smci.pCode    = spv;
+        VkShaderModule mod = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(device, &smci, nullptr, &mod), what);
+        return mod;
+    }
+
     void submitOneShot(VkDevice device, VkQueue queue, VkCommandPool pool, const char* what,
                        const std::function<void(VkCommandBuffer)>& record) {
         const auto label = [what](const char* step) { return std::string(step) + "(" + what + ")"; };

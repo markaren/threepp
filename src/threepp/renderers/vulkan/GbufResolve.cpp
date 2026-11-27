@@ -119,20 +119,8 @@ namespace threepp::vulkan {
         check(vkCreatePipelineLayout(d, &plci, nullptr, &depthPipeLayout_),
               "vkCreatePipelineLayout(gbufResolveDepth)");
 
-        VkShaderModuleCreateInfo vsmci{};
-        vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        vsmci.codeSize = sizeof(kGbufResolveDepthVertSpv);
-        vsmci.pCode    = kGbufResolveDepthVertSpv;
-        VkShaderModule vm = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &vsmci, nullptr, &vm),
-              "vkCreateShaderModule(gbuf_resolve_depth.vert)");
-        VkShaderModuleCreateInfo fsmci{};
-        fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        fsmci.codeSize = sizeof(kGbufResolveDepthFragSpv);
-        fsmci.pCode    = kGbufResolveDepthFragSpv;
-        VkShaderModule fm = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &fsmci, nullptr, &fm),
-              "vkCreateShaderModule(gbuf_resolve_depth.frag)");
+        VkShaderModule vm = createShaderModule(d, kGbufResolveDepthVertSpv, sizeof(kGbufResolveDepthVertSpv), "vkCreateShaderModule(gbuf_resolve_depth.vert)");
+        VkShaderModule fm = createShaderModule(d, kGbufResolveDepthFragSpv, sizeof(kGbufResolveDepthFragSpv), "vkCreateShaderModule(gbuf_resolve_depth.frag)");
 
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

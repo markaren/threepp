@@ -194,13 +194,7 @@ namespace threepp::vulkan {
 
     void LidarScanner::createPipeline() {
         auto loadModule = [this](const uint32_t* code, size_t size) {
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = size;
-            smci.pCode    = code;
-            VkShaderModule m = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &m),
-                  "vkCreateShaderModule(lidar)");
+            VkShaderModule m = createShaderModule(ctx_.device(), code, size, "vkCreateShaderModule(lidar)");
             return m;
         };
         VkShaderModule rgenMod = loadModule(kLidarRgenSpv,  sizeof(kLidarRgenSpv));

@@ -453,81 +453,46 @@ namespace threepp::vulkan {
         // reconstruction (formerly the two channels of deferred_denoise). Both
         // share the descriptor set layout + push-constant range, just different
         // shader modules.
-        VkShaderModuleCreateInfo smciGi{};
-        smciGi.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciGi.codeSize = sizeof(kDeferredGiFilterCompSpv);
-        smciGi.pCode    = kDeferredGiFilterCompSpv;
-        VkShaderModule modGi = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciGi, nullptr, &modGi), "vkCreateShaderModule(deferred_gi_filter)");
+        VkShaderModule modGi = createShaderModule(d, kDeferredGiFilterCompSpv, sizeof(kDeferredGiFilterCompSpv), "vkCreateShaderModule(deferred_gi_filter)");
         VkComputePipelineCreateInfo cpciGi = cpci;
         cpciGi.stage.module = modGi;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciGi, nullptr, &giFilterPipe_),
               "vkCreateComputePipelines(deferred_gi_filter)");
 
-        VkShaderModuleCreateInfo smciRefl{};
-        smciRefl.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciRefl.codeSize = sizeof(kDeferredReflFilterCompSpv);
-        smciRefl.pCode    = kDeferredReflFilterCompSpv;
-        VkShaderModule modRefl = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciRefl, nullptr, &modRefl), "vkCreateShaderModule(deferred_refl_filter)");
+        VkShaderModule modRefl = createShaderModule(d, kDeferredReflFilterCompSpv, sizeof(kDeferredReflFilterCompSpv), "vkCreateShaderModule(deferred_refl_filter)");
         VkComputePipelineCreateInfo cpciRefl = cpci;
         cpciRefl.stage.module = modRefl;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciRefl, nullptr, &reflFilterPipe_),
               "vkCreateComputePipelines(deferred_refl_filter)");
 
         // Third pipeline — clustered light culling — same layout again.
-        VkShaderModuleCreateInfo smciC{};
-        smciC.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciC.codeSize = sizeof(kClusterBuildCompSpv);
-        smciC.pCode    = kClusterBuildCompSpv;
-        VkShaderModule modC = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciC, nullptr, &modC), "vkCreateShaderModule(cluster_build)");
+        VkShaderModule modC = createShaderModule(d, kClusterBuildCompSpv, sizeof(kClusterBuildCompSpv), "vkCreateShaderModule(cluster_build)");
         VkComputePipelineCreateInfo cpciC = cpci;
         cpciC.stage.module = modC;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciC, nullptr, &clusterPipe_),
               "vkCreateComputePipelines(cluster_build)");
 
         // Froxel volumetrics — inject + integrate, same layout.
-        VkShaderModuleCreateInfo smciF{};
-        smciF.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciF.codeSize = froxelSpv.count * sizeof(uint32_t);
-        smciF.pCode    = froxelSpv.words;
-        VkShaderModule modF = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciF, nullptr, &modF), "vkCreateShaderModule(froxel_inject)");
+        VkShaderModule modF = createShaderModule(d, froxelSpv.words, froxelSpv.count * sizeof(uint32_t), "vkCreateShaderModule(froxel_inject)");
         VkComputePipelineCreateInfo cpciF = cpci;
         cpciF.stage.module = modF;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciF, nullptr, &froxelInjectPipe_),
               "vkCreateComputePipelines(froxel_inject)");
-        VkShaderModuleCreateInfo smciI{};
-        smciI.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciI.codeSize = sizeof(kFroxelIntegrateCompSpv);
-        smciI.pCode    = kFroxelIntegrateCompSpv;
-        VkShaderModule modI = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciI, nullptr, &modI), "vkCreateShaderModule(froxel_integrate)");
+        VkShaderModule modI = createShaderModule(d, kFroxelIntegrateCompSpv, sizeof(kFroxelIntegrateCompSpv), "vkCreateShaderModule(froxel_integrate)");
         VkComputePipelineCreateInfo cpciI = cpci;
         cpciI.stage.module = modI;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciI, nullptr, &froxelIntegratePipe_),
               "vkCreateComputePipelines(froxel_integrate)");
 
         // Half-res cloud march — same layout again.
-        VkShaderModuleCreateInfo smciM{};
-        smciM.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciM.codeSize = sizeof(kCloudMarchCompSpv);
-        smciM.pCode    = kCloudMarchCompSpv;
-        VkShaderModule modM = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciM, nullptr, &modM), "vkCreateShaderModule(cloud_march)");
+        VkShaderModule modM = createShaderModule(d, kCloudMarchCompSpv, sizeof(kCloudMarchCompSpv), "vkCreateShaderModule(cloud_march)");
         VkComputePipelineCreateInfo cpciM = cpci;
         cpciM.stage.module = modM;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciM, nullptr, &cloudMarchPipe_),
               "vkCreateComputePipelines(cloud_march)");
 
         // Cloud shadow map — same layout again.
-        VkShaderModuleCreateInfo smciS{};
-        smciS.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smciS.codeSize = sizeof(kCloudShadowCompSpv);
-        smciS.pCode    = kCloudShadowCompSpv;
-        VkShaderModule modS = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &smciS, nullptr, &modS), "vkCreateShaderModule(cloud_shadow)");
+        VkShaderModule modS = createShaderModule(d, kCloudShadowCompSpv, sizeof(kCloudShadowCompSpv), "vkCreateShaderModule(cloud_shadow)");
         VkComputePipelineCreateInfo cpciS = cpci;
         cpciS.stage.module = modS;
         check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciS, nullptr, &cloudShadowPipe_),
@@ -539,20 +504,13 @@ namespace threepp::vulkan {
         // recorded (the shade's AO term is then 1).
         VkShaderModule modAo = VK_NULL_HANDLE;
         if (rt) {
-            VkShaderModuleCreateInfo smciAo = smciS;
-            smciAo.codeSize = sizeof(kRtaoCompSpv);
-            smciAo.pCode    = kRtaoCompSpv;
-            check(vkCreateShaderModule(d, &smciAo, nullptr, &modAo), "vkCreateShaderModule(rtao)");
+            modAo = createShaderModule(d, kRtaoCompSpv, sizeof(kRtaoCompSpv), "vkCreateShaderModule(rtao)");
             VkComputePipelineCreateInfo cpciAo = cpci;
             cpciAo.stage.module = modAo;
             check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciAo, nullptr, &rtaoPipe_),
                   "vkCreateComputePipelines(rtao)");
             // The half-res sun fog march: the shade's set, push block and march.
-            VkShaderModuleCreateInfo smciFog = smciS;
-            smciFog.codeSize = sizeof(kFogMarchCompSpv);
-            smciFog.pCode    = kFogMarchCompSpv;
-            VkShaderModule modFog = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(d, &smciFog, nullptr, &modFog), "vkCreateShaderModule(fog_march)");
+            VkShaderModule modFog = createShaderModule(d, kFogMarchCompSpv, sizeof(kFogMarchCompSpv), "vkCreateShaderModule(fog_march)");
             VkComputePipelineCreateInfo cpciFog = cpci;
             cpciFog.stage.module = modFog;
             check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciFog, nullptr, &fogMarchPipe_),
@@ -592,12 +550,7 @@ namespace threepp::vulkan {
             check(vkCreatePipelineLayout(d, &pplci, nullptr, &particlePipeLayout_),
                   "vkCreatePipelineLayout(particle_light)");
 
-            VkShaderModuleCreateInfo smciP{};
-            smciP.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smciP.codeSize = particleSpv.count * sizeof(uint32_t);
-            smciP.pCode    = particleSpv.words;
-            VkShaderModule modP = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(d, &smciP, nullptr, &modP), "vkCreateShaderModule(particle_light)");
+            VkShaderModule modP = createShaderModule(d, particleSpv.words, particleSpv.count * sizeof(uint32_t), "vkCreateShaderModule(particle_light)");
             VkComputePipelineCreateInfo cpciP = cpci;
             cpciP.stage.module = modP;
             cpciP.layout       = particlePipeLayout_;

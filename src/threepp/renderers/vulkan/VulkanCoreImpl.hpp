@@ -53,6 +53,7 @@ namespace threepp {
     using vulkan::Buffer;
     using vulkan::Image2D;
     using vulkan::check;
+    using vulkan::createShaderModule;
     using vulkan::alignUp;
     using vulkan::createBuffer;
     using vulkan::destroyBuffer;

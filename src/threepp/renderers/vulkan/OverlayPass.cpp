@@ -194,20 +194,8 @@ OverlayPass::~OverlayPass() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void OverlayPass::createOrthoLinePipelines() {
-    VkShaderModuleCreateInfo vsmci{};
-    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    vsmci.codeSize = sizeof(kOverlayVertSpv);
-    vsmci.pCode    = kOverlayVertSpv;
-    VkShaderModule vertModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vertModule),
-          "vkCreateShaderModule(ortho overlay.vert)");
-    VkShaderModuleCreateInfo fsmci{};
-    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    fsmci.codeSize = sizeof(kOverlayFragSpv);
-    fsmci.pCode    = kOverlayFragSpv;
-    VkShaderModule fragModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &fragModule),
-          "vkCreateShaderModule(ortho overlay.frag)");
+    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayVertSpv, sizeof(kOverlayVertSpv), "vkCreateShaderModule(ortho overlay.vert)");
+    VkShaderModule fragModule = createShaderModule(ctx_.device(), kOverlayFragSpv, sizeof(kOverlayFragSpv), "vkCreateShaderModule(ortho overlay.frag)");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -332,20 +320,8 @@ void OverlayPass::createOrthoLinePipelines() {
     // colored overlay pipelines so a GridHelper/AxesHelper looks the
     // same in a composed pane as in the main view (and as on GL).
     {
-        VkShaderModuleCreateInfo cvsmci{};
-        cvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        cvsmci.codeSize = sizeof(kOverlayColorVertSpv);
-        cvsmci.pCode    = kOverlayColorVertSpv;
-        VkShaderModule cvert = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &cvsmci, nullptr, &cvert),
-              "vkCreateShaderModule(ortho overlay_color.vert)");
-        VkShaderModuleCreateInfo cfsmci{};
-        cfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        cfsmci.codeSize = sizeof(kOverlayColorFragSpv);
-        cfsmci.pCode    = kOverlayColorFragSpv;
-        VkShaderModule cfrag = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(ctx_.device(), &cfsmci, nullptr, &cfrag),
-              "vkCreateShaderModule(ortho overlay_color.frag)");
+        VkShaderModule cvert = createShaderModule(ctx_.device(), kOverlayColorVertSpv, sizeof(kOverlayColorVertSpv), "vkCreateShaderModule(ortho overlay_color.vert)");
+        VkShaderModule cfrag = createShaderModule(ctx_.device(), kOverlayColorFragSpv, sizeof(kOverlayColorFragSpv), "vkCreateShaderModule(ortho overlay_color.frag)");
 
         VkPipelineShaderStageCreateInfo cStages[2] = {stages[0], stages[1]};
         cStages[0].module = cvert;
@@ -417,20 +393,8 @@ void OverlayPass::createOrthoPointPipeline() {
     // pipelines; build those first if this is the first overlay primitive.
     if (orthoLinePipelineLayout_ == VK_NULL_HANDLE) createOrthoLinePipelines();
 
-    VkShaderModuleCreateInfo vsmci{};
-    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    vsmci.codeSize = sizeof(kOverlayPointVertSpv);
-    vsmci.pCode    = kOverlayPointVertSpv;
-    VkShaderModule vertModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vertModule),
-          "vkCreateShaderModule(overlay_point.vert)");
-    VkShaderModuleCreateInfo fsmci{};
-    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    fsmci.codeSize = sizeof(kOverlayPointFragSpv);
-    fsmci.pCode    = kOverlayPointFragSpv;
-    VkShaderModule fragModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &fragModule),
-          "vkCreateShaderModule(overlay_point.frag)");
+    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayPointVertSpv, sizeof(kOverlayPointVertSpv), "vkCreateShaderModule(overlay_point.vert)");
+    VkShaderModule fragModule = createShaderModule(ctx_.device(), kOverlayPointFragSpv, sizeof(kOverlayPointFragSpv), "vkCreateShaderModule(overlay_point.frag)");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -601,20 +565,8 @@ void OverlayPass::createLitMeshPipelines() {
               "vkCreatePipelineLayout(litMesh)");
     }
 
-    VkShaderModuleCreateInfo vsmci{};
-    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    vsmci.codeSize = sizeof(kOverlayMeshLitVertSpv);
-    vsmci.pCode    = kOverlayMeshLitVertSpv;
-    VkShaderModule vertModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vertModule),
-          "vkCreateShaderModule(overlay_mesh_lit.vert)");
-    VkShaderModuleCreateInfo fsmci{};
-    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    fsmci.codeSize = sizeof(kOverlayMeshLitFragSpv);
-    fsmci.pCode    = kOverlayMeshLitFragSpv;
-    VkShaderModule fragModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &fragModule),
-          "vkCreateShaderModule(overlay_mesh_lit.frag)");
+    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayMeshLitVertSpv, sizeof(kOverlayMeshLitVertSpv), "vkCreateShaderModule(overlay_mesh_lit.vert)");
+    VkShaderModule fragModule = createShaderModule(ctx_.device(), kOverlayMeshLitFragSpv, sizeof(kOverlayMeshLitFragSpv), "vkCreateShaderModule(overlay_mesh_lit.frag)");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -813,20 +765,8 @@ void OverlayPass::createPaneSkyPipeline() {
               "vkCreatePipelineLayout(paneSky)");
     }
 
-    VkShaderModuleCreateInfo vsmci{};
-    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    vsmci.codeSize = sizeof(kOverlayPaneSkyVertSpv);
-    vsmci.pCode    = kOverlayPaneSkyVertSpv;
-    VkShaderModule vertModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vertModule),
-          "vkCreateShaderModule(overlay_pane_sky.vert)");
-    VkShaderModuleCreateInfo fsmci{};
-    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    fsmci.codeSize = sizeof(kOverlayPaneSkyFragSpv);
-    fsmci.pCode    = kOverlayPaneSkyFragSpv;
-    VkShaderModule fragModule = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &fragModule),
-          "vkCreateShaderModule(overlay_pane_sky.frag)");
+    VkShaderModule vertModule = createShaderModule(ctx_.device(), kOverlayPaneSkyVertSpv, sizeof(kOverlayPaneSkyVertSpv), "vkCreateShaderModule(overlay_pane_sky.vert)");
+    VkShaderModule fragModule = createShaderModule(ctx_.device(), kOverlayPaneSkyFragSpv, sizeof(kOverlayPaneSkyFragSpv), "vkCreateShaderModule(overlay_pane_sky.frag)");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1053,20 +993,8 @@ void OverlayPass::createSpriteOverlayPipeline() {
               "vkCreateDescriptorPool(spriteOverlay)");
     }
 
-    VkShaderModuleCreateInfo vsmci{};
-    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    vsmci.codeSize = sizeof(kOverlaySpriteVertSpv);
-    vsmci.pCode    = kOverlaySpriteVertSpv;
-    VkShaderModule vert = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vert),
-          "vkCreateShaderModule(overlay_sprite.vert)");
-    VkShaderModuleCreateInfo fsmci{};
-    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    fsmci.codeSize = sizeof(kOverlaySpriteFragSpv);
-    fsmci.pCode    = kOverlaySpriteFragSpv;
-    VkShaderModule frag = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &frag),
-          "vkCreateShaderModule(overlay_sprite.frag)");
+    VkShaderModule vert = createShaderModule(ctx_.device(), kOverlaySpriteVertSpv, sizeof(kOverlaySpriteVertSpv), "vkCreateShaderModule(overlay_sprite.vert)");
+    VkShaderModule frag = createShaderModule(ctx_.device(), kOverlaySpriteFragSpv, sizeof(kOverlaySpriteFragSpv), "vkCreateShaderModule(overlay_sprite.frag)");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
