@@ -256,8 +256,8 @@ namespace threepp {
             });
             shade.declare(g, pass, Stage::CloudShadow, f);
         }
-        // Froxel volumetrics: inject (RT sun shafts + clustered-light
-        // beams, temporal EMA) + integrate (front-to-back LUT), whenever
+        // Froxel volumetrics: inject (the clustered point lights' glow, no
+        // rays; temporal EMA) + integrate (front-to-back LUT), whenever
         // a medium exists this frame. Inject reads the cluster grid; the
         // shade samples the LUT.
         // Phase 2: the froxels run whenever the unified AIR medium exists

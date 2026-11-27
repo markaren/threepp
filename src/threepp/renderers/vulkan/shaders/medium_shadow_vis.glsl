@@ -1,8 +1,7 @@
-// Binary occlusion toward a light from a point in the air: a froxel sample
-// (froxel_inject.comp) or a particle centre (particle_light.comp). The
-// opaque-only mask matches the surface shadow rays: blend/glass never blocks a
-// shaft, or the sun on a puff. The includer declares topAS (ray_query_stub.glsl
-// in the no-ray-query build).
+// Binary occlusion toward a light from a point in the air: a particle centre
+// (particle_light.comp). The opaque-only mask matches the surface shadow
+// rays: blend/glass never blocks a shaft, or the sun on a puff. The includer
+// declares topAS (ray_query_stub.glsl in the no-ray-query build).
 //
 // The deferred shade's and probe_update.comp's shadowVis are different
 // functions (they alpha-test cutout candidates) and keep their own.

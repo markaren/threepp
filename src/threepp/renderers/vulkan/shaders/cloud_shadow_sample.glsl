@@ -3,8 +3,8 @@
 // the point is outside the 8 km camera-centred square. KEEP the extent + centre
 // in sync with cloud_shadow.comp.
 //
-// The deferred shade (deferred_shade_10_lighting_utils.glsl), froxel_inject.comp
-// and particle_light.comp include it after declaring what it reads: `clouds`
+// The deferred shade (deferred_shade_10_lighting_utils.glsl) and
+// particle_light.comp include it after declaring what it reads: `clouds`
 // (cloud_ubo.glsl), `cam` (camera_ubo.glsl) and cloudShadowTex.
 
 #ifndef CLOUD_SHADOW_SAMPLE_GLSL

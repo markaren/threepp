@@ -1,8 +1,8 @@
 // Ray query stand-ins for a device without VK_KHR_ray_query.
 //
 // Included instead of `#extension GL_EXT_ray_query` and the topAS binding by
-// the no-ray-query variants of deferred_shade.comp, froxel_inject.comp and
-// particle_light.comp (compiled with -DTHREEPP_NO_RAY_QUERY). Every ray
+// the no-ray-query variants of deferred_shade.comp and particle_light.comp
+// (compiled with -DTHREEPP_NO_RAY_QUERY). Every ray
 // misses: proceed is false, the committed type is "none", so each traced
 // helper lands in the miss path it already has (environment lookup, sky
 // radiance, visibility 1). The hit-side getters return neutral values that a
