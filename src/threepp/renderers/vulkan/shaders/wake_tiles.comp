@@ -1,0 +1,153 @@
+#version 460
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive                   : enable
+
+#include "ocean_wake_lists.glsl"
+#include "ocean_wake_tiles.glsl"
+
+// The wake field's TILES: which 8 x 8 texel tiles of a producer's patch its
+// step (wake_field.comp) writes this step. One invocation a tile, before the
+// step's three dispatches (vulkan::WakeFieldPipeline::record), which then run
+// a workgroup a listed tile.
+//
+// A patch's water is still (state and flow zero) over most of it: what a
+// vessel leaves lies along her track. A texel whose water is still, and
+// round which the water the step reads is still too, gets zero from each of
+// the three dispatches:
+//   ADVECT  reads last step's images where the texel's water came from. With
+//           no flow and no turbulence round it, the flow it moves with is the
+//           hull's alone (wakeHullFlow), and the read lies within `reach`
+//           texels of the texel, shifted by the origin's move.
+//   CORRECT clamps to the four texels ADVECT read: all zero, so zero.
+//   SETTLE  diffuses by the texel's own turbulence (none) and decays (zero
+//           stays zero). It adds two things: the step's sources, each within
+//           d^2 <= 24 r^2 of its capsule (the reach the source lists take),
+//           and, where the patch's ripples break, the broken crest (their
+//           slope past breakSlope0).
+// So a tile is written when the last step left water within `reach` of it
+// (WAKE_TILE_NZ, which SETTLE sets), a source reaches it, or the ripples'
+// slope under it can pass breakSlope0. Every other tile's texels are zero
+// after the step. A tile the last step wrote and this one does not
+// (WAKE_TILE_DIRTY) is listed with WAKE_TILE_CLEAR, which writes the zeros,
+// so the three images hold, texel for texel, what a step over every texel
+// leaves; and so does every later step. THREEPP_WAKE_DENSE lists every tile:
+// tests/renderers/VulkanWakeSparse_test.cpp compares the two.
+
+layout(local_size_x = 64) in;
+
+// 64 bytes, mirrored by WakeFieldPipeline::TilesPush.
+layout(push_constant, scalar) uniform Pc {
+    uint64_t tableAddr;
+    uint64_t argsAddr;// the patch's VkDispatchIndirectCommand: x counts the list
+    uint64_t lastAddr;// last step's flags, a word a tile
+    uint64_t nextAddr;// this step's: DIRTY where the step writes, then SETTLE's NZ
+    uint64_t listAddr;// the tiles the step writes, a word each
+    uint64_t gridAddr;// the ripples' steepest slope, a word an 8 x 8 cell (wake_ripple.comp); 0 = none
+    uint     layer;
+    uint     reach;   // texels round a texel (moved with the origin) that its step reads where the water is still
+    uint     every;   // 1 = every tile: the patch starts from still water, or the dense step
+    uint     _pad;
+} pc;
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) buffer WakeTileArgs {
+    uint x;
+    uint y;
+    uint z;
+};
+
+bool finite2(vec2 v) {
+    return all(lessThan(abs(v), vec2(3.0e38)));// false for a NaN too
+}
+
+// Last step left water within `reach` of the tile's texels, moved by the
+// origin's move. Outside last step's window the samplers read the zero
+// border.
+bool carriesIn(WakeTable tb, WakePatch p, ivec2 tc, uint side) {
+    WakeTileWords last = WakeTileWords(pc.lastAddr);
+    const ivec2 move = ivec2(round((vec2(p.originX, p.originZ) - vec2(p.prevOriginX, p.prevOriginZ)) / p.texel));
+    const int   r    = int(pc.reach);
+    const ivec2 lo   = max(tc * 8 + move - r, ivec2(0));
+    const ivec2 hi   = min(tc * 8 + 7 + move + r, ivec2(int(tb.res) - 1));
+    if (any(greaterThan(lo, hi))) return false;
+    for (int y = lo.y / 8; y <= hi.y / 8; ++y) {
+        for (int x = lo.x / 8; x <= hi.x / 8; ++x) {
+            if ((last.w[uint(y) * side + uint(x)] & WAKE_TILE_NZ) != 0u) return true;
+        }
+    }
+    return false;
+}
+
+// The patch's ripples can break over the tile. SETTLE reads their slope at
+// x / rippleSize + 0.5 / N, bilinear and repeating, so the taps are
+// floor(x N / rippleSize) and the next; the range takes a ripple texel more
+// on either side for the rounding of both. A bilinear read is no steeper
+// than its steepest tap.
+bool breaks(WakeTable tb, WakePatch p, ivec2 tc) {
+    if (!(p.breakSlope1 > 0.0 && p.ripple > 0.5 && tb.rippleRes > 0u)) return false;
+    if (pc.gridAddr == 0ul || !(p.rippleSize > 0.0)) return true;
+    const int   N  = int(tb.rippleRes);
+    const int   cs = N / 8;// cells a side
+    const vec2  o  = vec2(p.originX, p.originZ);
+    const float k  = float(N) / p.rippleSize;
+    const vec2  x0 = (o + (vec2(tc * 8) + 0.5) * p.texel) * k;
+    const vec2  x1 = (o + (vec2(tc * 8 + 7) + 0.5) * p.texel) * k;
+    if (any(greaterThan(max(abs(x0), abs(x1)), vec2(1.0e9))) || !finite2(x0) || !finite2(x1)) return true;
+    const ivec2 lo = ivec2(floor(x0)) - 1;
+    const ivec2 hi = ivec2(floor(x1)) + 2;
+    if (any(greaterThanEqual(hi - lo, ivec2(N - 8)))) return true;// a period, or nearly
+    // smoothstep(breakSlope0, breakSlope1, |slope| / max(gain, 1e-3)) > 0;
+    // a hundredth over for the image's half floats and the filter's weights
+    const float limit = p.breakSlope0 * max(tb.rippleGain, 1e-3);
+    WakeTileWords grid = WakeTileWords(pc.gridAddr);
+    // (cs is a power of two, so & wraps a negative cell too; >> 3 floors it)
+    for (int y = lo.y >> 3; y <= hi.y >> 3; ++y) {
+        for (int x = lo.x >> 3; x <= hi.x >> 3; ++x) {
+            const int c = (y & (cs - 1)) * cs + (x & (cs - 1));
+            if (1.01 * uintBitsToFloat(grid.w[uint(c)]) > limit) return true;
+        }
+    }
+    return false;
+}
+
+// One of the step's sources can lay something in the tile or move its water:
+// SETTLE passes over a source at a texel where d^2 > 24 r^2, so the box of
+// its segment, grown by that reach and the margin fieldSourceReaches takes
+// over the rounding, against the tile's square (which holds its texel
+// centres). The patch's list holds every source that can reach the patch.
+bool reached(WakeTable tb, WakePatch p, ivec2 tc) {
+    WakeSourceLists sl    = oceanWakeLists(pc.tableAddr);
+    const uint      first = sl.first[OCEAN_WAKE_LIST_FIELD + pc.layer];
+    const uint      count = sl.count[OCEAN_WAKE_LIST_FIELD + pc.layer];
+    const vec2      lo    = vec2(p.originX, p.originZ) + vec2(tc * 8) * p.texel;
+    const vec2      hi    = lo + 8.0 * p.texel;
+    for (uint j = 0u; j < count; ++j) {
+        const WakeSource sc = tb.sources[sl.index[first + j]];
+        if ((sc.push != 0.0 || sc.flux != 0.0) && sc.foam <= 0.0 && sc.aeration <= 0.0 && sc.turbulence <= 0.0 &&
+            sc.lane <= 0.0) continue;
+        const float m = 4.898979486 * abs(sc.radius) * 1.001 + p.texel + 0.01;// sqrt(24) r
+        const vec2  a = min(sc.p0, sc.p1) - m;
+        const vec2  b = max(sc.p0, sc.p1) + m;
+        if (!finite2(a) || !finite2(b)) return true;
+        if (all(greaterThanEqual(b, lo)) && all(lessThanEqual(a, hi))) return true;
+    }
+    return false;
+}
+
+void main() {
+    WakeTable tb = WakeTable(pc.tableAddr);
+    const uint side = (tb.res + 7u) / 8u;
+    const uint t    = gl_GlobalInvocationID.x;
+    if (t >= side * side) return;
+    const ivec2     tc = ivec2(t % side, t / side);
+    const WakePatch p  = tb.patches[pc.layer];
+    const bool write = pc.every != 0u || p.live < 1.5 || carriesIn(tb, p, tc, side) || breaks(tb, p, tc) ||
+                       reached(tb, p, tc);
+    if (write || (WakeTileWords(pc.lastAddr).w[t] & WAKE_TILE_DIRTY) != 0u) {
+        const uint slot = atomicAdd(WakeTileArgs(pc.argsAddr).x, 1u);
+        WakeTileWords(pc.listAddr).w[slot] = write ? t : (t | WAKE_TILE_CLEAR);
+    }
+    WakeTileWords(pc.nextAddr).w[t] = write ? WAKE_TILE_DIRTY : 0u;
+}

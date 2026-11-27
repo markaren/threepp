@@ -1,12 +1,20 @@
 // WakeFieldPipeline — the ocean's wake field (DisplacedMesh::WakeField): what
 // propellers, jets, paddles and hulls leave on the water, simulated in
-// world-anchored patches that do not repeat. Two compute pipelines shared by
-// every ocean: wake_field.comp (the foam, the bubbles, the turbulence, the lane
-// and the water's flow) and wake_ripple.comp (the waves the producers make, a
-// spectrum a patch, through the ocean's own inverse FFT). Each ocean with a
-// wake field owns a State: its patch images, its descriptor sets and the
-// device buffer that holds the patch table, the step's sources and each
-// patch's lists of them (ocean_wake_lists.glsl).
+// world-anchored patches that do not repeat. Compute pipelines shared by every
+// ocean: wake_field.comp (the foam, the bubbles, the turbulence, the lane and
+// the water's flow), wake_tiles.comp (which of a producer's tiles its step
+// writes) and wake_ripple.comp (the waves the producers make, a spectrum a
+// patch, through the ocean's own inverse FFT). Each ocean with a wake field
+// owns a State: its patch images, its descriptor sets, the device buffer that
+// holds the patch table, the step's sources and each patch's lists of them
+// (ocean_wake_lists.glsl), and the buffer of its producers' tiles
+// (ocean_wake_tiles.glsl).
+//
+// A producer's patch is stepped over the 8 x 8 tiles whose water can change
+// this step, as wake_tiles.comp lists them, with an indirect dispatch: the
+// water a vessel leaves lies along her track, and the rest of her patch is
+// still. The tiles left out are zero after a step over the whole patch too,
+// so the images are the same (THREEPP_WAKE_DENSE steps every tile).
 //
 // Where it meets the rest of the renderer:
 //   * State::stateView() is what the deferred water shade samples (binding 78)
@@ -182,12 +190,30 @@ namespace threepp::vulkan {
     public:
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match the `Pc` of wake_field.comp and wake_ripple.comp (24 bytes).
+        // Must match the `Pc` of wake_field.comp and wake_ripple.comp (32 bytes).
         struct PushConstants {
             VkDeviceAddress tableAddr;
             uint32_t        layer;
             uint32_t        mode;
-            uint32_t        sourceCount;
+            // wake_field.comp: the patch's tile list this step, a workgroup a
+            // tile (0 = every texel: a shore window). wake_ripple.comp: where
+            // SLOPES puts each 8 x 8 cell's steepest slope (0 = nowhere).
+            VkDeviceAddress tiles;
+            // wake_field.comp: this step's tile flags, which SETTLE marks.
+            VkDeviceAddress flags;
+        };
+
+        // wake_tiles.comp's (64 bytes).
+        struct TilesPush {
+            VkDeviceAddress tableAddr;
+            VkDeviceAddress argsAddr;// the patch's VkDispatchIndirectCommand
+            VkDeviceAddress lastAddr;// last step's flags
+            VkDeviceAddress nextAddr;// this step's
+            VkDeviceAddress listAddr;
+            VkDeviceAddress gridAddr;// the ripples' cells (0 = none)
+            uint32_t        layer;
+            uint32_t        reach;   // texels round a still texel its step reads
+            uint32_t        every;   // 1 = list every tile
             uint32_t        _pad;
         };
 
@@ -276,6 +302,16 @@ namespace threepp::vulkan {
             std::array<VkImageView, 5>   view{};
             std::array<VkDescriptorSet, 3> ds{};
             Buffer table{};// WakeTableGpu + kMaxWakeSources sources, device-local
+            // The producers' tiles (ocean_wake_tiles.glsl), device-local: for
+            // each producer's patch its dispatch (a VkDispatchIndirectCommand
+            // in 16 bytes), then two arrays of its tiles' flags (last step's
+            // and this step's, swapped by tileParity), its tile list, and its
+            // ripples' cells. A word a tile of 8 x 8 texels, a word a cell of
+            // 8 x 8 ripple texels.
+            Buffer   tiles{};
+            uint32_t tileSide   = 0;// tiles a side, (res + 7) / 8
+            uint32_t cellSide   = 0;// ripple cells a side, rippleRes / 8 (0 = no ripples)
+            uint32_t tileParity = 0;// the flag array this step's wake_tiles.comp reads as last step's
             double prevTimeSec = -1.0;
             std::array<float, kWakeTablePatches> prevOriginX{};
             std::array<float, kWakeTablePatches> prevOriginZ{};
@@ -421,8 +457,9 @@ namespace threepp::vulkan {
         };
 
         // One step of the field, into the frame's command stream: the table,
-        // this frame's sources and each patch's lists of them, then the three
-        // dispatches for every patch that is on. A frame at the same time as the last (a still that
+        // this frame's sources and each patch's lists of them, each
+        // producer's tiles (wake_tiles.comp), then the three dispatches for
+        // every patch that is on, a producer's over its listed tiles. A frame at the same time as the last (a still that
         // renders the same instant again) records nothing. Returns the ripples
         // the step leaves, for recordRipples right after it.
         RippleStep record(VkCommandBuffer cb, State& st, const DisplacedMesh& dm, double nowSec);
@@ -440,6 +477,8 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout rippleDsLayout_       = VK_NULL_HANDLE;
         VkPipelineLayout      ripplePipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            ripplePipeline_       = VK_NULL_HANDLE;
+        VkPipelineLayout      tilesPipelineLayout_  = VK_NULL_HANDLE;// wake_tiles.comp (push constants only)
+        VkPipeline            tilesPipeline_        = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
         VkSampler             sampler_        = VK_NULL_HANDLE;
         VkSampler             rippleSampler_  = VK_NULL_HANDLE;

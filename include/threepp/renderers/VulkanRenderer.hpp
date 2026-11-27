@@ -223,6 +223,22 @@ namespace threepp {
                                            std::vector<float>& out,
                                            uint32_t& resolution, float& period);
 
+        // ── Wake field readback (TEST / AUDIT) ───────────────────────────
+        // Copy one layer of the mesh's wake field (wake_field.comp) to the
+        // host as its last step left it: `state` holds resolution^2 texels of
+        // 4 floats (foam, aeration, turbulence in m/s, lane), `velocity` of 2
+        // (the water's flow over the ground, world x and z, m/s), row-major.
+        // Layers 0..patches-1 are the producers' patches (DisplacedMesh::
+        // wakePatches); the shore's windows follow them. Exists so the sparse
+        // step can be compared texel for texel with a step over every texel
+        // (THREEPP_WAKE_DENSE; tests/renderers/VulkanWakeSparse_test.cpp).
+        //
+        // DRAINS THE DEVICE. Not a per-frame call. Returns false when the
+        // mesh has no wake field or `layer` is out of range.
+        [[nodiscard]] bool readWakeField(const DisplacedMesh& mesh, uint32_t layer,
+                                         std::vector<float>& state, std::vector<float>& velocity,
+                                         uint32_t& resolution);
+
         // ── GridSmoke solver state readback (TEST / AUDIT) ───────────────
         // Copy a grid-smoke field's solver state (ParticleField::GridSmoke) to
         // the host as the last rendered frame's steps left it. Every cell array
@@ -2133,8 +2149,9 @@ namespace threepp {
             // window moved or the scene changed, and the foam it lays this step.
             float oceanShoreMs    = 0.f;
             // The ocean's wake field (first displaced mesh only): its step
-            // (advect, correct, settle over every live layer), and apart from
-            // it the ripples' spectral step and mips.
+            // (each producer's tiles, then advect, correct, settle over every
+            // live layer: a producer's listed tiles, a shore window whole),
+            // and apart from it the ripples' spectral step and mips.
             float oceanWakeMs     = 0.f;
             float oceanRipplesMs  = 0.f;
             // Per-frame TLAS refit recorded on the frame command buffer
