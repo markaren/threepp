@@ -2585,14 +2585,12 @@ namespace threepp {
         // InstancedMesh span, the world matrix the CPU bakes into every
         // instance's scene entry: world = mesh.matrixWorld * instanceMatrix[i].
         //
-        // Right now NOTHING consumes it — the draw list, motion vectors,
-        // frustum cull and the ray-tracing instance descriptors all still read
-        // the CPU values — so this costs an instance-matrix upload and a
-        // dispatch and saves nothing yet. It is the verified foundation for
-        // moving those consumers onto the GPU; see
-        // plans/gpu-driven-instances.md. OFF by default until a consumer reads
-        // the buffer (the pass measured about 1 ms of wall time at 85k
-        // instances); turn it ON to A/B its cost or to run instanceExpandCheck.
+        // Two consumers read it: the GPU draw records (setGpuDrawGeneration)
+        // and the GPU TLAS instances (setGpuTlasInstances), both below and
+        // both needing this on. Without either it costs an instance-matrix
+        // upload and a dispatch (about 1 ms of wall time at 85k instances) and
+        // saves nothing. OFF by default, as they are; on its own it serves to
+        // A/B that cost or to run instanceExpandCheck.
         void setGpuInstanceExpansion(bool enabled);
         [[nodiscard]] bool gpuInstanceExpansion() const;
 

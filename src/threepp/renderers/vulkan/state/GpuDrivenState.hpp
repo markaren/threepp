@@ -12,20 +12,18 @@
 namespace threepp::vulkan::impl {
 
     struct GpuDrivenState {
-        // ── GPU per-instance world matrices (stage 1: producer only) ─────────
+        // ── GPU per-instance world matrices (stage 1) ───────────────────────
         // instance_expand.comp recomputes, per InstancedMesh span, exactly what
-        // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix. No
-        // consumer reads it — DrawInfo, motion, cull and the TLAS instance fill
-        // all still take the CPU values — so this is pure added cost until
-        // stages 2-5 move them over. What it provides now is verification that
-        // the GPU producer agrees with the CPU
-        // (VulkanRenderer::instanceExpandCheck).
+        // ensureSceneBuilt's lean refresh bakes into MeshEntry::worldMatrix.
+        // Its readers are draw_gen.comp (gpuDrawGen_, below) and tlas_gen.comp
+        // (gpuTlasGen_); without them it is added cost, and
+        // VulkanRenderer::instanceExpandCheck verifies that it agrees with the
+        // CPU.
         std::unique_ptr<vulkan::InstanceExpand> instExpand_;
-        // OFF by default until a consumer reads the buffer: the pass is
-        // measured slower (~+1.0 ms wall at 85k grains, 8 of 8 interleaved A/B
-        // pairs) and its output is read by nobody yet.
-        // setGpuInstanceExpansion(true) opts in, which is all the A/B lever and
-        // VulkanInstanceExpand_test need.
+        // OFF by default, as are its readers: on its own the pass is measured
+        // slower (~+1.0 ms wall at 85k grains, 8 of 8 interleaved A/B pairs).
+        // setGpuInstanceExpansion(true) opts in, which the draw and TLAS
+        // generation and VulkanInstanceExpand_test need.
         bool gpuInstanceExpand_ = false;// setGpuInstanceExpansion; the A/B lever
         // The GPU path's span list: an index into entrySpans_ plus the two
         // prefix sums the shader needs. Instanced spans only. Rebuilt (and
