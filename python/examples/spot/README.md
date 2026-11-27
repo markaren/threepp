@@ -54,21 +54,22 @@ the same idea as IsaacLab's height scanner. In training it is the exact analytic
 At deploy the viewers replace it with **onboard perception** — see "Seeing the terrain" below.
 
 The three terrain envs are **parallel fine-tunes of the same base gait**, not a cumulative chain — each
-warm-starts independently from `scratch_flat_best.pt` and they all share the exact same 96-d obs / action /
-reward contract, so any checkpoint transfers across all of them. `spot_steps.pt` (trained on the hardest
+starts independently from `scratch_flat_best.pt` and they share the same 96-d obs / action /
+reward contract, so a checkpoint transfers across them. `spot_steps.pt` (trained on the hardest
 terrain, discrete stairs) is the generalist the viewers default to.
 
-## Stages (each terrain: env + trainer + viewer)
+## Stages
 
 | Stage | env | trainer / viewer | what it adds |
 |---|---|---|---|
 | **base gait** | `scratch_distillation/` (`scratch_env.py` + `scratch_clock.py`) | `train_scratch.py` / `spot_deploy.py` | from-scratch clock walker on flat ground; Isaac teacher = reward oracle only |
-| **tents** | `spot_terrain_env.py` (`SpotTerrainEnv`) | `train_spot_stairs.py` / `play_spot_stairs.py` | velocity-tracking on graded up/down stair-tent terrain (`spot_terrain.pt`) |
-| **heightfield** | `spot_heightfield_env.py` | `train_spot_heightfield.py` / `play_spot_heightfield.py` | true continuous 2-D rough terrain (triangle-soup → `add_static_trimesh`), smooth at high amplitude (`spot_hf.pt`) |
+| **tents** | `spot_terrain_env.py` (`SpotTerrainEnv`) | none | velocity-tracking on graded up/down stair-tent terrain |
+| **heightfield** | `spot_heightfield_env.py` | none | true continuous 2-D rough terrain (triangle-soup → `add_static_trimesh`), smooth at high amplitude |
 | **stairs** | `spot_steps_env.py` (`SpotStepsEnv`) | `train_spot_steps.py` / `play_spot_steps.py` | discrete risers (0.04→0.20 m) + an **adaptive per-env difficulty curriculum** (promote on clearing a tent, demote on falling) — yields `spot_steps.pt` |
 
 `spot_terrain_env.py` is also the shared module: it defines the sim constants, the 2-D scan grid, and the
-reward/reset helpers the other terrain envs import.
+reward/reset helpers the other terrain envs import. `spot_course.py` takes its rough-ground height grids
+from `spot_heightfield_env.py`. Neither of those two stages has a trainer or viewer of its own.
 
 Shared pieces: `spot_symmetry.py` / `spot_steps_symmetry.py` (left-right mirror + symmetry-augmentation
 loss, kills the lateral gait drift), and `spot_deploy.py` (deploys the base clock gait + the asset/robot
@@ -78,8 +79,8 @@ body-mounted depth camera reconstructs a live marching-cubes SLAM surface over t
 
 ## Seeing the terrain (onboard perception in the viewers)
 
-In training the height scan is privileged (exact terrain), but no real robot has that. Every `play_*`
-viewer instead feeds the policy a scan derived from **onboard perception**, via `spot_depth_scan.py`:
+In training the height scan is privileged (exact terrain), but no real robot has that. `play_spot_steps.py`
+and `spot_slam.py` instead feed the policy a scan derived from **onboard perception**, via `spot_depth_scan.py`:
 
 - A `threepp.DepthSensor` is mounted on the body looking **forward and down** (~40°), like Spot's real
   depth cameras. Each control tick it renders the scene from that viewpoint and reprojects to a
@@ -102,17 +103,12 @@ python spot_deploy.py                                                    # drive
 # selftest any terrain env (finiteness + a stable stand); HEIGHT_SOURCE=raycast for the BVH scan
 K=64 python spot_steps_env.py
 K=64 HEIGHT_SOURCE=raycast python spot_steps_env.py
-python spot_scan_ab.py --env steps --envs 2048       # A/B the two height sources (see below)
 
 # watch the generalist drive (hot-reloads spot_steps.pt; arrows/numpad steer, R resets)
 python play_spot_steps.py --level 3     # spawn at the 0.13 m riser band
-python play_spot_heightfield.py         # same policy on continuous rough terrain
-python play_spot_stairs.py              # ...and on the graded tent terrain
 
-# train each terrain fine-tune (all warm-start from scratch_flat_best.pt; identical 96-d contract)
+# train the stairs fine-tune (warm-starts from scratch_flat_best.pt)
 python train_spot_steps.py --iters 1500            # stairs + adaptive curriculum, symmetry on
-python train_spot_heightfield.py --iters 250       # continuous heightfield
-python train_spot_stairs.py --iters 1500           # graded tent terrain
 python train_spot_steps.py --score spot_steps.pt   # deterministic track / fell / riser level reached
 python train_spot_steps.py --eval  spot_steps.pt   # held-out per-command steering regression vs the base gait
 ```
@@ -160,9 +156,6 @@ Probes: each answers one question about a trained policy and prints a number, no
 
 | Script | The question |
 | --- | --- |
-| `spot_gait_probe.py` | Does the policy have more than one way of walking? |
-| `spot_push_probe.py` | How hard a shove does it survive? Stability as a survival curve. |
-| `spot_scan_ab.py` | A/B of the Warp raycast height scan against the analytic oracle it replaces. |
 | `spot_occlusion.py` | How much of the 45-cell scan could Spot's own camera actually have seen? |
 
 Finished experiments, kept for provenance rather than for running:
@@ -173,14 +166,9 @@ behind `GAIT_PERIOD`). Their outputs are checked in; neither needs to be re-run 
 
 ## What the raycast scan says about the analytic one
 
-`spot_scan_ab.py` runs both height sources through the env's own `_terrain_h` and compares them.
-Where the formula is exact the raycast reproduces it exactly; where they part, the formula is the
-one that is wrong, because the raycast reads the collider.
-
-```bash
-python spot_scan_ab.py --env steps --envs 2048        # agreement + interleaved cost
-python spot_scan_ab.py --env heightfield --envs 1024
-```
+`spot_scan_ab.py` (since removed; in git history) ran both height sources through the env's own
+`_terrain_h` and compared them. Where the formula is exact the raycast reproduces it exactly; where
+they part, the formula is the one that is wrong, because the raycast reads the collider.
 
 **Stairs, K=2048** — 436 730 probes inside a lane: **max 0.000000 m, mean 4.3e-8, zero over 1 mm.**
 The tent formula and the boxes are the same surface. Two places they differ:
@@ -213,13 +201,13 @@ python train_spot_steps.py --score spot_steps.pt --score-source raycast    # tra
 
 −0.3% tracking, no extra falls, the same curriculum level. So the swap is safe on an existing
 policy — you get the faster scan and the formula-free terrain without invalidating the checkpoint.
-Both trainers take `--height-source raycast`, and the choice is written into the checkpoint meta so
+`train_spot_steps.py` takes `--height-source raycast` and writes the choice into the checkpoint meta, so
 `--score` / `--eval` rebuild the env the way it was trained.
 
 ## Training on the scan the camera could actually have seen
 
 The scan above is still **privileged**: the exact height at all 45 cells, which no robot has. The
-`play_*` viewers already replace it with an onboard depth camera and an elevation map
+viewers already replace it with an onboard depth camera and an elevation map
 ("Seeing the terrain"), but training never saw that. `--perceive` puts the same camera inside the
 training loop (`threepp.rl.perception`): each control step it casts one ray from the body-mounted
 camera to every query point, marks what was actually visible into a per-env world-anchored map, and

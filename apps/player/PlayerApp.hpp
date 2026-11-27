@@ -3,8 +3,8 @@
 // The editor AUTHORS a document: physics bodies, articulations, sensors and
 // scripts, all declarative userData that serializes with the scene (see
 // doc/editor.md). This plays one. No ImGui, no panels, no undo, no gizmos, no
-// selection — a window, a camera and the four play sessions, or not even the
-// window.
+// selection — a window, a camera and the editor's play sessions, or not even
+// the window.
 //
 // It exists to be a gate. Point it at a scene whose script drives a trained
 // policy, give it a seed budget and an episode count, let the sensors write

@@ -68,7 +68,7 @@ namespace threepp {
         // joint-limit, kinematics and visual yaml paths from $(arg ur_type), whose default
         // ("ur5x") names a config directory that does not exist. Building the articulation
         // without the caller's arguments therefore does not produce a slightly different robot,
-        // it produces no robot at all — while the KINEMATIC path (EditorApp::rearticulateRobots,
+        // it produces no robot at all — while the KINEMATIC path (editor::rearticulateRobots,
         // which does pass RobotConfig::argMap()) renders the right one. Two rebuild paths
         // disagreeing about what one document says is the bug this exists to prevent.
         std::map<std::string, std::string> args;

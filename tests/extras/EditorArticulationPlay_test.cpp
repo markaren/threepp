@@ -790,7 +790,7 @@ TEST_CASE("An articulation is built with the caller's xacro arguments") {
 
 TEST_CASE("Play simulates the robot the document describes, not the xacro's defaults") {
 
-    // The bug this pins: EditorApp::rearticulateRobots passes RobotConfig::argMap() when it
+    // The bug this pins: editor::rearticulateRobots passes RobotConfig::argMap() when it
     // rebuilds the VISUAL robot, so the viewport shows the arguments the document was imported
     // with. PhysicsPlaySession did not, so the articulation was built from the same file with
     // different arguments - one document, two robots, and only the invisible one was wrong.

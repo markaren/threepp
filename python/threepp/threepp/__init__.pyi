@@ -14603,7 +14603,7 @@ class VulkanRenderer:
     @property
     def orthographic_scene_rendering(self) -> bool:
         """
-        Is an OrthographicCamera a 3D view? Default True: a standalone render with one is shaded, depth-tested and backgrounded exactly like a perspective render. False draws it as a 2D overlay instead: unlit fills in scene order, no depth test, no background. A second ortho render() over an open frame inside canvas.animate is an overlay either way.
+        Is an OrthographicCamera a 3D view? Default True: a standalone render with one is shaded, depth-tested and backgrounded exactly like a perspective render. False draws it as a 2D overlay instead: unlit fills in scene order, no depth test, a background colour but no background texture. A second ortho render() over an open frame inside canvas.animate is an overlay either way.
         """
     @orthographic_scene_rendering.setter
     def orthographic_scene_rendering(self, arg1: bool) -> None:

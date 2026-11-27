@@ -4506,7 +4506,6 @@ void VulkanRenderer::Impl::refitTlasInPlace(SceneBuildFrame& sb) {
                 }
                 std::fill(tlasRowDirty_.begin(), tlasRowDirty_.end(), 0u);// consumed
                 tlasFillValid_       = true;
-                tlasFillSpansVersion_ = spansVersion_;
                 tlasFillEntryCount_  = entries.size();
                 tlasFillGenOn_       = tlasGenOn;
                 ++drawStats_.tlasFills;

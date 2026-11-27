@@ -38,6 +38,7 @@
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/cameras/StereoCamera.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 

@@ -76,7 +76,20 @@ namespace threepp::splats {
 
         float voxel = options.voxelSize;
         if (!(voxel > 0.f)) {
-            const float spacing = medianNeighbourSpacing(pts);
+            // The 90th percentile of the nearest-neighbour distances, not the
+            // median. The cut sits one such distance from the points (half a
+            // voxel at the default radius and isolevel), so the surface covers
+            // whatever lies within that distance of a point. For randomly
+            // placed samples the share of a sheet within r of a point follows
+            // the same curve as the neighbour distances, 1 - exp(-density pi r^2):
+            // the median covers half the sheet, the 90th percentile about nine
+            // tenths, and what it leaves uncovered is small holes inside one
+            // piece rather than gaps between many. On PointSurface_test's
+            // 20 000 random points over 4 m^2, the median covers 121 of 361
+            // vertical columns, in 158 pieces; the 90th percentile 353, in
+            // one. A regular grid has a single spacing, so its voxel is the
+            // same either way.
+            const float spacing = neighbourSpacingQuantile(pts, 0.9f);
             voxel = spacing > 0.f ? std::clamp(2.f * spacing, 0.005f, 0.5f) : 0.05f;
         }
         const float radiusVoxels = std::max(0.25f, options.radiusVoxels);

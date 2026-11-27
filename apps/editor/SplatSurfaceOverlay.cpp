@@ -8,7 +8,7 @@
 // EDITOR CHROME, not document content. The previews hang off overlay_, which the
 // document registers as editor-only: SceneDocument::isEditorOnly walks parents,
 // so picking skips them (EditorApp::pickAt), export detaches them, and
-// sensors_->setHiddenDuringScan(overlay_) keeps them out of every sensor scan.
+// sessions_.sensors->setHiddenDuringScan(overlay_) keeps them out of every sensor scan.
 // The toggle is a plain bool like physicsDebug_ — a view state, nothing the
 // document or the undo stack knows about.
 //

@@ -7,9 +7,10 @@
 // rendered pose loop would only add a resolution floor and a Vulkan
 // dependency. This builds the surface on the CPU, from the means alone:
 //
-//   1. the points go into a voxel hash at `voxelSize` (default 2 x the
-//      cloud's median nearest-neighbour distance, so a sheet of points fills
-//      its voxels rather than leaving gaps);
+//   1. the points go into a voxel hash at `voxelSize` (default 2 x the 90th
+//      percentile of the cloud's nearest-neighbour distances, so a sheet of
+//      points fills its voxels rather than leaving gaps, randomly spaced
+//      samples included: the median would cover only half of such a sheet);
 //   2. every grid node within `radiusVoxels` voxels of a point gets the
 //      union-of-balls value max(0, 1 - d / radius), d being the distance to
 //      its nearest point — the same field extras/pointcloud/MarchingCubes.hpp
@@ -51,9 +52,9 @@ namespace threepp::splats {
 
     struct PointSurfaceOptions {
 
-        // 0 = 2 x the median nearest-neighbour distance of the transformed
-        // points (splats::medianNeighbourSpacing), clamped to [5 mm, 0.5 m].
-        // World units.
+        // 0 = 2 x the 90th percentile of the transformed points'
+        // nearest-neighbour distances (splats::neighbourSpacingQuantile),
+        // clamped to [5 mm, 0.5 m]. World units.
         float voxelSize{0.f};
 
         // Radius of the union-of-balls field, in voxels. 1 reaches the eight

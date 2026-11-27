@@ -207,7 +207,7 @@ namespace {
             // a 3D view here (a top-down map, a BEV label, an orthophoto), so it
             // takes the deferred path like a perspective camera. The C++ default
             // (off) reads it as a 2D HUD instead: unlit fills in scene order with
-            // no depth test and no background, which draws a ground plane added
+            // no depth test and no background texture, which draws a ground plane added
             // after a box straight over the box. The HUD pattern this default
             // protects cannot occur here anyway: outside canvas.animate each
             // render() runs its own frames, so a second ortho render() never
@@ -1077,7 +1077,8 @@ namespace threepp_py {
                               "Is an OrthographicCamera a 3D view? Default True: a standalone render "
                               "with one is shaded, depth-tested and backgrounded exactly like a "
                               "perspective render. False draws it as a 2D overlay instead: unlit "
-                              "fills in scene order, no depth test, no background. A second ortho "
+                              "fills in scene order, no depth test, a background colour but no "
+                              "background texture. A second ortho "
                               "render() over an open frame inside canvas.animate is an overlay "
                               "either way.")
                 // AMD FidelityFX FSR 3.1 temporal upscaler. Available only in a

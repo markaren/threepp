@@ -7,16 +7,16 @@
 // contract and episode independence are actually asserted rather than asserted
 // about.
 //
-// The sessions and their ORDER are the editor's, deliberately (see EditorApp's
-// constructor): physics, conveyor, animation, audio, sensors, scripts.
-// Registration order is update order, and PlayController stops them in the
-// reverse of it, so a script's stop() still has a world and the sensors still
-// have an SDK. The player is a second front end over that runtime, not a second
-// runtime — if the two ever disagree about the order, or about WHICH sessions
-// run, a scene that works in the editor stops working in CI, which is the one
-// thing this must never do. Every optional session is gated on the same macro
-// the editor gates it on, so a build without PhysX, audio or Python drops
-// exactly the same sessions in both front ends.
+// The sessions and their ORDER are the editor's: both front ends build them
+// with buildPlaySessions() (PlayRuntime.hpp), the one definition of which
+// sessions run, in what order and behind which macro. Registration order is
+// update order, and PlayController stops them in the reverse of it, so a
+// script's stop() still has a world and the sensors still have an SDK. The
+// player is a second front end over that runtime, not a second runtime — if the
+// two disagreed about the order, or about WHICH sessions run, a scene that
+// works in the editor would stop working in CI, which is the one thing this
+// must never do. Opening a document revives its robots the way the editor's
+// open does (rearticulateRobots, RobotConfig.hpp), for the same reason.
 //
 // An EPISODE is one full play -> step* -> stop cycle. play() runs the episode
 // on a fresh copy of the authored scene and stop() drops it, so the document an
@@ -28,6 +28,7 @@
 #define THREEPP_PLAYER_PLAYERCORE_HPP
 
 #include "threepp/extras/editor/PlaySession.hpp"
+#include "threepp/extras/editor/PlaySessions.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #include "threepp/utils/Log.hpp"
 
@@ -49,14 +50,7 @@ namespace threepp {
 
 namespace threepp::editor {
 
-    class AudioPlaySession;
-    class ConveyorPlaySession;
-    class GranularPlaySession;
-    class CharacterPlaySession;
-    class ParticleFieldPlaySession;
-    class PhysicsPlaySession;
-    class ScriptPlaySession;
-    class SensorPlaySession;
+    class SplatSurfaceCache;
 
 }// namespace threepp::editor
 
@@ -192,7 +186,11 @@ namespace threepp::player {
         // The sensor session, for a front end that VISUALIZES what it measured —
         // the point-cloud overlay reads its entries. Never null after
         // construction; its entries are empty between episodes.
-        [[nodiscard]] editor::SensorPlaySession* sensors() const { return sensors_.get(); }
+        [[nodiscard]] editor::SensorPlaySession* sensors() const { return sessions_.sensors.get(); }
+
+        // The controller the sessions are registered with, in registration
+        // order — what a test reads to assert which sessions run.
+        [[nodiscard]] const editor::PlayController& controller() const { return play_; }
 
         // --- episodes --------------------------------------------------------
 
@@ -231,20 +229,19 @@ namespace threepp::player {
         void logWarn(const std::string& message);
         // A session's message, already logged by the session: the callback only.
         void forward(const std::string& message);
+        // The robot revival every open runs (see the header comment).
+        void reviveRobots();
 
         editor::SceneDocument document_;
         editor::PlayController play_;
-
-        std::shared_ptr<editor::PhysicsPlaySession> physics_;
-        std::shared_ptr<editor::ConveyorPlaySession> conveyor_;
-        std::shared_ptr<editor::ParticleFieldPlaySession> particles_;
-        std::shared_ptr<editor::GranularPlaySession> granular_;
-        // Authored characters, simulated but not driven: the player has no
-        // teleop, so they stand and idle unless a script moves them.
-        std::shared_ptr<editor::CharacterPlaySession> character_;
-        std::shared_ptr<editor::AudioPlaySession> audio_;
-        std::shared_ptr<editor::SensorPlaySession> sensors_;
-        std::shared_ptr<editor::ScriptPlaySession> scripts_;
+        // The editor's sessions (PlayRuntime.hpp). The player has no teleop,
+        // so an authored character is simulated but stands and idles unless a
+        // script moves it, and no vehicle is driven.
+        editor::PlaySessions sessions_;
+        // The bake memo the splat-surface session bakes into, kept for the
+        // player's lifetime as the editor keeps its own (which it also shares
+        // with the inspector's "Bake now").
+        std::shared_ptr<editor::SplatSurfaceCache> splatSurfaces_;
 
         std::shared_ptr<Group> overlay_;
         std::shared_ptr<Group> sensorRig_;

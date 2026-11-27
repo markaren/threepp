@@ -3,7 +3,7 @@
 `threepp_player` plays a scene the [editor](editor.md) authored. It is the same
 play runtime — physics, articulations, conveyors, animation, sound, sensors,
 Python scripts — with the editing machinery taken off: no ImGui, no panels, no
-undo, no gizmos, no selection. A window, a camera and the editor's own six play
+undo, no gizmos, no selection. A window, a camera and the editor's own play
 sessions, or not even the window.
 
 The session set and its registration order are the editor's, deliberately, and

@@ -210,6 +210,15 @@ GitHub workflow runs, and machine-specific presets belong in an untracked `CMake
 that inherits from these. Without presets, `cmake -B build` and `cmake --build build` work as
 usual; add `-DTHREEPP_USE_EXTERNAL_GLFW=ON` to use a system GLFW.
 
+PhysX is not bundled. It comes from [vcpkg](https://github.com/microsoft/vcpkg) through the
+manifest's `physx` feature, which any preset takes on the command line:
+
+```shell
+cmake --preset gl -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_MANIFEST_FEATURES=physx
+```
+
+Without it the build succeeds and the PhysX examples, tests and the editor's physics are left out.
+
 A subset of the examples runs in the browser: **[try them online](https://markaren.github.io/threepp/)**.
 
 vcpkg's `physx` port does not build for WebAssembly, so the repository carries an overlay port,

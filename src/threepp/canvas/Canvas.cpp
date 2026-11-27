@@ -1313,6 +1313,35 @@ WindowSize monitor::monitorSize(int monitor) {
 #endif
 }
 
+int monitor::monitorCount() {
+#ifdef __EMSCRIPTEN__
+    return 1;
+#else
+    initGLfw(/*headless*/ false);
+
+    int count = 0;
+    glfwGetMonitors(&count);
+
+    return count;
+#endif
+}
+
+std::pair<int, int> monitor::monitorPosition(int monitor) {
+#ifdef __EMSCRIPTEN__
+    return {0, 0};
+#else
+    initGLfw(/*headless*/ false);
+
+    int count;
+    auto monitors = glfwGetMonitors(&count);
+
+    int x = 0, y = 0;
+    glfwGetMonitorPos(monitors[monitor], &x, &y);
+
+    return {x, y};
+#endif
+}
+
 std::pair<float, float> monitor::contentScale(int monitor) {
 #ifdef __EMSCRIPTEN__
     // 1, not window.devicePixelRatio: the canvas is created without

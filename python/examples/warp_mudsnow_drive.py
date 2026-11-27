@@ -1820,7 +1820,7 @@ def spray_step(dt, hub):
 # GR_SEAM below the soup and ramped back up to the true surface at the patch
 # edge, so the soup covers it and the edge has no step or groove.
 
-GR_H = 0.04                     # MPM cell: the phase-2 gate's shipped config
+GR_H = 0.04                     # MPM cell: as the four-patch gate measured it
 GR_DEPTH = 0.30                 # loose layer under the wheel, m
 GR_PATCH = (0.8, 0.44)          # patch interior (x, z), m
 GR_HALF_W = 0.12                # tyre half-width, m (a 240 mm tread)
@@ -1926,7 +1926,8 @@ BELLY_FMAX = 6.0e3                  # per point cap, N
 
 def gravel_material():
     """warp_wheel_testbed.py's material() at E = 3 MPa: the phase-1 loose soil
-    (Drucker-Prager 36 deg + a compaction cap) the phase-2 gate measured.
+    (Drucker-Prager 36 deg + a compaction cap) that the four-patch gate measured
+    (probes/granular_patch_gate.py, since removed; in git history).
     With --sand: the dune sand calibrated above."""
     if SAND:
         return gm.Material(E=1.0e6, nu=0.3, rho=1650.0, phi_deg=32.0, cohesion=0.0,

@@ -14,6 +14,11 @@ using namespace threepp;
 
 float splats::medianNeighbourSpacing(const std::vector<Vector3>& points, size_t sampleCount) {
 
+    return neighbourSpacingQuantile(points, 0.5f, sampleCount);
+}
+
+float splats::neighbourSpacingQuantile(const std::vector<Vector3>& points, float quantile, size_t sampleCount) {
+
     const size_t n = points.size();
 
     Vector3 lo{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
@@ -123,9 +128,13 @@ float splats::medianNeighbourSpacing(const std::vector<Vector3>& points, size_t 
     }
     if (spacing.empty()) return 0.f;
 
-    const size_t mid = spacing.size() / 2;
-    std::nth_element(spacing.begin(), spacing.begin() + static_cast<std::ptrdiff_t>(mid), spacing.end());
-    return spacing[mid];
+    // floor(q * count), so q = 0.5 picks count / 2, the element the median
+    // has always been read at.
+    const double q = std::clamp(static_cast<double>(quantile), 0.0, 1.0);
+    const size_t at = std::min(spacing.size() - 1,
+                               static_cast<size_t>(q * static_cast<double>(spacing.size())));
+    std::nth_element(spacing.begin(), spacing.begin() + static_cast<std::ptrdiff_t>(at), spacing.end());
+    return spacing[at];
 }
 
 void SplatData::resize(size_t n, int degree) {

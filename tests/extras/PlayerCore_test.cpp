@@ -18,26 +18,37 @@
 //     the scene never loaded is worse than no gate;
 //   * the script debug-draw list is DRAINED. Nothing else empties it, and
 //     ScriptPlaySession switches it on, so a front end that neither draws nor
-//     clears it runs into the cap and stays there.
+//     clears it runs into the cap and stays there;
+//   * the player runs what the editor runs: a belt conveys, a flock flies, a
+//     scan is solid, and a robot that names only its URDF is articulated.
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "PlayerCore.hpp"
 
+#include "threepp/extras/editor/FlockConfig.hpp"
 #include "threepp/extras/editor/ObjectFactory.hpp"
 #include "threepp/extras/editor/ParticleFieldConfig.hpp"
 #include "threepp/extras/editor/PhysicsConfig.hpp"
+#include "threepp/extras/editor/RobotConfig.hpp"
 #include "threepp/extras/editor/SceneDocument.hpp"
 #ifdef THREEPP_EDITOR_WITH_PHYSX
 #include "threepp/extras/editor/ConveyorConfig.hpp"
 #endif
 #include "threepp/extras/editor/ScriptConfig.hpp"
 #include "threepp/extras/editor/SensorConfig.hpp"
+#if defined(THREEPP_EDITOR_WITH_PHYSX) && defined(THREEPP_WITH_VULKAN)
+#include "threepp/extras/editor/SplatSurfaceConfig.hpp"
+#include "threepp/objects/SplatCloud.hpp"
+#include "threepp/splats/SplatData.hpp"
+#endif
 
+#include "threepp/extras/fauna/Flock.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Robot.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #ifdef THREEPP_EDITOR_WITH_PYTHON
@@ -45,7 +56,10 @@
 #endif
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::editor;
@@ -217,6 +231,128 @@ class Drawer:
         auto json = authoring.toJson(false, &error);
         REQUIRE(error.empty());
         return json;
+    }
+#endif
+
+    // One flock, authored through the factory as the editor's add menu writes
+    // it: a Group carrying userData["flock"]. The birds themselves are session
+    // content, added to the play copy and dropped with it.
+    std::string flockDocumentJson() {
+
+        SceneDocument authoring;
+        auto& scene = authoring.scene();
+        scene.add(ObjectFactory::createFlock(scene));
+
+        std::string error;
+        auto json = authoring.toJson(false, &error);
+        REQUIRE(error.empty());
+        return json;
+    }
+
+    Flock* findFlock(Scene& scene) {
+
+        Flock* found = nullptr;
+        scene.traverse([&](Object3D& object) {
+            if (!found) found = object.as<Flock>();
+        });
+        return found;
+    }
+
+    // EditorRobotTransplant_test's arm: a base and one revolute link, primitive
+    // geometry only, so it needs no mesh files.
+    constexpr const char* kArmUrdf = R"(<robot name="arm">
+  <link name="base_link">
+    <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+  </link>
+  <link name="upper_link">
+    <visual><geometry><box size="0.1 0.5 0.1"/></geometry></visual>
+  </link>
+  <joint name="shoulder" type="revolute">
+    <parent link="base_link"/>
+    <child link="upper_link"/>
+    <origin xyz="0 0 0.2" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.5" upper="1.5"/>
+  </joint>
+</robot>)";
+
+    // A robot as a script writes one: a plain Object3D whose userData names the
+    // URDF and the joint values, with no subtree and no joint table
+    // (python/examples/spot/editor_deploy/make_scene.py writes its robot this
+    // way). A document saved before the articulation block holds the same kind
+    // of node, with the subtree below it.
+    std::string robotReferenceDocumentJson(const std::filesystem::path& urdf) {
+
+        SceneDocument authoring;
+        auto& scene = authoring.scene();
+
+        auto arm = Object3D::create();
+        arm->name = "Arm";
+        RobotConfig config;
+        config.urdf = urdf.string();
+        config.joints = {0.5f};
+        config.write(*arm);
+        scene.add(arm);
+
+        std::string error;
+        auto json = authoring.toJson(false, &error);
+        REQUIRE(error.empty());
+        return json;
+    }
+
+#if defined(THREEPP_EDITOR_WITH_PHYSX) && defined(THREEPP_WITH_VULKAN)
+    // A scanned slab, 2 m square and 4 cm thick, made solid through the point
+    // route: the surface is built straight from the splat centres with no
+    // renderer, so a headless run bakes it. A box is set down a little over it.
+    // There is no floor, so a box still on the slab after two seconds was
+    // caught by the scan's collider; without one it has fallen about 20 m.
+    //
+    // Saved as a FILE, not handed over as text: a document references its
+    // splats, and a cloud with no source file gets a .ply sidecar beside the
+    // saved document, which the player's open re-imports.
+    std::filesystem::path saveScanDocument() {
+
+        const auto dir = std::filesystem::temp_directory_path() / "threepp_player_scan";
+        std::error_code ignored;
+        std::filesystem::remove_all(dir, ignored);
+        std::filesystem::create_directories(dir);
+
+        SceneDocument authoring;
+        auto& scene = authoring.scene();
+
+        SplatGenerator::Options options;
+        options.count = 20000;
+        options.seed = 7u;
+        options.extent.set(2.f, 0.04f, 2.f);
+        options.minScale = 0.01f;
+        options.maxScale = 0.02f;
+        options.minOpacity = 0.9f;
+        options.maxOpacity = 1.f;
+        auto cloud = SplatCloud::create(SplatGenerator::generate(options));
+        cloud->name = "Scan";
+        SplatSurfaceConfig surface;
+        surface.enabled = true;
+        surface.method = SplatSurfaceConfig::Points;
+        surface.write(*cloud);
+        scene.add(cloud);
+
+        auto cargo = Mesh::create(BoxGeometry::create(0.2f, 0.2f, 0.2f),
+                                  MeshStandardMaterial::create());
+        cargo->name = "Cargo";
+        cargo->position.set(0.f, 0.3f, 0.f);
+        PhysicsConfig physics;
+        physics.enabled = true;
+        physics.body = PhysicsConfig::Body::Dynamic;
+        physics.shape = PhysicsConfig::Shape::Box;
+        physics.mass = 1.f;
+        physics.write(*cargo);
+        scene.add(cargo);
+
+        const auto path = dir / "scan.json";
+        std::string error;
+        REQUIRE(authoring.saveAs(path, &error));
+        REQUIRE(error.empty());
+        return path;
     }
 #endif
 
@@ -534,3 +670,125 @@ TEST_CASE("an episode cannot be started twice", "[player]") {
     core.endEpisode();
     CHECK(core.results().size() == 1);
 }
+
+TEST_CASE("the player runs the editor's play sessions, in the editor's order", "[player]") {
+
+    // The editor and the player both build their sessions with
+    // buildPlaySessions() (PlayRuntime.hpp). This pins what that gives in
+    // this build, in update order, behind the same macros the sessions are
+    // gated on. Flock and splat surfaces are the two the player once lacked.
+    std::vector<std::string> expected;
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    expected.insert(expected.end(), {"Physics", "Conveyor"});
+#endif
+    expected.emplace_back("Particles");
+#ifdef THREEPP_EDITOR_WITH_PHYSX
+    expected.emplace_back("Granular");
+#ifdef THREEPP_WITH_VULKAN
+    expected.emplace_back("Splat surfaces");
+#endif
+    expected.emplace_back("Character");
+#endif
+    expected.insert(expected.end(), {"Animation", "Flock"});
+#ifdef THREEPP_WITH_AUDIO
+    expected.emplace_back("Audio");
+#endif
+    expected.emplace_back("Sensors");
+#ifdef THREEPP_EDITOR_WITH_PYTHON
+    expected.emplace_back("ScriptPlaySession");
+#endif
+
+    PlayerCore core;
+    std::vector<std::string> names;
+    for (const auto& session : core.controller().sessions()) names.push_back(session->name());
+    CHECK(names == expected);
+}
+
+TEST_CASE("an authored flock flies under the player, as it does under Play", "[player]") {
+
+    // Asserted on the birds: a Flock in the play copy, ticked once per step,
+    // and gone again after Stop.
+    PlayerCore core;
+    std::string error;
+    REQUIRE(core.openJson(flockDocumentJson(), &error));
+    CHECK(findFlock(core.scene()) == nullptr);
+
+    REQUIRE(core.beginEpisode(0, &error));
+    for (int i = 0; i < 30; ++i) core.step(kFrame);
+
+    auto* flock = findFlock(core.scene());
+    REQUIRE(flock != nullptr);
+    CHECK(flock->birdCount() == FlockConfig{}.birdCount);
+    CHECK(flock->updateCount() == 30);
+
+    const auto result = core.endEpisode();
+    CHECK(result.ok());
+    CHECK(findFlock(core.scene()) == nullptr);
+}
+
+TEST_CASE("a robot that names only its URDF is articulated under the player, as in the editor", "[player]") {
+
+    // The editor re-imports the file when it opens such a node and moves the
+    // joint table onto it (rearticulateRobots). Opened without that step, the
+    // node stays the empty Object3D it is on disk and the scene has no robot.
+    const auto urdf = std::filesystem::temp_directory_path() / "threepp_player_arm.urdf";
+    {
+        std::ofstream out(urdf);
+        out << kArmUrdf;
+    }
+
+    PlayerCore core;
+    std::string error;
+    REQUIRE(core.openJson(robotReferenceDocumentJson(urdf), &error));
+
+    auto* node = core.scene().getObjectByName("Arm");
+    REQUIRE(node != nullptr);
+    auto* robot = node->as<Robot>();
+    REQUIRE(robot != nullptr);
+    CHECK(robot->numDOF() == 1);
+    CHECK(robot->getObjectByName("upper_link") != nullptr);
+    // Posed from the document's joint values, not from the file's rest pose.
+    CHECK(std::abs(robot->getJointValue(0) - 0.5f) < 1e-4f);
+
+    const auto result = core.runEpisode(0, 10, kFrame);
+    CHECK(result.ok());
+
+    std::error_code ignored;
+    std::filesystem::remove(urdf, ignored);
+}
+
+#if defined(THREEPP_EDITOR_WITH_PHYSX) && defined(THREEPP_WITH_VULKAN)
+
+TEST_CASE("an authored scan is solid under the player, as it is under Play", "[player]") {
+
+    // Asserted on the cargo, as the conveyor case is: the box comes to rest ON
+    // the slab, its 0.2 m sitting above the scanned points (y <= 0.02) and
+    // within a voxel's offset of them. Without the scan's collider nothing
+    // stops it. A box that settles inside the slab means the baked surface
+    // has gaps: the voxel the point route picked does not cover the points.
+    PlayerCore core;
+    std::string log;
+    core.setLogger([&](const std::string& message) { log += message + "\n"; });
+    std::string error;
+    const auto path = saveScanDocument();
+    REQUIRE(core.open(path, &error));
+    REQUIRE(core.beginEpisode(0, &error));
+
+    auto* cargo = core.scene().getObjectByName("Cargo");
+    REQUIRE(cargo != nullptr);
+    for (int i = 0; i < 120; ++i) core.step(kFrame);
+
+    INFO(log);
+    CHECK(cargo->position.y > 0.02f + 0.1f);
+    CHECK(cargo->position.y < 0.02f + 0.1f + 0.05f);
+    // The sensor-only surface the session adds to the play copy.
+    CHECK(core.scene().getObjectByName("Scan Surface") != nullptr);
+
+    const auto result = core.endEpisode();
+    CHECK(result.ok());
+
+    std::error_code ignored;
+    std::filesystem::remove_all(path.parent_path(), ignored);
+}
+
+#endif// THREEPP_EDITOR_WITH_PHYSX && THREEPP_WITH_VULKAN

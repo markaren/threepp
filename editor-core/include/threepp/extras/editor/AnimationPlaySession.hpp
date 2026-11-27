@@ -29,6 +29,8 @@ namespace threepp::editor {
         AnimationPlaySession();
         ~AnimationPlaySession() override;
 
+        [[nodiscard]] std::string name() const override { return "Animation"; }
+
         // Leave authored characters alone: their clips belong to a
         // CharacterPlaySession, which crossfades between them by name, and a
         // second mixer playing "whatever clip is first" would fight it for

@@ -210,6 +210,7 @@ These four are parsed by hand: on unless the value is exactly `0`.
 | `THREEPP_VK_SPAN_DRAW_CACHE` | flag | on | `0` sends every instanced span through the per-entry draw record loop instead of the per-span draw cache. | once | A/B hatch |
 | `THREEPP_VK_SPAN_RECORDS` | flag | on | `0` rebuilds every cached span's draw records each frame instead of keeping them between frames. | once | A/B hatch |
 | `THREEPP_VK_SPAN_RECORDS_CHECK` | flag | off | Checks every kept span record against what the entries say each frame; a stale one ends the process. | once | diagnostic |
+| `THREEPP_VK_DRAW_FACTS_CHECK` | flag | off | Recomputes every mesh's kept draw facts (record, material flags, polygon offset, cull mode, draw range, bounds, ids) each frame and compares; a stale one is a `vulkan.scene` error and ends the process. | once | diagnostic |
 
 ## Textures
 
@@ -228,6 +229,15 @@ These four are parsed by hand: on unless the value is exactly `0`.
 | `THREEPP_VK_CPU_TASKS` | flag | on | `0` runs the frame prep's independent chains (cull to indirect build, shadow map prepare) one after another. | once | A/B hatch |
 | `THREEPP_VK_CPU_VIEWS` | flag | on | `0` prepares the secondary views one after another instead of at once on the thread pool. | once | A/B hatch |
 | `THREEPP_VK_CPU_RECORD` | flag | on | `0` records long split passes inline instead of into secondary command buffers on the pool. | once | A/B hatch |
+
+The shared thread pool (`threepp/utils/ThreadPool.hpp`, `ThreadPool::shared()`) serves the
+library's own parallel loops on either backend (terrain generation, `DisplacedMesh`, the
+Vulkan frame prep). Its two variables are parsed with `std::atoi`:
+
+| Variable | Kind | Default | Effect | Read | Notes |
+|---|---|---|---|---|---|
+| `THREEPP_THREADS` | integer | hardware threads, at most 16 | Total threads the shared pool uses, the calling thread included; `1` means no workers, so every loop runs in order on its caller. Values below 1 keep the default. | once | |
+| `THREEPP_THREADS_SPIN_US` | integer (microseconds) | 200 | How long a pool worker spins for the next loop before it sleeps; `0` sleeps at once. Negative values keep the default. | once | |
 
 ## Gaussian splats
 

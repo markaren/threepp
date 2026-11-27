@@ -1,3 +1,4 @@
 
 add_test_executable(PerspectiveCamera_test)
 add_test_executable(OrthograpichCamera_test)
+add_test_executable(StereoCamera_test)

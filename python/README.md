@@ -97,9 +97,10 @@ cmake --build build --target threepp_py
 (On Windows, CMake defaults to the multi-config Visual Studio generator; the build
 works under it, but `-G Ninja` gives a faster single-config build.)
 
-The built module (`threepp.*.pyd` / `threepp.*.so`) is placed in this `python/`
-directory, so scripts here can `import threepp`. The examples add this directory
-to `sys.path` automatically, so they run from anywhere.
+The built module (`threepp.*.pyd` / `threepp.*.so`) is placed in the `threepp/`
+package directory under this `python/` directory, so scripts here can
+`import threepp`. The examples add `python/` to `sys.path` automatically, so
+they run from anywhere.
 
 This is a GL-only build — it needs no Vulkan SDK, PhysX or CUDA, and works on any
 laptop. Off-screen rendering uses a hidden GLFW window (a real GL context), so a
@@ -122,7 +123,7 @@ display is only required for the on-screen examples.
 | [`examples/physics_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/physics_demo.py) | A pile of boxes tumbling onto the floor — `PhysxWorld` rigid bodies driving the scene graph. Needs a PhysX build + display. |
 | [`examples/imu_demo.py`](https://github.com/markaren/threepp/blob/master/python/examples/imu_demo.py) | **Headless IMU** — a box dropped onto the floor with an `Imu` mounted off-CoM; prints the physics-truth table (free fall ~0, at rest ~+9.81). Needs a PhysX build; no display. |
 | [`examples/cartpole/train_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/train_cartpole.py) / [`play_cartpole.py`](https://github.com/markaren/threepp/blob/master/python/examples/cartpole/play_cartpole.py) | **GPU-vectorized RL end to end** — a `VecTask` cartpole swing-up trained with the owned `threepp.rl` PPO (committed checkpoint included; `play` renders the result). Needs a PhysX GPU build + torch. |
-| [`examples/spot/`](https://github.com/markaren/threepp/blob/master/python/examples/spot) | **Quadruped RL family** — Spot locomotion policies (steps, stairs, heightfield), sim-to-sim deploy into the editor, depth scanning; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/spot/README.md). |
+| [`examples/spot/`](https://github.com/markaren/threepp/blob/master/python/examples/spot) | **Quadruped RL family** — Spot locomotion policies (flat gait, discrete stairs, fall recovery), sim-to-sim deploy into the editor, depth scanning; see its [README](https://github.com/markaren/threepp/blob/master/python/examples/spot/README.md). |
 | [threepp-lessons](https://github.com/markaren/threepp-lessons) | **Explainer videos** made with threepp: what threepp is, a first app, Snake, inverse kinematics, depth to map, an IMU, PID control, Warp, sockets. Narrated films rendered headless with `threepp.lesson`, in a repository of their own. |
 | [`examples/probes/smoke_test.py`](https://github.com/markaren/threepp/blob/master/python/examples/probes/smoke_test.py) | Assertion-based regression test of the whole surface; prints `ALL OK`. |
 
@@ -167,7 +168,6 @@ self-contained; what they share lives in [`examples/warp_common.py`](https://git
 | --- | --- |
 | [`examples/warp_cloth.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth.py) | GPU cloth, the smallest complete Warp + threepp loop. |
 | [`examples/warp_round_trip.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_round_trip.py) | Warp both ways round: a cloth and sparks written into buffers the Vulkan renderer shares, and the finished frame read back in place by a Warp kernel that turns it into an event camera. |
-| [`examples/warp_cloth_toss.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_toss.py) | Can a cloth throw a ball? The spike behind the toss demo. |
 | [`examples/warp_cloth_catch.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_cloth_catch.py) | Four arms catch a cannonball in a cloth, throw it up, and four drones net it. |
 | [`examples/warp_fluid.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_fluid.py) | A PBF liquid surfaced by marching cubes. |
 | [`examples/warp_water_balloon.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_water_balloon.py) | A water balloon and a needle — the shell tears and the water leaves. |
@@ -208,6 +208,7 @@ runs standalone too.
 | --- | --- |
 | [`examples/warp_hull_sculpt.py`](https://github.com/markaren/threepp/blob/master/python/examples/warp_hull_sculpt.py) | Differentiable hull sculpting: gradient descent designs a hull, live in the water. |
 | [`examples/lidar_sculpt.py`](https://github.com/markaren/threepp/blob/master/python/examples/lidar_sculpt.py) | Sculpting against a sensor: a body reshaped to hide from, or shout at, the engine's own LIDAR. |
+| [`examples/trajectoid.py`](https://github.com/markaren/threepp/blob/master/python/examples/trajectoid.py) | Draw a line and get the solid that rolls along it down a tilted table ([trajectoids](https://doi.org/10.1038/s41586-023-06306-y)), with PhysX rolling it and the distance from the line measured. Needs a PhysX build; Vulkan or GL. |
 
 **Probes** — instruments, not demos: each answers one question and prints (or
 writes) the answer. They live in [`examples/probes/`](https://github.com/markaren/threepp/blob/master/python/examples/probes) with
@@ -608,7 +609,7 @@ renderer takes the first of these the machine offers:
 
 That is the Colab/EC2/HPC setup — compute-only NVIDIA kernel modules, no X
 server the GPU can present to — where the wheel's synthetic-data path
-(`render_aov` / `read_depth` / `read_rgb_pixels`) runs unmodified. With a
+(`render_aov` / `read_depth` / `read_pixels`) runs unmodified. With a
 window system and no headless surface (NVIDIA's *Windows* driver), a headless
 canvas keeps a hidden window and renders into its own images the same way.
 Set `THREEPP_GLFW_PLATFORM=null` to force the window-system-free path on any
@@ -688,12 +689,15 @@ instance) cover the rest. `RigidBody` exposes pose, linear/angular velocity,
 (`set_kinematic` + `set_kinematic_target`). `on_pre_substep` / `on_post_substep`
 hooks fire around each fixed substep.
 
-Enable PhysX at configure time. It comes from vcpkg
-(`unofficial-omniverse-physx-sdk`), so configure with the vcpkg toolchain:
+Enable PhysX at configure time. It comes from vcpkg (the `physx` port, CMake
+package `unofficial-omniverse-physx-sdk`), so configure with the vcpkg toolchain
+and select the manifest's `physx` feature. The manifest installs nothing by
+default, and without the feature the module builds with `tp.HAS_PHYSX == False`:
 
 ```sh
 cmake -S . -B build -DTHREEPP_WITH_PYTHON=ON \
-      -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+      -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+      -DVCPKG_MANIFEST_FEATURES=physx
 cmake --build build --target threepp_py
 ```
 
@@ -719,7 +723,8 @@ the `Imu`. A sensor **rides the scene graph**: you attach it to an
 `Object3D`, and that node's world frame *is* the measurement frame. Register it
 with the world and it is sampled from the physics step loop — one clean sample
 per fixed substep, timestamped with the accumulated sim time — so the sampling
-fidelity is right for lock-step co-simulation (e.g. a future ArduPilot SITL).
+fidelity is right for lock-step co-simulation (the ArduPilot SITL link's IMU
+reply comes from this sensor).
 
 ```python
 import threepp as tp

@@ -6,12 +6,14 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/extras/editor/EditorCommands.hpp"
 #include "threepp/extras/editor/EditorLog.hpp"
+#include "threepp/loaders/URDFLoader.hpp"
 #include "threepp/loaders/Xacro.hpp"
 #include "threepp/objects/Robot.hpp"
 
 #include <any>
 #include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -368,4 +370,73 @@ std::shared_ptr<Robot> threepp::editor::transplantRobot(Object3D& placeholder,
     insertChildAt(*parent, live, index);
 
     return live;
+}
+
+void threepp::editor::rearticulateRobots(Object3D& root,
+                                         const std::function<void(const std::string&)>& logger) {
+
+    // A document written before the articulation extension flattens a Robot into
+    // a plain Object3D: the pose survives, the joint table does not. Re-import
+    // the referenced URDF and move its joint table onto the subtree the document
+    // carries, keeping the placeholder's identity and placement so uuid lookups
+    // (selection, undo rebinding) still resolve.
+    //
+    // Documents written since do not come through here at all — ObjectLoader
+    // hands back a live Robot, which is the branch just below. That is the whole
+    // point of the extension: a play/stop cycle no longer reads the URDF, so it
+    // cannot rebuild the subtree from it, so it cannot delete anything authored
+    // into it.
+    std::vector<Object3D*> placeholders;
+    root.traverse([&placeholders](Object3D& object) {
+        if (auto* robot = object.as<Robot>()) {
+            // Already live — ObjectLoader re-imported it from the URDF the
+            // document referenced. The node transforms are right (the override
+            // table restored them) but the joint table is still at the file's
+            // rest pose, so the inspector would show the wrong angles and snap
+            // the robot on the first drag. Re-drive it from the saved values.
+            if (const auto config = RobotConfig::read(object)) {
+                for (std::size_t i = 0; i < config->joints.size() && i < robot->numDOF(); ++i) {
+                    robot->setJointValue(i, config->joints[i]);
+                }
+                robot->showColliders(config->showColliders);
+            }
+            return;
+        }
+        if (RobotConfig::read(object)) placeholders.push_back(&object);
+    });
+
+    for (auto* placeholder : placeholders) {
+
+        if (!placeholder->parent) continue;
+
+        const auto config = *RobotConfig::read(*placeholder);
+
+        std::shared_ptr<Robot> robot;
+        std::string error;
+        try {
+            URDFLoader loader;
+            // The same arguments the import used, or this rebuilds a different
+            // robot out of the same file — the exact thing a play/stop cycle
+            // must not do.
+            loader.setArgs(config.argMap());
+            robot = loader.load(config.urdf);
+            if (!robot) error = loader.lastError();
+        } catch (const std::exception& e) {
+            error = e.what();
+        }
+        if (!robot) {
+            // The geometry is still in the document, so the scene renders as
+            // saved — it just cannot be re-jointed until the file is back.
+            report(kLogRobot, threepp::log::Level::Warn,
+                   "robot not re-articulated (" + std::filesystem::path(config.urdf).filename().string() +
+                       (error.empty() ? ")" : "): " + error),
+                   logger);
+            continue;
+        }
+
+        // Only the joint table is taken from the re-import; the subtree stays the
+        // document's. That, the identity/placement handover and the reporting
+        // live in transplantRobot, which is tested on its own.
+        transplantRobot(*placeholder, robot, logger);
+    }
 }

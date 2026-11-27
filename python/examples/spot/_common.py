@@ -1,10 +1,9 @@
-"""The Spot task contract, shared by the play viewers, the trainers and the symmetry mirrors.
+"""The Spot task contract, shared by the viewers, the trainers and the symmetry mirrors.
 
-Everything here was duplicated across `play_spot_{steps,stairs,heightfield}.py`,
-`scratch_distillation/play_spot_flat.py`, `spot_slam.py`, `calico/spot_calico.py` and the three
-`train_spot_*.py`. What stays out of here is what genuinely differs per task: `terr_h` (three
-terrains — pass yours to `analytic_scan` as `height_fn`), `mirror_obs` (three obs layouts — pass
-yours to `make_aux_loss`) and `score_checkpoint` (three success metrics).
+Used by `play_spot_steps.py`, `spot_slam.py`, `calico/spot_calico.py`, `train_spot_steps.py` and
+the mirrors. What stays out of here is what differs per task: `terr_h` (pass yours to
+`analytic_scan` as `height_fn`), `mirror_obs` (pass yours to `make_aux_loss`) and
+`score_checkpoint`.
 
 Deploy side:  v2_obs, resolve_model, analytic_scan, chase_cam, poll_reload
 Trainer side: warmstart_scratch_to_terrain, sanity_walk, stochastic_flat_baseline,

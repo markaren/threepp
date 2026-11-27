@@ -816,3 +816,40 @@ TEST_CASE("splats::medianNeighbourSpacing: a regular grid reports its pitch") {
                                               Vector3{0.f, 5.f, 0.f}}) == Approx(5.f).margin(1e-5f));
     }
 }
+
+TEST_CASE("splats::neighbourSpacingQuantile: one spacing for a grid, longer at higher quantiles for random points") {
+
+    SECTION("a regular sheet reports its pitch at every quantile") {
+
+        std::vector<Vector3> pts;
+        for (int x = 0; x < 30; ++x)
+            for (int y = 0; y < 30; ++y) pts.emplace_back(static_cast<float>(x), static_cast<float>(y), 0.f);
+
+        for (const float q : {0.f, 0.1f, 0.5f, 0.9f, 1.f}) {
+            CHECK(splats::neighbourSpacingQuantile(pts, q) == Approx(1.f).margin(1e-5f));
+        }
+    }
+
+    SECTION("random points: 0.5 is the median, and 0.9 is longer by the expected ratio") {
+
+        // 5000 points at random on a unit square, from the LCG the other
+        // cases use (std::uniform_real_distribution differs between standard
+        // libraries).
+        std::vector<Vector3> pts;
+        uint32_t s = 11u;
+        auto next = [&] {
+            s = s * 1664525u + 1013904223u;
+            return static_cast<float>(s >> 8) / 16777216.f;
+        };
+        for (int i = 0; i < 5000; ++i) pts.emplace_back(next(), 0.f, next());
+
+        const float q50 = splats::neighbourSpacingQuantile(pts, 0.5f);
+        const float q90 = splats::neighbourSpacingQuantile(pts, 0.9f);
+        CHECK(q50 == splats::medianNeighbourSpacing(pts));
+        // On a random sheet the nearest-neighbour distance r has the
+        // distribution 1 - exp(-density pi r^2), so q90 / q50 is
+        // sqrt(ln 10 / ln 2) = 1.82; the square's edges stretch it a little.
+        INFO("q50 " << q50 << "  q90 " << q90);
+        CHECK(q90 / q50 == Approx(1.82f).margin(0.15f));
+    }
+}

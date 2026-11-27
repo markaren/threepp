@@ -18,7 +18,7 @@ This module replaces it with onboard PERCEPTION, the way a real legged robot doe
 `ForwardDepthScanner` also owns two optional visualizations (both auto-hidden during the scan so the
 sensor never sees them): the raw colored point cloud, and the 45-cell grid the policy actually consumes.
 
-Shared by all the spotv2 play_* viewers; see e.g. play_spot_steps.py / play_spot_heightfield.py.
+Used by play_spot_steps.py, spot_slam.py and calico/spot_calico.py.
 """
 import math
 

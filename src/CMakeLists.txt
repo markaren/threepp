@@ -45,6 +45,7 @@ set(publicHeaders
         "threepp/cameras/CubeCamera.hpp"
         "threepp/cameras/PerspectiveCamera.hpp"
         "threepp/cameras/OrthographicCamera.hpp"
+        "threepp/cameras/StereoCamera.hpp"
 
         "threepp/extras/ShapeUtils.hpp"
         "threepp/extras/environments/RoomEnvironment.hpp"
@@ -471,6 +472,7 @@ set(sources
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
         "threepp/cameras/OrthographicCamera.cpp"
+        "threepp/cameras/StereoCamera.cpp"
 
         "threepp/controls/DragControls.cpp"
         "threepp/controls/FlyControls.cpp"
