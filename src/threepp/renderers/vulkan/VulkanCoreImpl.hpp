@@ -352,15 +352,9 @@ namespace threepp {
         // `dist`? Unknown bounds (lodRadius 0) are never far.
         [[nodiscard]] static bool entryBeyond(const vulkan::impl::MeshEntry& en, const float cam[3], float dist) {
             if (en.lodRadius <= 0.f) return false;
-            const float* M = en.worldMatrix.data();
-            const float cx = M[0] * en.lodCenter[0] + M[4] * en.lodCenter[1] + M[8] * en.lodCenter[2] + M[12];
-            const float cy = M[1] * en.lodCenter[0] + M[5] * en.lodCenter[1] + M[9] * en.lodCenter[2] + M[13];
-            const float cz = M[2] * en.lodCenter[0] + M[6] * en.lodCenter[1] + M[10] * en.lodCenter[2] + M[14];
-            const float s0 = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
-            const float s1 = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
-            const float s2 = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
-            const float reach = dist + en.lodRadius * std::sqrt(std::max(s0, std::max(s1, s2)));
-            const float dx = cam[0] - cx, dy = cam[1] - cy, dz = cam[2] - cz;
+            const auto  ws    = vulkan::impl::worldSphere(en.worldMatrix.data(), en.lodCenter, en.lodRadius);
+            const float reach = dist + ws.radius;
+            const float dx = cam[0] - ws.center[0], dy = cam[1] - ws.center[1], dz = cam[2] - ws.center[2];
             return dx * dx + dy * dy + dz * dz > reach * reach;
         }
         // The ray-mask half of the same per-material classification (see the

@@ -6,9 +6,32 @@
 #ifndef THREEPP_VULKAN_IMPL_COMMON_HPP
 #define THREEPP_VULKAN_IMPL_COMMON_HPP
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 namespace threepp::vulkan::impl {
+
+    // A local-space bounding sphere through a column-major world matrix: the
+    // center transformed, the radius scaled by the matrix's largest axis scale
+    // (a bound, exact under uniform scale). `scale` is that factor, for callers
+    // that scale other lengths with it.
+    struct WorldSphere {
+        float center[3];
+        float radius;
+        float scale;
+    };
+    [[nodiscard]] inline WorldSphere worldSphere(const float* M, const float c[3], float r) {
+        const float s0    = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+        const float s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
+        const float s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
+        const float scale = std::sqrt(std::max(s0, std::max(s1, s2)));
+        return {{M[0] * c[0] + M[4] * c[1] + M[8] * c[2] + M[12],
+                 M[1] * c[0] + M[5] * c[1] + M[9] * c[2] + M[13],
+                 M[2] * c[0] + M[6] * c[1] + M[10] * c[2] + M[14]},
+                r * scale,
+                scale};
+    }
 
     // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
     // pipelining: while frame N+2 is being recorded on the CPU, frame N

@@ -1040,16 +1040,8 @@ namespace threepp {
             const uint8_t snap = snapAt ? *snapAt : 0u;
             uint64_t   mask[2] = {allMask[0], allMask[1]};
             if (si.bounded) {
-                const float* M     = en.worldMatrix.data();
-                const float* lc    = sp.localCenter;
-                const float  wc[3] = {M[0] * lc[0] + M[4] * lc[1] + M[8] * lc[2] + M[12],
-                                      M[1] * lc[0] + M[5] * lc[1] + M[9] * lc[2] + M[13],
-                                      M[2] * lc[0] + M[6] * lc[1] + M[10] * lc[2] + M[14]};
-                const float  s0    = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
-                const float  s1    = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
-                const float  s2    = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
-                const float  wr    = sp.localRadius * std::sqrt(std::max({s0, s1, s2}));
-                reachMask(wc, wr, dynamic, snap, mask);
+                const auto ws = vulkan::impl::worldSphere(en.worldMatrix.data(), sp.localCenter, sp.localRadius);
+                reachMask(ws.center, ws.radius, dynamic, snap, mask);
             } else if (snapAt && !dynamic) {
                 mask[0] &= ~uint64_t(snap & cachedCasc);// unbounded: what its bit already holds
             }

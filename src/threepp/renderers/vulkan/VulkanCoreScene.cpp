@@ -2578,16 +2578,10 @@ void VulkanRenderer::Impl::selectAutoLodLevels(Camera& camera) {
 
                         // World bounding sphere straight off the entry's
                         // column-major world matrix — no Matrix4 round-trip.
-                        const float* M = en.worldMatrix.data();
-                        const float cx = M[0] * en.lodCenter[0] + M[4] * en.lodCenter[1] + M[8] * en.lodCenter[2] + M[12];
-                        const float cy = M[1] * en.lodCenter[0] + M[5] * en.lodCenter[1] + M[9] * en.lodCenter[2] + M[13];
-                        const float cz = M[2] * en.lodCenter[0] + M[6] * en.lodCenter[1] + M[10] * en.lodCenter[2] + M[14];
-                        const float s0 = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
-                        const float s1 = M[4] * M[4] + M[5] * M[5] + M[6] * M[6];
-                        const float s2 = M[8] * M[8] + M[9] * M[9] + M[10] * M[10];
-                        const float worldScale = std::sqrt(std::max(s0, std::max(s1, s2)));
-                        const float worldRadius = en.lodRadius * worldScale;
-                        const float dx = camPos.x - cx, dy = camPos.y - cy, dz = camPos.z - cz;
+                        const auto  ws          = vulkan::impl::worldSphere(en.worldMatrix.data(), en.lodCenter, en.lodRadius);
+                        const float worldScale  = ws.scale;
+                        const float worldRadius = ws.radius;
+                        const float dx = camPos.x - ws.center[0], dy = camPos.y - ws.center[1], dz = camPos.z - ws.center[2];
                         const float distToCenter = std::sqrt(dx * dx + dy * dy + dz * dz);
 
                         uint8_t selected = 0;// camera-inside-sphere (or degenerate FOV) default: full detail
