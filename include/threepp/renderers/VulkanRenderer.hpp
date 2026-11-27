@@ -2173,7 +2173,7 @@ namespace threepp {
             // gpuTotalMs - gpuPassSumMs is GPU work invisible to the brackets.
             float gpuPassSumMs   = 0.f;
             float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
-            float cpuRecordMs      = 0.f;// recordCommandBuffer
+            float cpuRecordMs      = 0.f;// recording the frame command buffer, begin to end
             float cpuFrameMs       = 0.f;// total render() wall time
             // setCountRays: the deferred shade's ray queries in the last
             // completed frame, by category: sun (the surface's direct light),

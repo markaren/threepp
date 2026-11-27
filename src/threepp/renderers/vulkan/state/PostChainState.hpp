@@ -101,7 +101,7 @@ namespace threepp::vulkan::impl {
         // per-frame new-sample weight, so holding it fixed ties the history half-life
         // to frame count: the same 90 %/frame retention is an invisible ~10 ms ghost
         // at 200 fps but a long visible smear at 30 fps. Each frame the
-        // weight is re-solved (in recordCommandBuffer, against kTaaRefFps) so
+        // weight is re-solved (in addUpscaleAndPostPasses, against kTaaRefFps) so
         // (1-alpha) is held constant in wall-clock time instead of per frame; the
         // shader's velocity/deviation gates are already per-frame-displacement based,
         // so only this base weight needs the correction.

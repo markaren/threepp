@@ -1738,8 +1738,8 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     const VkExtent2D ext = ctx_.swapchainExtent();
 
     // Open a fresh dynamic render pass on the swapchain so we can
-    // emit draw commands. The hybrid 3D overlay pass earlier in
-    // recordCommandBuffer leaves the swapchain in GENERAL; we
+    // emit draw commands. What recorded before this (the frame graph,
+    // or the ortho-only frame's clear) leaves the swapchain in GENERAL; we
     // transition GENERAL → COLOR_ATTACHMENT_OPTIMAL, draw, then
     // transition back to GENERAL so endFrame's overlay/present
     // logic sees the layout it expects.

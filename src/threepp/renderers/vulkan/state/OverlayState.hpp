@@ -158,8 +158,8 @@ namespace threepp::vulkan::impl {
         // -1 disables layer-based selection.
         int overlayLayer_ = -1;
 
-        // Line geometry cache for the 3D hybrid overlay (recordCommandBuffer's
-        // line-draw section). Keyed on raw BufferGeometry*; geomId in the
+        // Line geometry cache for the 3D hybrid overlay (recordHybridOverlay's
+        // line draws). Keyed on raw BufferGeometry*; geomId in the
         // entry guards against recycled-pointer aliasing. (OverlayPass owns a separate
         // cache of the same shape for the ortho path — these are NOT shared.)
         //

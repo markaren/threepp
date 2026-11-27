@@ -441,7 +441,7 @@ void VulkanRenderer::Impl::rewriteDeferredDescriptors(int onlyFrame) {
             // therefore SHARED by every view: the same handles go into the
             // primary's set and each secondary's, which is harmless because
             // what actually turns the march on is the shade's flags bit 12,
-            // and that is set for the primary only (recordSceneDispatch).
+            // and that is set for the primary only (addSceneDispatchPasses).
             // Every slot is filled — live volumes first, the 1×1×1 dummy for
             // the rest — so the set is complete on a scene that has no splats
             // and on one that just lost its last cloud.

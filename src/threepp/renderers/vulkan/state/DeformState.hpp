@@ -14,16 +14,16 @@ namespace threepp::vulkan::impl {
     struct DeformState {
         // List of SkinnedMeshState pointers whose bones changed this frame.
         // ensureSceneBuilt populates this (uploads bone matrices to the GPU
-        // buffer); recordCommandBuffer consumes it by recording skinning
-        // dispatch + BLAS rebuild into the main per-frame cmd buffer with
-        // barriers. Cleared at the end of recordCommandBuffer.
+        // buffer); the frame graph's "deform.skin" pass consumes it by recording
+        // the skinning dispatch + BLAS rebuild into the frame command buffer
+        // (recordSkinnedDeforms, which clears it).
         std::vector<SkinnedMeshState*> pendingSkinnedRebuilds_;
 
         std::vector<TetMeshState*> pendingTetRebuilds_;
 
         // GrassMesh deforms queued in ensureSceneBuilt, recorded into the frame
-        // command buffer in recordCommandBuffer (no blocking submit) — same
-        // pattern as pendingSkinnedRebuilds_. Cleared at end of recordCommandBuffer.
+        // command buffer by the frame graph's "deform.grass" pass (no blocking
+        // submit), which clears it — same pattern as pendingSkinnedRebuilds_.
         std::vector<std::pair<GrassMesh*, GrassMeshState*>> pendingGrassDeforms_;
         // Grass fields this frame's slot edit placed (new, or attached again):
         // their deform runs, but like every entry the structural rebuild
@@ -44,7 +44,7 @@ namespace threepp::vulkan::impl {
         std::vector<vulkan::impl::BlasRecord*> pendingDynamicPrevResyncs_;
 
         // DisplacedMesh (FFT water) deforms queued in ensureSceneBuilt and
-        // recorded into the frame command buffer by recordCommandBuffer — the
+        // recorded into the frame command buffer by the "deform.water" pass — the
         // same no-mid-frame-submit pattern as pendingGrassDeforms_. The float
         // is the elapsed-seconds timestamp captured at stage time (drives the
         // dynamic spectrum). The old path recorded the FFT→displace→BLAS chain

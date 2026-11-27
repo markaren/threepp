@@ -5,7 +5,7 @@
 // ParticleField BILLBOARD GLOW composite — plans/particle-atmosphere.md F4 (1).
 //
 // ── WHY THIS PASS EXISTS AT ALL ─────────────────────────────────────────────
-// Field billboards composite AFTER recordUpscaleAndPost, on the swapchain, in
+// Field billboards composite AFTER addUpscaleAndPostPasses, on the swapchain, in
 // the overlay slot (F3 note 1). That placement is load-bearing: a 3-px spark
 // crossing 20 px in a frame is precisely the content a temporal resolve
 // mis-handles, and being outside TAA/DLSS/FSR is what makes them clean for

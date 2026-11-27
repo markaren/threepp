@@ -12,7 +12,7 @@
 // depthMS is the raw MSAA depth attachment (VK_FORMAT_D32_SFLOAT with
 // samples>1); idsResolved is the ALREADY-WRITTEN single-sample ids image
 // from gbuf_resolve.comp (this pass runs strictly after it, ordered by a
-// compute->fragment barrier in recordCommandBuffer).
+// compute->fragment barrier in recordGbufferMsaaResolve).
 
 layout(set = 0, binding = 0) uniform sampler2DMS depthMS;
 layout(set = 0, binding = 1) uniform usampler2D  idsResolved;

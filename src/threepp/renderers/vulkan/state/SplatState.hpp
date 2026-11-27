@@ -50,7 +50,7 @@ namespace threepp::vulkan::impl {
         // point in the frame that holds a Camera&). The jitter shear is added
         // at record time because the raster does not choose it until later.
         vulkan::SplatPass::RecordParams splatParams_{};
-        // This frame's REVERSE-Z projection, stashed alongside — recordSplats
+        // This frame's REVERSE-Z projection, stashed alongside — addSplatPasses
         // composes it with taaSkyReproj_ to get view space -> previous clip.
         float splatProjRevZ_[16]{};
         // setSplatDebugChecksum — the determinism gate's switch. Off by
@@ -73,7 +73,7 @@ namespace threepp::vulkan::impl {
         Buffer  splatVolumeUbos_[kFramesInFlight]{};
         Image2D splatVolumeDummy_{};
         // At least one baked volume is bound this frame. Feeds the shade's
-        // flags bit 12 — and ONLY on the primary view (recordSceneDispatch),
+        // flags bit 12 — and ONLY on the primary view (addSceneDispatchPasses),
         // because doc/vulkan_splats.md's scope wall keeps splats out of sensor
         // AOVs and a secondary's water reflection is a sensor AOV.
         bool     splatVolumeActiveThisFrame_ = false;

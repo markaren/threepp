@@ -2,9 +2,9 @@
 //
 // Manages the ortho sprite pipeline, the ortho line/mesh pipelines, per-frame
 // descriptor pools for per-sprite atlas binding, and the three geometry caches
-// (sprite atlas, sprite quad geometry, line/mesh geometry). recordOrthoOverlay
-// is the only entry point; it is self-contained and replaces the same-named
-// Impl method it was extracted from.
+// (sprite atlas, sprite quad geometry, line/mesh geometry). record() is the
+// only drawing entry point; it is self-contained and replaces the Impl method
+// (recordOrthoOverlay) it was extracted from.
 //
 // Atlas texture creation is delegated back to the caller via SampledImageCreator
 // because createSampledImage2D is shared across 10+ Impl call sites and cannot

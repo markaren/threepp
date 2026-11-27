@@ -2500,7 +2500,7 @@ vulkan::OverlayGradeGpu VulkanRenderer::Impl::gradeOf(const vulkan::PostComposit
 
 // ── F4: the billboard glow source + pyramid ─────────────────────────────────
 //
-// Recorded between recordUpscaleAndPost and recordHybridOverlay: the composite
+// Recorded between addUpscaleAndPostPasses and recordHybridOverlay: the composite
 // that consumes it is a draw INSIDE the overlay render-pass instance, and a
 // compute pyramid cannot run inside one. Nothing about the billboard composite
 // point moves.
@@ -3381,7 +3381,7 @@ void VulkanRenderer::Impl::recordHybridOverlay(VkCommandBuffer cb, uint32_t imag
                     // (Additive). The vertex data lives in particleGeomCache_, the
                     // texture in particleTexCache_ (white default if untextured).
                     // (THIS FRAME-IN-FLIGHT's texture-descriptor pool is reset at
-                    // the head of recordCommandBuffer — see the comment there.
+                    // the head of addPrimaryViewPasses — see the comment there.
                     // It used to be reset here, which covered the three
                     // consumers that existed in F3 but not F4's glow pass, which
                     // records earlier in the frame.)
@@ -3967,16 +3967,6 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             // optional split-screen clear.
             addSwapchainPasses(g, imageIndex);
 
-            // Per-frame set index. Was `currentFrame * imageCount_ + imageIndex`,
-            // which read as live per-(frame, image) indexing but was neither: the
-            // deferred leaf ignores the argument entirely and drives DeferredShade
-            // from currentFrame, and the other recordSceneDispatch call site
-            // (VulkanCoreFrame's secondary-view path) already passes currentFrame
-            // straight through. Composing an index nothing consumed was the only
-            // thing making imageCount_ look like frame-loop state that a swapchain
-            // recreate had to keep current — see its declaration.
-            const uint32_t setIdx = currentFrame;
-
             // Extents + exposure are shared by both render modes and by the
             // bloom/TAA tail below, so hoist them out of the mode branch.
             const VkExtent2D ext   = viewOutExtent();
@@ -4008,7 +3998,6 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
             // FSR / built-in TAA runs (see addUpscaleAndPostPasses); then the
             // field billboards' transmittance and glow, the hybrid overlay and
             // the lens/sensor stage (addTailPasses).
-            (void) setIdx;
             addSceneDispatchPasses(g);
             addSplatPasses(g);
             addUpscaleAndPostPasses(g, imageIndex, ext, ptExt, exposureBits, preExp);

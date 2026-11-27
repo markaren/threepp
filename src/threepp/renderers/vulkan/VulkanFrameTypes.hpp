@@ -15,7 +15,7 @@ namespace threepp::vulkan {
 
     // Per-BufferGeometry vertex/index/color buffer upload used by both the
     // ortho HUD overlay (OverlayPass) and the 3D hybrid overlay
-    // (recordCommandBuffer's line-draw section). One LineRec is the set of
+    // (recordHybridOverlay's line draws). One LineRec is the set of
     // buffers a draw binds; LineCacheEntry decides which set that is.
     struct LineRec {
         Buffer   vertex;

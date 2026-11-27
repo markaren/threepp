@@ -995,7 +995,7 @@ namespace threepp {
         const float jClipX = rasterJitterOn ? 2.f * jx / float(ext.width)  : 0.f;
         const float jClipY = rasterJitterOn ? 2.f * jy / float(ext.height) : 0.f;
         // Stash the raw texel-unit jitter for the TAA resolve's current-
-        // sample jitter cancellation (recordCommandBuffer passes it into
+        // sample jitter cancellation (the "taa" pass passes it into
         // recordResolve; see taaJitterTexels_'s member comment). Zero when
         // unjittered so the resolve collapses to its exact pre-fix math.
         view().taaJitterTexels_[0] = rasterJitterOn ? jx : 0.f;
@@ -1035,8 +1035,8 @@ namespace threepp {
         RasterCameraData ubo{};
         std::memcpy(ubo.currVPjittered,   vpJ.elements.data(),  64);
         std::memcpy(ubo.currVPunjittered, vpUnj.elements.data(), 64);
-        // Mirror to Impl-level cache for recordOverlayPass — the overlay
-        // pass runs in recordCommandBuffer which doesn't have direct
+        // Mirror to the view's cache for recordHybridOverlay — the overlay
+        // pass records inside the frame graph, without direct
         // access to the camera; it needs the same unjittered VP that
         // the raster prepass + TAA used so wireframes register pixel-
         // exact with the post-TAA rendered silhouette.

@@ -118,7 +118,7 @@ namespace threepp::vulkan {
         // World-space probe-GI update (probe_update.comp): the prev-store
         // snapshot copy plus the round-robin probe dispatch. Recorded ONCE per
         // frame for all views (the dispatch is primary-only — see
-        // recordSceneDispatch), so this is the whole frame's probe cost, not a
+        // addSceneDispatchPasses), so this is the whole frame's probe cost, not a
         // per-view share. It sat in the unbracketed residual while the
         // per-view-duplication claim was being made about it.
         TP_ProbeGI        = 26,

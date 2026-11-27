@@ -4,7 +4,7 @@
 // plans/particle-atmosphere.md F4, item 1.
 //
 // ── THE PROBLEM ─────────────────────────────────────────────────────────────
-// ParticleField billboards composite AFTER recordUpscaleAndPost, on the
+// ParticleField billboards composite AFTER addUpscaleAndPostPasses, on the
 // swapchain, in the overlay slot. F3 note 1 argues that placement at length and
 // it is worth restating, because everything here is shaped by NOT giving it up:
 // a 3-px spark that crosses 20 px in a frame is the exact content a temporal

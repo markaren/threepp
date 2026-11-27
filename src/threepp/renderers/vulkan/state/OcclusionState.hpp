@@ -31,8 +31,8 @@ namespace threepp::vulkan::impl {
         VkRenderPass occlRenderPassB_   = VK_NULL_HANDLE;// LOAD, final layouts as the single pass
         VkRenderPass occlRenderPassAMS_ = VK_NULL_HANDLE;// MSAA siblings (created with the MS
         VkRenderPass occlRenderPassBMS_ = VK_NULL_HANDLE;// pass on the msaa toggle)
-        // True while THIS frame's raster actually ran two-phase (consumers
-        // in the same recordCommandBuffer body branch on it).
+        // True while THIS frame's raster actually runs two-phase (published by
+        // the primary's indirect build; recordGbufferRaster branches on it).
         bool occlActiveThisFrame_ = false;
 
         // Per-INSTANCE occlusion-cull bits. The two-phase cull's persistent

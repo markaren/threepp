@@ -3363,8 +3363,8 @@ void VulkanRenderer::Impl::queueDeformerRefits(SceneBuildFrame& sb) {
                 THREEPP_CPUPROF("scene.6b_displacedQueue");
                 // Queue each DisplacedMesh water update (FFT chain →
                 // water_displace.comp → BLAS rebuild in place); the
-                // chain is recorded into the frame command buffer in
-                // recordCommandBuffer — NO blocking one-shot submit
+                // chain is recorded into the frame command buffer by
+                // the "deform.water" pass — NO blocking one-shot submit
                 // (the old drain stalled the CPU on all in-flight GPU
                 // work, tens of ms on large scenes). The CPU height-
                 // field mirror is NOT taken here: this runs before the
@@ -3387,7 +3387,7 @@ void VulkanRenderer::Impl::queueDeformerRefits(SceneBuildFrame& sb) {
                 THREEPP_CPUPROF("scene.6b_grassQueue");
                 // Queue each GrassMesh deform; the grass_wind dispatch +
                 // BLAS refit are recorded into the frame command buffer
-                // in recordCommandBuffer (no blocking submit), mirroring
+                // by the "deform.grass" pass (no blocking submit), mirroring
                 // the skinned-mesh path. One mesh = one TLAS instance.
                 for (size_t i = 0; i < entries.size(); ++i) {
                     if (!entryGrassDirty[i]) continue;
@@ -4550,8 +4550,8 @@ void VulkanRenderer::Impl::refitTlasInPlace(SceneBuildFrame& sb) {
                 // there (spanTlasSig), so the whole array (15 MB at 237k
                 // entries) is no longer sent.
                 const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny || lodChangedThisFrame_;
-                // Stage the refit; recordCommandBuffer records it into the
-                // frame cb after the deformable BLAS rebuilds (no drain).
+                // Stage the refit; the frame graph's "tlas" pass records it into
+                // the frame cb after the deformable BLAS rebuilds (no drain).
                 // The GPU spans go after the CPU's instances; a new split
                 // is a full build.
                 pendingTlasGpuInstances_ = tlasGenWork_;
@@ -5000,7 +5000,7 @@ void VulkanRenderer::Impl::admitRebuildEntries(SceneBuildFrame& sb, Camera& came
                         // BLAS refit as a synchronous one-shot stalls the CPU on
                         // every tile swap. The BLAS keeps last frame's displaced
                         // content for this frame's TLAS (imperceptible for water);
-                        // recordCommandBuffer refits it before the shade trace,
+                        // the "deform.water" pass refits it before the shade trace,
                         // and beginDeferredFrame mirrors the height field after
                         // the fence wait, as on the per-frame path.
                         syncOceanChop(*dm, *st);
@@ -6141,7 +6141,7 @@ void VulkanRenderer::Impl::collectSplatClouds(Object3D& scene, Camera& camera) {
             // The post-resolve overlay (wireframe, lines, world sprites,
             // particle billboards) is depth-tested against a buffer the splat
             // compositor never writes, so a cloud in front of an overlay does
-            // not hide it. recordSplatOverlayDepthStamp fixes that by stamping
+            // not hide it. recordSplatStampDraw fixes that by stamping
             // the depth AOV into that buffer — which means the AOV has to
             // EXIST the moment a scene holds both, whether or not the app ever
             // asked for it.

@@ -1,6 +1,6 @@
 // OcclusionCull — the compute side of two-phase GPU occlusion culling.
 //
-// Frame flow (recordCommandBuffer, gated on setOcclusionCulling; the raster
+// Frame flow (recordGbufferRaster, gated on setOcclusionCulling; the raster
 // pass itself is split by Impl into a STORE variant + a LOAD variant of
 // the same framebuffer/pipelines — load/store ops don't break render-pass
 // compatibility, so nothing graphics-side is duplicated):

@@ -354,7 +354,7 @@ namespace threepp::vulkan {
             // secondary views skip the pass rather than paint splats into an
             // AOV nobody asked for. A sensor's water reflection suddenly showing
             // a cloud would be a silent scope change — so the caller clears this
-            // for every secondary view (VulkanRenderer.cpp, recordSceneDispatch).
+            // for every secondary view (VulkanRenderer.cpp, addSceneDispatchPasses).
             bool splatVolume = false;
             // Probe GI is live this frame (the grid UBO's `enabled`). The shader
             // reads the UBO; this copy only picks the pipeline permutation when

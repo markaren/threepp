@@ -1453,7 +1453,7 @@ namespace threepp {
         // pipelines (RasterGbufImages::*MS + rasterGbufRenderPassMS);
         // the single-sample framebuffer/pipelines below stay exactly
         // what they were pre-MSAA — gbuf_resolve.comp (dispatched right
-        // after this, see recordCommandBuffer) fills the single-sample
+        // after this, see recordGbufferMsaaResolve) fills the single-sample
         // images every downstream consumer keeps reading unchanged.
         const bool useMsaa = gbufMsaaSamples_ > 1 && g.framebufferMS != VK_NULL_HANDLE;
         recordRasterGbufPassInternal(cb, frame,

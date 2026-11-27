@@ -33,12 +33,12 @@ namespace threepp::vulkan::impl {
         // the presented frame. See VulkanRenderer::EventCameraSource.
         EventCameraSource eventCamSource_ = EventCameraSource::Shaded;
 
-        // Events-only render mode. When on, recordCommandBuffer skips
+        // Events-only render mode. When on, addPrimaryViewPasses skips
         // every pass downstream of the raster G-buffer prepass: deferred
         // shade, denoise, TAA, hybrid overlay, upscale. The swapchain is
         // cleared to black so the sprite overlay (event accumulator) has a
-        // clean canvas; event_shade + event_detect run in the outer
-        // beginFrameAndRecord flow exactly as in the normal render path.
+        // clean canvas; event_shade + event_detect run in the record tail
+        // (addPostViewTailPasses) exactly as in the normal render path.
         // Designed for high-rate event-camera sampling
         // (~500 Hz target) where the renderer's visual output isn't
         // displayed at all — only the event accumulator readout matters.

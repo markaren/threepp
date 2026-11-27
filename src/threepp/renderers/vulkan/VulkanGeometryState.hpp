@@ -238,9 +238,9 @@ namespace threepp::vulkan::impl {
         bool fastBuildDeniedWarned = false;
         // Persistent scratch buffer for per-frame refit. Sized to
         // buildScratchSize on first use (which is always >= updateScratchSize),
-        // reused every frame to avoid the create+destroy pair that
-        // dominated refreshGeomBlas's cost. Empty until the first
-        // refreshGeomBlas; cleaned up in deinit / prune paths.
+        // reused every frame to avoid the create+destroy pair that once
+        // dominated the refresh's cost. Empty until the first
+        // refreshGeomBlasBatch; cleaned up in deinit / prune paths.
         Buffer blasScratch{};
         VkDeviceSize blasScratchSize = 0;
         // Per-frame BLAS-refit state — same pattern as SkinnedMeshState /
@@ -476,7 +476,7 @@ namespace threepp::vulkan::impl {
         // reading it — that frame skins with the wrong pose and the motion
         // shows one pose twice, then jumps. refreshSkinnedBlas advances
         // boneSlot once per frame and writes only that slot;
-        // recordCommandBuffer dispatches with the matching descriptor set.
+        // recordSkinnedDeforms dispatches with the matching descriptor set.
         // See SkinningPipeline::kBoneSlots for why it is +1 deep.
         static constexpr uint32_t kBoneSlots = vulkan::SkinningPipeline::kBoneSlots;
         static_assert(kBoneSlots >= kFramesInFlight + 1,
@@ -539,7 +539,7 @@ namespace threepp::vulkan::impl {
         // frames may still be reading — a single buffer would get overwritten
         // mid-flight and consecutive displayed frames would skin with the same
         // physics state (duplicate-then-skip judder). refreshTetBlas advances
-        // tetPosSlot once per frame; recordCommandBuffer dispatches with that
+        // tetPosSlot once per frame; recordTetDeforms dispatches with that
         // slot's descriptor set.
         static constexpr uint32_t kTetPosSlots = vulkan::TetSkinningPipeline::kPosSlots;
         static_assert(kTetPosSlots >= kFramesInFlight + 1,

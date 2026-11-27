@@ -37,7 +37,7 @@
 //
 // ── ORDERING ────────────────────────────────────────────────────────────────
 // This dispatch is recorded at the head of the frame command buffer, ahead of
-// particle_emit.comp and therefore ahead of recordDeformAndTlas's per-frame
+// particle_emit.comp and therefore ahead of addDeformAndTlasPasses' per-frame
 // TLAS REFIT. It consequently traverses the acceleration structure as of the
 // previous frame's dynamic transforms — which is exactly right for a bake whose
 // contract is "the static scene", and which the caller closes with a barrier in

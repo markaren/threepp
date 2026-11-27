@@ -948,7 +948,7 @@ bool VulkanRenderer::Impl::prepareBlas(const BufferGeometry& geom, bool allowPac
                 // Per-vertex previous-pose buffer for the chit's per-vertex motion
                 // vector path. Skinned / displaced / morphed meshes own their own
                 // prev buffer in their state struct; plain meshes that go through
-                // refreshGeomBlas (PhysX soft bodies, ParticleSystems updating
+                // refreshGeomBlasBatch (PhysX soft bodies, ParticleSystems updating
                 // vertices in place) need one here too — without it, the chit reads
                 // gdesc.prevVertexAddress == vertexAddress, motion is zero, and
                 // freshly-spawned dynamic bodies look noisy because the temporal
@@ -1849,7 +1849,7 @@ void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState&
             const auto& skel = *sm.skeleton;
             // Advance the ring FIRST: this write must not land in the slot an
             // in-flight dispatch is still reading (see
-            // SkinnedMeshState::boneMatrices). recordCommandBuffer dispatches
+            // SkinnedMeshState::boneMatrices). recordSkinnedDeforms dispatches
             // with skinDescSet[boneSlot], so the two stay in step.
             st.boneSlot = (st.boneSlot + 1u) % SkinnedMeshState::kBoneSlots;
             auto& slot = st.boneMatrices[st.boneSlot];
@@ -1905,8 +1905,8 @@ void VulkanRenderer::Impl::refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState&
             }
 
             // Queue for per-frame skinning compute + BLAS rebuild. The actual
-            // GPU work is recorded into the main command buffer at the start
-            // of recordCommandBuffer — no blocking submit here.
+            // GPU work is recorded into the frame command buffer by the frame
+            // graph's "deform.skin" pass — no blocking submit here.
             pendingSkinnedRebuilds_.push_back(&st);
             // The first frame the pose stops changing settles prevVertex.
             st.prevResyncPending = true;
@@ -2814,7 +2814,7 @@ void VulkanRenderer::Impl::recordDynamicGeomRefits(VkCommandBuffer cb) {
             // to make the renderer notice a CUDA write.
             //
             // The replacement is the producer's own callback, invoked HERE:
-            // post-fence (recordCommandBuffer runs past this slot's fence),
+            // post-fence (the frame graph records after this slot's fence wait),
             // pre-record of the copies that consume it, pre-submit, and never
             // inside a render pass. It is contractually SYNCHRONOUS, so when it
             // returns the exported allocation holds this frame's data and the

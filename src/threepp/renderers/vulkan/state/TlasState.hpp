@@ -34,8 +34,9 @@ namespace threepp::vulkan::impl {
         // fingerprint now catches membership flips too — this is the backstop.
         uint32_t tlasBuiltInstanceCount_ = 0;
         // Per-frame TLAS refit, staged by ensureSceneBuilt and recorded into the
-        // frame command buffer by recordCommandBuffer (after the deformable BLAS
-        // rebuilds). Replaces the old mid-frame refitTlas one-shot drain.
+        // frame command buffer by the frame graph's "tlas" pass (after the
+        // deformable BLAS rebuilds). Replaces the old mid-frame refitTlas
+        // one-shot drain.
         std::vector<VkAccelerationStructureInstanceKHR> pendingTlasInstances_;
         bool pendingTlasRefit_ = false;
         bool pendingTlasFullBuild_ = false;

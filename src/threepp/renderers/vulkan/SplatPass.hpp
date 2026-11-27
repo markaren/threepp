@@ -6,12 +6,13 @@
 // splats are composited by a compute dispatch that read-modify-writes sceneHdr.
 //
 // WHERE IT SITS. Between the deferred shade and the depth of field
-// (VulkanCoreRecord::recordSplats, called from recordCommandBuffer between
-// recordSceneDispatch and recordDepthOfField). That is LINEAR HDR, PRE-post:
-// splats get DoF, bloom, tone mapping and TAA for free, and they get them
-// through the same code path the rest of the scene does. The post-TAA overlay
-// path — where the world Sprites and particles composite — is display-referred
-// LDR; putting splats there would mean re-deriving every one of those effects.
+// (addSplatPasses in VulkanCoreRecord.cpp, added after addSceneDispatchPasses
+// and before addUpscaleAndPostPasses, whose first pass is the DoF). That is
+// LINEAR HDR, PRE-post: splats get DoF, bloom, tone mapping and TAA for free,
+// and they get them through the same code path the rest of the scene does.
+// The post-TAA overlay path — where the world Sprites and particles
+// composite — is display-referred LDR; putting splats there would mean
+// re-deriving every one of those effects.
 //
 // THE FIVE THINGS THAT MAKE IT LOOK RIGHT RATHER THAN NEARLY RIGHT
 //
@@ -35,7 +36,7 @@
 //     WRITE has one consumer that needs it back: the post-TAA overlay pass
 //     draws after this one and tests against a depth buffer nothing here
 //     touched, so a wireframe behind a cloud drew over it. The depth AOV is
-//     stamped into that buffer by VulkanCoreRecord::recordSplatOverlayDepthStamp
+//     stamped into that buffer by VulkanCoreRecord::recordSplatStampDraw
 //     (shaders/splat_overlay_depth.frag) to close it.
 //  5. DETERMINISM. Sensor goldens depend on it. The danger is the tile
 //     expansion: an

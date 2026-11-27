@@ -574,7 +574,7 @@ namespace threepp::vulkan::impl {
         bool shadeHistoryStale = true;
         // Cached unjittered view-projection matrix (column-major,
         // row-of-element-4 layout). Computed once per frame in
-        // uploadRasterCameraUbo and read by recordOverlayPass to build
+        // uploadRasterCameraUbo and read by recordHybridOverlay to build
         // the per-draw mvp = vpUnjit · model push constant.
         std::array<float, 16> currVPunjit_{};
         // Cached unjittered view and reverse-Z projection matrices,

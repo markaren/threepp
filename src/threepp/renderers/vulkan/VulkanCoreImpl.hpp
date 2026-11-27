@@ -221,7 +221,7 @@ namespace threepp {
         }
         // The factor already baked into this frame's sceneHdr stores (1.0 in
         // legacy mode). Hoisted into preExpBits_ once per frame in
-        // recordCommandBuffer; preExpHist_ remembers each frame-in-flight's
+        // addPrimaryViewPasses; preExpHist_ remembers each frame-in-flight's
         // value so cross-frame sceneHdr consumers (the exposure meter) can
         // un-bake the right slot's exposure.
         [[nodiscard]] float preExposure() const {
@@ -958,7 +958,7 @@ namespace threepp {
         // Writes the Gaussian-splat depth AOV into the overlay's depth
         // attachment between the splat composite and the overlay draw, so a
         // wireframe / line / sprite BEHIND a cloud is occluded by it. See
-        // shaders/splat_overlay_depth.frag and recordSplatOverlayDepthStamp.
+        // shaders/splat_overlay_depth.frag and recordSplatStampDraw.
         // One descriptor set per frame in flight (each names that frame's AOV
         // image and is rewritten only when the view handle changes, so the
         // update never lands on a set the GPU is still reading).
@@ -1057,7 +1057,7 @@ namespace threepp {
         // Gather every visible ParticleSystem's particle centers (model → world,
         // every 4th vertex of the coincident-quad layout) into this frame's
         // centers buffer and assign each mesh its base index, in the SAME order
-        // the overlay loop draws them. Runs in recordCommandBuffer BEFORE the
+        // the overlay loop draws them. Runs in addPrimaryViewPasses BEFORE the
         // scene-dispatch hook; the hook dispatches particle_light.comp over the
         // result. No-op (count 0) when the scene has no particles, the billboard
         // pipeline isn't initialised yet, or the IO sets can't exist (no
@@ -1846,7 +1846,7 @@ namespace threepp {
         // Per-frame: upload the soft body's current collision-tet positions into the
         // tet-position buffer (read from the material's tet texture image, which
         // PhysxWorld::syncSoftBodies refreshes each frame), then queue the GPU skin +
-        // BLAS rebuild — recorded in recordCommandBuffer next to the skinned path.
+        // BLAS rebuild — recorded by the "deform.tet" pass next to the skinned one.
         void refreshTetBlas(Mesh& m, TetMeshState& st);
 
         // Rewrite binding 6 (tetPos — see tet_skinning.comp) of every ring slot's
@@ -2029,7 +2029,7 @@ namespace threepp {
         // Record the full per-frame water update — FFT chain → water_displace →
         // world foam → in-place BLAS rebuild — into `cb`. NO submit and NO CPU
         // wait: the caller either batches this into the frame command buffer
-        // (recordCommandBuffer draining pendingDisplacedDeforms_, the per-frame
+        // (the "deform.water" pass draining pendingDisplacedDeforms_, the per-frame
         // path) or wraps it in a one-shot for the rare structural first build
         // (refreshDisplacedBlas below).
         // timed: write the TP_Ocean* timestamp brackets. Only the per-frame
@@ -2143,7 +2143,7 @@ namespace threepp {
 
         // Record the grass wind deform (rest → displaced positions in the BLAS
         // vertex buffer) + in-place BLAS refit into `cb`. No submit — the caller
-        // batches these into the main frame command buffer (recordCommandBuffer),
+        // batches these into the frame command buffer (the "deform.grass" pass),
         // exactly like the skinned-mesh path, so there is NO mid-frame
         // vkQueueWaitIdle. Uses the persistent per-BLAS scratch (grass geometry
         // is fixed-size, so it's allocated once on first use). Normals are left
@@ -2174,7 +2174,7 @@ namespace threepp {
 
         // Record a per-frame TLAS refit/rebuild into `cb` — NO blocking submit.
         // The host instance write goes to tlasInstancesBuffers[currentFrame]
-        // (safe: recordCommandBuffer runs after this slot's fence wait), and the
+        // (safe: the frame graph records after this slot's fence wait), and the
         // build uses the persistent scratch. Leaves the TLAS handle unchanged so
         // descriptor binding 0 keeps pointing at it. Must be recorded AFTER all
         // deformable BLAS rebuilds in the same cb.
@@ -3487,7 +3487,7 @@ namespace threepp {
         void ensureHybridResources();
 
         // 1×1 black RGBA32F dummy so the env-map binding is always populated.
-        // Replaced with the real scene environment by uploadEnvFromTexture()
+        // Replaced with the real scene environment by refreshEnvTextureFromScene()
         // the first time render() sees a non-empty scene.environment / .background.
         void createDefaultEnvImage();
 
@@ -3793,7 +3793,8 @@ namespace threepp {
         // bloom_->sceneHdr (direct analytic lights + split-sum specular IBL +
         // approximate diffuse IBL + ray-query accents). Adds its passes to
         // the frame graph between the G-buffer/AS head and the splats + post
-        // tail (recordCommandBuffer); defined in VulkanRenderer.cpp.
+        // tail (addPrimaryViewPasses, addSecondaryViewPasses); defined in
+        // VulkanRenderer.cpp.
         void addSceneDispatchPasses(vulkan::rg::RenderGraph& g);
 
         // Called once after bloom_->createImages(); wires sceneHdr views.
@@ -3942,7 +3943,7 @@ namespace threepp {
         void assignShadowSlots(std::vector<GpuClusterLight>& recs, const std::vector<Light*>& src, Camera& camera);
 
         // Frame recording, split along the frame's own stage seams (bodies in
-        // VulkanCoreRecord.cpp). recordCommandBuffer is the narrative: it adds
+        // VulkanCoreRecord.cpp). addPrimaryViewPasses is the narrative: it adds
         // each stage's passes to the frame graph in order, and the graph
         // derives the barriers between them from what each pass declares.
         void updatePaneRegion();
@@ -4232,7 +4233,7 @@ namespace threepp {
         // Ortho-only frame start: no deferred render, no per-frame uploads.
         // Acquires the swap image, opens the cmd buffer, and clears the
         // swapchain to the configured clearColor (leaves layout = GENERAL).
-        // recordOrthoOverlay() then draws the HUD scene atop this cleared image.
+        // OverlayPass::record then draws the HUD scene atop this cleared image.
         bool beginFrameOrthoOnly();
 
         // Finish the open frame: record overlay/ImGui pass + PRESENT_SRC

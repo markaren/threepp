@@ -1427,7 +1427,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             // Sprites with screenSpace=true and composites them through
             // an internal ortho camera derived from the swapchain extent —
             // no user code beyond setting the flag on the sprite.
-            // recordOrthoOverlay short-circuits when no eligible sprites
+            // OverlayPass::record short-circuits when no eligible sprites
             // are found, so the typical no-sprite case pays nothing.
             const VkExtent2D extPT = ctx->swapchainExtent();
             if (!screenSpaceCam_) {
@@ -1883,7 +1883,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                     // Standalone 2D render: draw the ortho overlay (Sprites +
                     // Line/LineSegments) now, so a single render(scene, orthoCam)
                     // call produces output. The HUD pattern (a perspective render
-                    // first, then ortho) instead reaches recordOrthoOverlay via the
+                    // first, then ortho) instead reaches OverlayPass::record via the
                     // frame-already-in-flight path below.
                     overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
                                          scene, sceneCensus(scene).sprites, camera, /*screenSpaceOnly=*/false);

@@ -9,7 +9,7 @@
 //                                VulkanCoreInit.cpp); Impl's nested types live in
 //                                vulkan/Vulkan{ImplCommon,GpuLayouts,GeometryState,
 //                                SceneTypes,ViewContext}.hpp, aliased back into Impl.
-//   VulkanRenderer.cpp (this)  — Impl::recordSceneDispatch (DeferredShade +
+//   VulkanRenderer.cpp (this)  — Impl::addSceneDispatchPasses (DeferredShade +
 //                                auto-exposure) + the public method bodies.
 //
 // VulkanRenderer (deferred): the raster G-buffer supplies primary visibility;

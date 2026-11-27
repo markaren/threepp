@@ -3,7 +3,7 @@
 
 // The display transform an OVERLAY-pass shader has to apply by hand.
 //
-// Everything drawn after recordUpscaleAndPost composites onto a swapchain that
+// Everything drawn after addUpscaleAndPostPasses composites onto a swapchain that
 // post_composite.comp already exposed, tone-mapped and sRGB-ENCODED. A pass
 // that arrives afterwards with linear HDR radiance in its hands — a lit
 // billboard, an emissive spark — must therefore run the same curve on its own
