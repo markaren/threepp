@@ -14,7 +14,7 @@
 // further out = blue ground, corner = grey background.
 //
 // Without the flag an ortho render is the 2D overlay path by design
-// (painter's order, no depth, no background): that is not what this test
+// (painter's order, no depth, no background texture): that is not what this test
 // checks, so the flag is set explicitly.
 //
 // Plain exit-code program like VulkanGolden_test; exits 42 (CTest "Skipped")

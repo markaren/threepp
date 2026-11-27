@@ -409,6 +409,11 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
 
     add_vulkan_test(VulkanSpriteTextureReuse_test ENVIRONMENT THREEPP_VULKAN_VALIDATION=1 THREEPP_VULKAN_STRICT_VALIDATION=1)
 
+    # A standalone ortho render() (the 2D overlay path) clears to the scene's
+    # background colour, and screen-space sprites sit at their pixel position
+    # whatever the ortho or HUD camera's units (headless).
+    add_vulkan_test(VulkanOrthoOverlayBackground_test)
+
     # A mesh, geometry and material that are freed and recreated between two
     # frames come back at the same addresses, at version 0 again. The scene sync
     # compared exactly those, took the unchanged fast path, and went on rendering

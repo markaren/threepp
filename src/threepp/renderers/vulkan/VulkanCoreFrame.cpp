@@ -5,6 +5,8 @@
 
 #include "VulkanCpuPhaseProf.hpp"
 
+#include "threepp/scenes/Scene.hpp"
+
 #include <algorithm>
 #include <string>
 #include <unordered_map>
@@ -1447,7 +1449,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
             return true;
         }
 
-bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
+bool VulkanRenderer::Impl::beginFrameOrthoOnly(Object3D& scene) {
             VkDevice d = ctx->device();
             // DISTINCT names from the deferred path's, even though it is the same
             // fence ring and the same swapchain: the registry keys on the string,
@@ -1514,14 +1516,22 @@ bool VulkanRenderer::Impl::beginFrameOrthoOnly() {
             // plain UNORM image and this clear bypasses the shader's linearToSRGB,
             // so a color-managed (linear) clear color must be encoded here to match
             // shaded pixels. No-op when ColorManagement is disabled (legacy raw).
+            // A Scene's background colour replaces the clear colour at alpha 1,
+            // as GLBackground does; the deferred path's solid-bg bypass shows
+            // the same colour through the same sRGB encode.
             Color cc;
+            float ca = clearAlpha;
             cc.copy(clearColor);
+            if (auto* sc = dynamic_cast<Scene*>(&scene); sc && sc->background.isColor()) {
+                cc.copy(sc->background.color());
+                ca = 1.f;
+            }
             ColorManagement::workingToColorSpace(cc, SRGBColorSpace);
             VkClearColorValue cv{};
             cv.float32[0] = cc.r;
             cv.float32[1] = cc.g;
             cv.float32[2] = cc.b;
-            cv.float32[3] = clearAlpha;
+            cv.float32[3] = ca;
             vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  &cv, 1, &range);
             {
@@ -1878,7 +1888,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
             if (frameState_ == FrameState::Idle) {
                 resolveUpscalers();
                 if (isOrtho) {
-                    if (!beginFrameOrthoOnly()) return;
+                    if (!beginFrameOrthoOnly(scene)) return;
                     frameState_ = FrameState::RecordingOrthoOnly;
                     // Standalone 2D render: draw the ortho overlay (Sprites +
                     // Line/LineSegments) now, so a single render(scene, orthoCam)
@@ -1899,7 +1909,7 @@ void VulkanRenderer::Impl::renderFrame(Object3D& scene, Camera& camera) {
                             warned = true;
                             THREEPP_LOG(vulkan::kLogOverlay, Warn) << "render() with an OrthographicCamera drew "
                                          "the scene as a 2D overlay: unlit fills in scene order, no "
-                                         "depth test, no background. Mesh '"
+                                         "depth test, no background texture. Mesh '"
                                       << (lit->name.empty() ? lit->type() : lit->name)
                                       << "' has a lit material, so this camera is probably a 3D "
                                          "view - call setOrthographicSceneRendering(true) "

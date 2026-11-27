@@ -2044,6 +2044,20 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     std::memcpy(projMat.elements.data(),
                 camera.projectionMatrix.elements.data(), 64);
 
+    // A screenSpace sprite's effWorld is in swapchain pixels (collected
+    // above), so it projects through a pixel-space ortho camera — left 0,
+    // right width, top height, bottom 0, at z = 1 — whatever `camera` is.
+    // The screen-space auto-overlay already passes that camera
+    // (Impl::screenSpaceCam_), but a standalone ortho render() and a HUD
+    // render() pass the caller's camera, whose units are world units: through
+    // it a label at pixel (5, 48) would fall far outside the frustum. Same
+    // camera as GLRenderer's renderScreenSpaceSprites.
+    Matrix4 pixelProj;
+    pixelProj.makeOrthographic(0.f, static_cast<float>(ext.width),
+                               static_cast<float>(ext.height), 0.f, 0.1f, 10.f);
+    Matrix4 pixelView;
+    pixelView.makeTranslation(0.f, 0.f, -1.f);
+
     // 128-byte push constant layout, matches overlay_sprite.vert/frag.
     struct SpritePC {
         float projection[16];   // 64
@@ -2132,14 +2146,14 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         // sp->matrixWorld (3D) or a screen-space composite built
         // from screenAnchor + viewport + position (screen-space).
         Matrix4 modelView;
-        modelView.multiplyMatrices(camera.matrixWorldInverse, d.effWorld);
+        modelView.multiplyMatrices(sp->screenSpace ? pixelView : camera.matrixWorldInverse, d.effWorld);
         Vector3 worldScale;
         worldScale.setFromMatrixScale(d.effWorld);
         Vector3 mvPos;
         mvPos.setFromMatrixPosition(modelView);
 
         SpritePC pc{};
-        std::memcpy(pc.projection, projMat.elements.data(), 64);
+        std::memcpy(pc.projection, (sp->screenSpace ? pixelProj : projMat).elements.data(), 64);
         pc.mvPos[0] = static_cast<float>(mvPos.x);
         pc.mvPos[1] = static_cast<float>(mvPos.y);
         pc.mvPos[2] = static_cast<float>(mvPos.z);

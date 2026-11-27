@@ -4216,9 +4216,11 @@ namespace threepp {
 
         // Ortho-only frame start: no deferred render, no per-frame uploads.
         // Acquires the swap image, opens the cmd buffer, and clears the
-        // swapchain to the configured clearColor (leaves layout = GENERAL).
+        // swapchain (leaves layout = GENERAL): to the scene's background colour
+        // at alpha 1 when `scene` is a Scene with one, otherwise to clearColor /
+        // clearAlpha — the GLBackground rule. A background texture is not drawn.
         // OverlayPass::record then draws the HUD scene atop this cleared image.
-        bool beginFrameOrthoOnly();
+        bool beginFrameOrthoOnly(Object3D& scene);
 
         // Finish the open frame: record overlay/ImGui pass + PRESENT_SRC
         // transition, close the cmd buffer, submit and present, advance the
