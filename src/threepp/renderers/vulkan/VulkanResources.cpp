@@ -31,6 +31,34 @@ namespace threepp::vulkan {
         }
     }
 
+    void submitOneShot(VkDevice device, VkQueue queue, VkCommandPool pool, const char* what,
+                       const std::function<void(VkCommandBuffer)>& record) {
+        const auto label = [what](const char* step) { return std::string(step) + "(" + what + ")"; };
+
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool        = pool;
+        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        check(vkAllocateCommandBuffers(device, &ai, &cb), label("alloc one-shot cb").c_str());
+
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(vkBeginCommandBuffer(cb, &bi), label("begin one-shot cb").c_str());
+        record(cb);
+        check(vkEndCommandBuffer(cb), label("end one-shot cb").c_str());
+
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        check(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), label("submit one-shot").c_str());
+        check(vkQueueWaitIdle(queue), label("wait one-shot").c_str());
+        vkFreeCommandBuffers(device, pool, 1, &cb);
+    }
+
     VkPipeline createComputePipeline(VkDevice device, VkPipelineCache cache, VkPipelineLayout layout,
                                      const uint32_t* spv, size_t spvBytes, const char* what,
                                      const VkSpecializationInfo* spec) {

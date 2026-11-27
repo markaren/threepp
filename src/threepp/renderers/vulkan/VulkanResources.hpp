@@ -24,6 +24,14 @@ namespace threepp::vulkan {
     // Used pervasively as `check(vkXxx(...), "vkXxx")` to keep call sites short.
     void check(VkResult r, const char* what);
 
+    // A command buffer outside any frame, for resource setup (a fresh image's
+    // first layout transition, a one-off clear or upload): allocated from
+    // `pool`, recorded by `record`, submitted to `queue`, waited for with
+    // vkQueueWaitIdle and freed. `what` names the caller in a failure's
+    // message ("alloc one-shot cb(what)", ...).
+    void submitOneShot(VkDevice device, VkQueue queue, VkCommandPool pool, const char* what,
+                       const std::function<void(VkCommandBuffer)>& record);
+
     // A compute pipeline from one SPIR-V module: the module is created, the
     // pipeline built on `layout` with entry point "main", and the module
     // destroyed again whether or not the pipeline came to be. `cache` may be

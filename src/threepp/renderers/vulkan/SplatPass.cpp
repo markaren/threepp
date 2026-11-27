@@ -505,28 +505,7 @@ namespace threepp::vulkan {
     }
 
     void SplatPass::oneShot(const std::function<void(VkCommandBuffer)>& body) const {
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool        = cmdPool_;
-        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        check(vkAllocateCommandBuffers(ctx_.device(), &ai, &cb), "alloc one-shot cb(splat)");
-
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(cb, &bi), "begin one-shot cb(splat)");
-        body(cb);
-        check(vkEndCommandBuffer(cb), "end one-shot cb(splat)");
-
-        VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cb;
-        check(vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, VK_NULL_HANDLE), "submit one-shot(splat)");
-        check(vkQueueWaitIdle(ctx_.graphicsQueue()), "wait one-shot(splat)");
-        vkFreeCommandBuffers(ctx_.device(), cmdPool_, 1, &cb);
+        submitOneShot(ctx_.device(), ctx_.graphicsQueue(), cmdPool_, "splat", body);
     }
 
     void SplatPass::uploadCloud(Cloud& c, const SplatCloud& src) {

@@ -169,48 +169,28 @@ namespace threepp::vulkan {
     // write and read them need no layout dance, as in BillboardGlowPass.
     void BillboardHdrLayer::transitionFresh(const std::vector<std::pair<VkImage, VkImageAspectFlags>>& images) {
         if (images.empty()) return;
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool        = cmdPool_;
-        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        check(vkAllocateCommandBuffers(ctx_.device(), &ai, &cb), "alloc one-shot cb(bbhdr)");
-
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(cb, &bi), "begin one-shot cb(bbhdr)");
-
-        std::vector<VkImageMemoryBarrier> bs(images.size());
-        for (std::size_t i = 0; i < images.size(); ++i) {
-            VkImageMemoryBarrier& b = bs[i];
-            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-            b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image               = images[i].first;
-            b.subresourceRange.aspectMask = images[i].second;
-            b.subresourceRange.levelCount = 1;
-            b.subresourceRange.layerCount = 1;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        }
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                             0, 0, nullptr, 0, nullptr, static_cast<uint32_t>(bs.size()), bs.data());
-
-        check(vkEndCommandBuffer(cb), "end one-shot cb(bbhdr)");
-        VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cb;
-        check(vkQueueSubmit(ctx_.graphicsQueue(), 1, &si, VK_NULL_HANDLE), "submit one-shot(bbhdr)");
-        check(vkQueueWaitIdle(ctx_.graphicsQueue()), "wait one-shot(bbhdr)");
-        vkFreeCommandBuffers(ctx_.device(), cmdPool_, 1, &cb);
+        submitOneShot(ctx_.device(), ctx_.graphicsQueue(), cmdPool_, "bbhdr", [&](VkCommandBuffer cb) {
+            std::vector<VkImageMemoryBarrier> bs(images.size());
+            for (std::size_t i = 0; i < images.size(); ++i) {
+                VkImageMemoryBarrier& b = bs[i];
+                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image               = images[i].first;
+                b.subresourceRange.aspectMask = images[i].second;
+                b.subresourceRange.levelCount = 1;
+                b.subresourceRange.layerCount = 1;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            }
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                                 0, 0, nullptr, 0, nullptr, static_cast<uint32_t>(bs.size()), bs.data());
+        });
     }
 
     bool BillboardHdrLayer::ensureImages(uint32_t width, uint32_t height, bool ownDepth) {

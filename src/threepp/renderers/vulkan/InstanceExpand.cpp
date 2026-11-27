@@ -250,40 +250,22 @@ namespace threepp::vulkan {
                                       VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                                               VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool        = cmdPool;
-        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
-        check(vkAllocateCommandBuffers(ctx_.device(), &ai, &cb),
-              "alloc one-shot cb(instanceExpandCheck)");
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(cb, &bi), "begin one-shot cb(instanceExpandCheck)");
-        VkMemoryBarrier2 mb{};
-        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-        mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        mb.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-        mb.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-        VkDependencyInfo dep{};
-        dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep.memoryBarrierCount = 1;
-        dep.pMemoryBarriers    = &mb;
-        vkCmdPipelineBarrier2(cb, &dep);
-        VkBufferCopy region{};
-        region.size = bytes;
-        vkCmdCopyBuffer(cb, world_.handle, staging.handle, 1, &region);
-        check(vkEndCommandBuffer(cb), "end one-shot cb(instanceExpandCheck)");
-        VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cb;
-        check(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE), "submit one-shot(instanceExpandCheck)");
-        check(vkQueueWaitIdle(queue), "wait one-shot(instanceExpandCheck)");
-        vkFreeCommandBuffers(ctx_.device(), cmdPool, 1, &cb);
+        submitOneShot(ctx_.device(), queue, cmdPool, "instanceExpandCheck", [&](VkCommandBuffer cb) {
+            VkMemoryBarrier2 mb{};
+            mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            mb.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            VkDependencyInfo dep{};
+            dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers    = &mb;
+            vkCmdPipelineBarrier2(cb, &dep);
+            VkBufferCopy region{};
+            region.size = bytes;
+            vkCmdCopyBuffer(cb, world_.handle, staging.handle, 1, &region);
+        });
 
         invalidateHostReads(ctx_.allocator(), staging.alloc, 0, bytes);
         VmaAllocationInfo info{};
