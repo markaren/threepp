@@ -418,23 +418,6 @@ namespace threepp::vulkan {
         VkShaderModule mod = VK_NULL_HANDLE;
         check(vkCreateShaderModule(d, &smci, nullptr, &mod), "vkCreateShaderModule(deferred_shade)");
 
-        VkPipelineShaderStageCreateInfo stage{};
-        stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = mod;
-        stage.pName  = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage  = stage;
-        cpci.layout = pipeLayout_;
-        // Diagnostic mode only (THREEPP_VULKAN_PIPELINE_STATS): ask the driver
-        // to keep per-executable statistics — register count, spill/scratch
-        // bytes, occupancy — so a shader change can be judged on what it did to
-        // the hardware rather than on wall-clock alone. The cache is bypassed
-        // here because a cached pipeline has no statistics to report.
-        const bool wantStats = ctx_.pipelineStatsEnabled();
-        if (wantStats) cpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
         // The shade itself is not built here. recordDispatch picks a
         // specialization permutation per (flags & specMask_, probe state) and
         // builds it on first use from the module kept below; specMask_ always
@@ -449,73 +432,34 @@ namespace threepp::vulkan {
         specProbe_ = env::flag("THREEPP_VK_SHADE_SPEC_PROBE");
         shadeMod_ = mod;
 
-        // Filter + composite pipelines — GI SVGF and reflection gloss
-        // reconstruction (formerly the two channels of deferred_denoise). Both
-        // share the descriptor set layout + push-constant range, just different
-        // shader modules.
-        VkShaderModule modGi = createShaderModule(d, kDeferredGiFilterCompSpv, sizeof(kDeferredGiFilterCompSpv), "vkCreateShaderModule(deferred_gi_filter)");
-        VkComputePipelineCreateInfo cpciGi = cpci;
-        cpciGi.stage.module = modGi;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciGi, nullptr, &giFilterPipe_),
-              "vkCreateComputePipelines(deferred_gi_filter)");
+        // The secondary passes on the shade's set and push range: the GI SVGF
+        // and reflection gloss filters (formerly the two channels of
+        // deferred_denoise), the clustered light culling, the froxel inject +
+        // integrate, the half-res cloud march and the cloud shadow map.
+        const VkPipelineCache cache = ctx_.pipelineCache();
+        giFilterPipe_   = createComputePipeline(d, cache, pipeLayout_, kDeferredGiFilterCompSpv,
+                                                sizeof(kDeferredGiFilterCompSpv), "deferred_gi_filter");
+        reflFilterPipe_ = createComputePipeline(d, cache, pipeLayout_, kDeferredReflFilterCompSpv,
+                                                sizeof(kDeferredReflFilterCompSpv), "deferred_refl_filter");
+        clusterPipe_    = createComputePipeline(d, cache, pipeLayout_, kClusterBuildCompSpv,
+                                                sizeof(kClusterBuildCompSpv), "cluster_build");
+        froxelInjectPipe_ = createComputePipeline(d, cache, pipeLayout_, froxelSpv.words,
+                                                  froxelSpv.count * sizeof(uint32_t), "froxel_inject");
+        froxelIntegratePipe_ = createComputePipeline(d, cache, pipeLayout_, kFroxelIntegrateCompSpv,
+                                                     sizeof(kFroxelIntegrateCompSpv), "froxel_integrate");
+        cloudMarchPipe_  = createComputePipeline(d, cache, pipeLayout_, kCloudMarchCompSpv,
+                                                 sizeof(kCloudMarchCompSpv), "cloud_march");
+        cloudShadowPipe_ = createComputePipeline(d, cache, pipeLayout_, kCloudShadowCompSpv,
+                                                 sizeof(kCloudShadowCompSpv), "cloud_shadow");
 
-        VkShaderModule modRefl = createShaderModule(d, kDeferredReflFilterCompSpv, sizeof(kDeferredReflFilterCompSpv), "vkCreateShaderModule(deferred_refl_filter)");
-        VkComputePipelineCreateInfo cpciRefl = cpci;
-        cpciRefl.stage.module = modRefl;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciRefl, nullptr, &reflFilterPipe_),
-              "vkCreateComputePipelines(deferred_refl_filter)");
-
-        // Third pipeline — clustered light culling — same layout again.
-        VkShaderModule modC = createShaderModule(d, kClusterBuildCompSpv, sizeof(kClusterBuildCompSpv), "vkCreateShaderModule(cluster_build)");
-        VkComputePipelineCreateInfo cpciC = cpci;
-        cpciC.stage.module = modC;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciC, nullptr, &clusterPipe_),
-              "vkCreateComputePipelines(cluster_build)");
-
-        // Froxel volumetrics — inject + integrate, same layout.
-        VkShaderModule modF = createShaderModule(d, froxelSpv.words, froxelSpv.count * sizeof(uint32_t), "vkCreateShaderModule(froxel_inject)");
-        VkComputePipelineCreateInfo cpciF = cpci;
-        cpciF.stage.module = modF;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciF, nullptr, &froxelInjectPipe_),
-              "vkCreateComputePipelines(froxel_inject)");
-        VkShaderModule modI = createShaderModule(d, kFroxelIntegrateCompSpv, sizeof(kFroxelIntegrateCompSpv), "vkCreateShaderModule(froxel_integrate)");
-        VkComputePipelineCreateInfo cpciI = cpci;
-        cpciI.stage.module = modI;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciI, nullptr, &froxelIntegratePipe_),
-              "vkCreateComputePipelines(froxel_integrate)");
-
-        // Half-res cloud march — same layout again.
-        VkShaderModule modM = createShaderModule(d, kCloudMarchCompSpv, sizeof(kCloudMarchCompSpv), "vkCreateShaderModule(cloud_march)");
-        VkComputePipelineCreateInfo cpciM = cpci;
-        cpciM.stage.module = modM;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciM, nullptr, &cloudMarchPipe_),
-              "vkCreateComputePipelines(cloud_march)");
-
-        // Cloud shadow map — same layout again.
-        VkShaderModule modS = createShaderModule(d, kCloudShadowCompSpv, sizeof(kCloudShadowCompSpv), "vkCreateShaderModule(cloud_shadow)");
-        VkComputePipelineCreateInfo cpciS = cpci;
-        cpciS.stage.module = modS;
-        check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciS, nullptr, &cloudShadowPipe_),
-              "vkCreateComputePipelines(cloud_shadow)");
-
-        // Half-res ray-traced AO + bent normals (rtao.comp) — same shared set 0
-        // and 80-byte ShadePush range as the shade itself.
-        // Not without ray query: rtaoPipe_ stays null and the stage is never
-        // recorded (the shade's AO term is then 1).
-        VkShaderModule modAo = VK_NULL_HANDLE;
+        // Half-res ray-traced AO + bent normals (rtao.comp) and the half-res
+        // sun fog march, on the same set and push range. Not without ray
+        // query: both stay null and are never recorded (the shade's AO term is
+        // then 1).
         if (rt) {
-            modAo = createShaderModule(d, kRtaoCompSpv, sizeof(kRtaoCompSpv), "vkCreateShaderModule(rtao)");
-            VkComputePipelineCreateInfo cpciAo = cpci;
-            cpciAo.stage.module = modAo;
-            check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciAo, nullptr, &rtaoPipe_),
-                  "vkCreateComputePipelines(rtao)");
-            // The half-res sun fog march: the shade's set, push block and march.
-            VkShaderModule modFog = createShaderModule(d, kFogMarchCompSpv, sizeof(kFogMarchCompSpv), "vkCreateShaderModule(fog_march)");
-            VkComputePipelineCreateInfo cpciFog = cpci;
-            cpciFog.stage.module = modFog;
-            check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciFog, nullptr, &fogMarchPipe_),
-                  "vkCreateComputePipelines(fog_march)");
-            vkDestroyShaderModule(d, modFog, nullptr);
+            rtaoPipe_    = createComputePipeline(d, cache, pipeLayout_, kRtaoCompSpv, sizeof(kRtaoCompSpv), "rtao");
+            fogMarchPipe_ = createComputePipeline(d, cache, pipeLayout_, kFogMarchCompSpv,
+                                                  sizeof(kFogMarchCompSpv), "fog_march");
         }
 
         // Particle billboard lighting — set 0 is the shared deferred set; set 1
@@ -550,23 +494,9 @@ namespace threepp::vulkan {
             check(vkCreatePipelineLayout(d, &pplci, nullptr, &particlePipeLayout_),
                   "vkCreatePipelineLayout(particle_light)");
 
-            VkShaderModule modP = createShaderModule(d, particleSpv.words, particleSpv.count * sizeof(uint32_t), "vkCreateShaderModule(particle_light)");
-            VkComputePipelineCreateInfo cpciP = cpci;
-            cpciP.stage.module = modP;
-            cpciP.layout       = particlePipeLayout_;
-            check(vkCreateComputePipelines(d, ctx_.pipelineCache(), 1, &cpciP, nullptr, &particleLightPipe_),
-                  "vkCreateComputePipelines(particle_light)");
-            vkDestroyShaderModule(d, modP, nullptr);
+            particleLightPipe_ = createComputePipeline(d, cache, particlePipeLayout_, particleSpv.words,
+                                                       particleSpv.count * sizeof(uint32_t), "particle_light");
         }
-
-        vkDestroyShaderModule(d, modGi, nullptr);
-        vkDestroyShaderModule(d, modRefl, nullptr);
-        vkDestroyShaderModule(d, modC, nullptr);
-        vkDestroyShaderModule(d, modF, nullptr);
-        vkDestroyShaderModule(d, modI, nullptr);
-        vkDestroyShaderModule(d, modM, nullptr);
-        vkDestroyShaderModule(d, modS, nullptr);
-        if (modAo) vkDestroyShaderModule(d, modAo, nullptr);
     }
 
     void DeferredShade::createDescriptorPool() {
@@ -1443,6 +1373,11 @@ namespace threepp::vulkan {
         cpci.stage.pName               = "main";
         cpci.stage.pSpecializationInfo = &si;
         cpci.layout                    = pipeLayout_;
+        // Diagnostic mode only (THREEPP_VULKAN_PIPELINE_STATS): ask the driver
+        // to keep per-executable statistics — register count, spill/scratch
+        // bytes, occupancy — so a shader change can be judged on what it did to
+        // the hardware rather than on wall-clock alone. The cache is bypassed
+        // then, because a cached pipeline has no statistics to report.
         const bool wantStats = ctx_.pipelineStatsEnabled();
         if (wantStats) cpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
 
