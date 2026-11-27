@@ -122,18 +122,6 @@ uint32_t VulkanRenderer::Impl::slotSlackFor(const EntrySpan& sp, uint32_t count)
             return std::min(cap - count, std::max(count / 2u, 64u));
         }
 
-uint32_t VulkanRenderer::Impl::slotMaterialAssetIdx(const Material* mat) {
-            const unsigned int id = mat ? mat->id : 0u;
-            auto [it, inserted] = slotMatAssetIdx_.try_emplace(mat, id, slotNextMatAssetIdx_);
-            if (inserted) {
-                ++slotNextMatAssetIdx_;
-            } else if (it->second.first != id) {
-                // A new material at a dead one's address: a new index.
-                it->second = {id, slotNextMatAssetIdx_++};
-            }
-            return it->second.second;
-        }
-
 namespace {
 
     VkCullModeFlags slotCullOf(const threepp::vulkan_pt::MaterialDesc& md) {
@@ -647,12 +635,7 @@ bool VulkanRenderer::Impl::trySlotEdit(std::vector<MeshEntry>& built, std::vecto
                 if (meshRows.count(&m)) continue;
                 MeshRows r;
                 r.proto = &proto;
-                const auto geom = m.geometry();
-                const auto mat = m.material();
-                if (recordOf(proto)) {
-                    r.md = buildMaterialDesc(m);
-                    r.md.materialAssetIdx = slotMaterialAssetIdx(mat.get());
-                }
+                if (recordOf(proto)) r.md = buildMaterialDesc(m);
                 // The fingerprint the full path's slow branch derives.
                 r.fp = slotFingerprintOf(m);
                 r.stableId = stableIdIfAssigned(m);
@@ -1007,10 +990,7 @@ bool VulkanRenderer::Impl::trySlotDelta(SceneDelta& d) {
             for (size_t b = 0; b < d.spans.size(); ++b) {
                 const MeshEntry& proto = d.built[d.spans[b].first];
                 Mesh& m = *proto.mesh;
-                if (slotRecordOf(proto)) {
-                    rows[b].md = buildMaterialDesc(m);
-                    rows[b].md.materialAssetIdx = slotMaterialAssetIdx(m.material().get());
-                }
+                if (slotRecordOf(proto)) rows[b].md = buildMaterialDesc(m);
                 rows[b].fp = slotFingerprintOf(m);
                 rows[b].stableId = stableIdIfAssigned(m);
             }
@@ -1527,7 +1507,6 @@ void VulkanRenderer::Impl::pumpHiddenAdmissions() {
                 THREEPP_CPUPROF("scene.E3_admitRows");
                 const Material* mat = m.material().get();
                 MaterialDesc md = buildMaterialDesc(m);// takes the prepared images
-                md.materialAssetIdx = slotMaterialAssetIdx(mat);
                 const GeometryDesc gd = buildGeometryDesc(entries[sp.first], rec, selectLodGeom(rec, 0));
                 for (uint32_t i = sp.first; i < sp.first + sp.count; ++i) {
                     const uint32_t matIdx = matTableSlot(mat, md, m);

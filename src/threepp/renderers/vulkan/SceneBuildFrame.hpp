@@ -154,13 +154,6 @@ namespace threepp {
         // Dummy slots are never referenced: skipped entries get no TLAS
         // instance and are not drawn in the gbuffer (both skip on isOverlay).
         std::vector<GeometryDesc> geomDescs;
-
-        // Material-asset dedup. Meshes sharing one Material C++ pointer
-        // get the same matAssetIdx so the deferred shade's bilinear
-        // reproject gate can accept their cross-mesh taps (tiled walls
-        // etc.). The map grows by ~one entry per UNIQUE Material in the
-        // scene — well below entries.size() in typical content.
-        std::unordered_map<const Material*, uint32_t> matAssetMap;
     };
 
 }// namespace threepp

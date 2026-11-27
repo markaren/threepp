@@ -4010,18 +4010,12 @@ void VulkanRenderer::Impl::patchMaterialDescs(SceneBuildFrame& sb) {
                     markGeomDescsWhole();
                 }
                 matTableBeginPass();
-                // Same dedup as the full-rebuild path below (consulted only on
-                // the full-rebuild fallback): entries order is identical
-                // (overlay skip matches), so identical Material* pointers
-                // produce identical materialAssetIdx values frame-to-frame.
-                std::unordered_map<const Material*, uint32_t> matAssetMap;
                 // One-entry memo of the material's desc. A dirty instanced span is
                 // N consecutive entries sharing one Material, and an
                 // instance-color edit dirties all of them; without the
                 // memo each re-runs materialFromMesh + the texture-of
-                // walk. Patch mode only: materialAssetIdx is taken from
-                // the entry's current record, so the memoised desc is
-                // valid for every entry of the same Material.
+                // walk. Patch mode only: the memoised desc is valid for
+                // every entry of the same Material.
                 const Material* memoMat = nullptr;
                 MaterialDesc memoMd{};
                 // ...and every desc built this pass, by material: the meshes
@@ -4043,14 +4037,6 @@ void VulkanRenderer::Impl::patchMaterialDescs(SceneBuildFrame& sb) {
                     }
                     if (!(patchMatDescs && memoMat && mat == memoMat)) {
                         MaterialDesc md = buildMaterialDesc(*m);
-                        if (patchMatDescs) {
-                            // Material* unchanged → its dedup index is stable.
-                            md.materialAssetIdx = entryMat(i).materialAssetIdx;
-                        } else {
-                            auto [matIt, inserted] = matAssetMap.try_emplace(
-                                    mat, static_cast<uint32_t>(matAssetMap.size()));
-                            md.materialAssetIdx = matIt->second;
-                        }
                         memoMat = mat;
                         memoMd  = md;
                         if (patchMatDescs) {
@@ -4855,13 +4841,12 @@ void VulkanRenderer::Impl::pruneDeadSceneResources() {
 
 // R1: sizes the slot pool, then admits every entry: its BLAS record (deformer states
 // included), its TLAS instance, GeometryDesc and material record.
-// Needs: sb.rayCamPos. Leaves: sb.instances, sb.geomDescs, sb.matAssetMap.
+// Needs: sb.rayCamPos. Leaves: sb.instances, sb.geomDescs.
 void VulkanRenderer::Impl::admitRebuildEntries(SceneBuildFrame& sb, Camera& camera) {
             std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
             const auto& rayCamPos = sb.rayCamPos;
             auto& instances = sb.instances;
             auto& geomDescs = sb.geomDescs;
-            auto& matAssetMap = sb.matAssetMap;
             THREEPP_CPUPROF_NAMED(rbLoop, "scene.R1_entryLoop");
             // The slot pool the edits until the next structural rebuild write
             // into (VulkanCoreSlots.cpp): every entry-indexed GPU buffer this
@@ -4895,12 +4880,6 @@ void VulkanRenderer::Impl::admitRebuildEntries(SceneBuildFrame& sb, Camera& came
             // LOD fade words for the new entry order, before the instance loop
             // below derives the ray masks from them.
             refreshLodFades(true);
-
-            // Material-asset dedup. Meshes sharing one Material C++ pointer
-            // get the same matAssetIdx so the deferred shade's bilinear
-            // reproject gate can accept their cross-mesh taps (tiled walls
-            // etc.). The map grows by ~one entry per UNIQUE Material in the
-            // scene — well below entries.size() in typical content.
 
             // Per-Material MaterialDesc memo. materialFromMesh + the nine
             // texture-of lookups are a ~24-dynamic_cast/entry walk that is a
@@ -5230,13 +5209,7 @@ void VulkanRenderer::Impl::admitRebuildEntries(SceneBuildFrame& sb, Camera& came
                 const Material* matKey = m->material().get();
                 auto memoIt = matDescMemo.find(matKey);
                 if (memoIt == matDescMemo.end()) {
-                    MaterialDesc md0 = buildMaterialDesc(*m);
-                    {
-                        auto [matIt, inserted] = matAssetMap.try_emplace(
-                                matKey, static_cast<uint32_t>(matAssetMap.size()));
-                        md0.materialAssetIdx = matIt->second;
-                    }
-                    memoIt = matDescMemo.emplace(matKey, md0).first;
+                    memoIt = matDescMemo.emplace(matKey, buildMaterialDesc(*m)).first;
                 }
                 // The memo holds the material's desc, which is its table
                 // record; the entry's instance color is in its GeometryDesc.
@@ -5287,11 +5260,10 @@ void VulkanRenderer::Impl::buildRebuildTlas(SceneBuildFrame& sb) {
         }
 
 // R4: uploads the geometry and material desc tables to every frame slot and keeps
-// the host mirrors, the slot path's asset numbering and the instance colours.
-// Needs: sb.geomDescs, sb.matAssetMap.
+// the host mirrors and the instance colours.
+// Needs: sb.geomDescs.
 void VulkanRenderer::Impl::uploadRebuildDescs(SceneBuildFrame& sb) {
             const auto& geomDescs = sb.geomDescs;
-            const auto& matAssetMap = sb.matAssetMap;
             THREEPP_CPUPROF_NAMED(rbDescs, "scene.R4_descUpload");
             // Every per-frame GeometryDesc slot seeded fresh — same ring
             // model as the matDescs loop below; the lean auto-LOD patch
@@ -5322,10 +5294,6 @@ void VulkanRenderer::Impl::uploadRebuildDescs(SceneBuildFrame& sb) {
             }
             for (auto& d : matDescsDirty_) d.clear();
             cacheCullFlags();
-            // The asset numbering the slot path continues (slotMaterialAssetIdx).
-            slotMatAssetIdx_.clear();
-            for (const auto& [mat, idx] : matAssetMap) slotMatAssetIdx_[mat] = {mat ? mat->id : 0u, idx};
-            slotNextMatAssetIdx_ = static_cast<uint32_t>(matAssetMap.size());
             // The table just folded in every span's current instance colors.
             for (auto& sp : entrySpans_) {
                 if (!sp.inst) continue;
@@ -6425,7 +6393,6 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialDescOf(const Ma
                 d.iridescence = 0.0f;             // off by default; lobe is skipped when iridescence == 0
                 d.iridescenceIOR = 1.3f;
                 d.iridescenceThicknessNm = 400.0f;
-                d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
                 d.thickness = 0.0f;               // the volume under a transmissive surface (MaterialWithThickness)
                 d.thinWalled = 1;                 // derived from thickness below: 1 = a sheet seen straight through
                 d.occlusionTexIndex = -1;
@@ -6502,7 +6469,6 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialDescOf(const Ma
             if (auto* tr = v.trans) {
                 d.transmission = tr->transmission;
                 d.ior          = std::max(1.0f, tr->ior);
-                d.dispersion   = std::max(0.0f, tr->dispersion);
                 // glTF permits transmission + alphaMode BLEND together; alpha
                 // is COVERAGE, independent of the transmission tint, and the
                 // spec composite is α·glassResult + (1−α)·background. Smoked
@@ -6709,7 +6675,7 @@ VulkanRenderer::Impl::MaterialDesc VulkanRenderer::Impl::materialDescOf(const Ma
 namespace {
 
     // Whether two byte ranges differ, n a multiple of 4: a word at a time and
-    // with no early exit, so the loop vectorises (the poll compares a 704-byte
+    // with no early exit, so the loop vectorises (the poll compares a 696-byte
     // record per material per frame; memcmp calls were most of its cost).
     bool bytesDiffer(const void* a, const void* b, size_t n) {
         const auto* pa = static_cast<const unsigned char*>(a);

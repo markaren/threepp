@@ -247,12 +247,6 @@ namespace threepp::vulkan::impl {
         // normal, a default material, identity matrixWorld, never in a scene.
         std::shared_ptr<Mesh> slotTombstone_;
 
-        // MaterialDesc::materialAssetIdx outlives one structural rebuild's
-        // dense numbering: the rebuild leaves its map here (with each
-        // material's id, the address-recycling guard) and the slot path
-        // hands a material it has not seen the next index.
-        std::unordered_map<const Material*, std::pair<unsigned int, uint32_t>> slotMatAssetIdx_;
-        uint32_t slotNextMatAssetIdx_ = 0;
 
         // What the per-frame collectors ask of the scene graph, in scene order:
         // the lights and sprites of the visible part, and every SplatCloud,

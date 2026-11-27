@@ -316,16 +316,8 @@ namespace threepp::vulkan_pt {
         float iridescence;
         float iridescenceIOR;
         float iridescenceThicknessNm;
-        float dispersion;
         float thickness;
         int32_t thinWalled;// 1 when thickness is 0 (set on the host, never by the user)
-        // Stable per-Material-asset index, deduplicated by Material* pointer
-        // when the material table is built (VulkanCoreScene.cpp). Adjacent
-        // meshes that share one Material C++ object get the SAME value, so
-        // a reproject/reuse consumer can accept cross-mesh-same-material
-        // taps — kills the visible seam at tiled-wall boundaries during
-        // camera motion. mesh-asset/material-asset only; not a hash.
-        uint32_t materialAssetIdx;
         // Tiled world-anchored detail albedo (MaterialWithDetailMap):
         // LINEAR-space texture, 0.5 = neutral; gbuffer.frag modulates the
         // base albedo by mix(1, 2*detail, strength*fade). -1 = none.
@@ -413,7 +405,7 @@ namespace threepp::vulkan_pt {
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 704,
+    static_assert(sizeof(MaterialDesc) == 696,
                   "MaterialDesc size changed - update the GLSL mirror in this file too.");
 }
 
@@ -459,10 +451,8 @@ struct MaterialDesc {
     float iridescence;
     float iridescenceIOR;
     float iridescenceThicknessNm;
-    float dispersion;
     float thickness;
     int   thinWalled;// 1 when thickness is 0 (set on the host, never by the user)
-    uint  materialAssetIdx;
     int   detailTexIndex;// tiled world-anchored detail albedo; -1 = none
     float detailRepeat;  // repeats per world meter (worldPos.xz anchored)
     float detailStrength;// 0..1

@@ -819,7 +819,6 @@ namespace threepp {
         // THREEPP_VULKAN_NO_SLOTS=1: every content change is a structural
         // rebuild in today's dense layout, the A/B lever against the slots.
         static bool slotsDisabled();
-        uint32_t slotMaterialAssetIdx(const Material* mat);
         // Called at the end of the full expansion with what it built. Edits
         // lastVisibleEntries_, entrySpans_ and every entry-indexed row in
         // place and returns true, or touches nothing the full rebuild reads
@@ -842,9 +841,8 @@ namespace threepp {
         // the frame trySlotEdit edited.
         void refreshSpanMatrices();
         // A mesh's MaterialDesc before its instance color, with every map
-        // admitted to the bindless array; materialAssetIdx left for the
-        // caller. One function for the structural rebuild, the material
-        // patch and the slot path.
+        // admitted to the bindless array. One function for the structural
+        // rebuild, the material patch and the slot path.
         MaterialDesc buildMaterialDesc(Mesh& m);
         // An entry's GeometryDesc for the selected BLAS level, as the
         // structural rebuild and the slot path both write it.
