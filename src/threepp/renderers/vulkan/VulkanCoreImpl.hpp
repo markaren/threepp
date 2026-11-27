@@ -3370,6 +3370,13 @@ namespace threepp {
         // uploadRasterCameraUbo) and is folded in here.
         void addSplatPasses(vulkan::rg::RenderGraph& g);
         void addSecondaryViewSplatPasses(vulkan::rg::RenderGraph& g);
+        // What both views' splat passes finish their params with: view `v`'s
+        // TAA jitter as a projection shear over its render extent `ext`, the
+        // previous VP from v's sky reprojection and the reverse-Z projection
+        // `projRev`, the fog and motion switches, pre-exposure and the
+        // solid-background flag.
+        void finishSplatParams(vulkan::SplatPass::RecordParams& p, const ViewContext& v, VkExtent2D ext,
+                               const Matrix4& projRev) const;
 
         // Stamp the splat depth AOV into the overlay's depth attachment, so
         // the post-resolve overlay draw (wireframe, lines, world sprites,

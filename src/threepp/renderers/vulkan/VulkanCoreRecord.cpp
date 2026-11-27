@@ -1305,55 +1305,11 @@ void VulkanRenderer::Impl::addSplatPasses(rg::RenderGraph& g) {
             auto p = splatParams_;
             p.depthAov    = splatDepthAovAllocated();
             p.depthMedian = splatDepthMedian();
-            // Same sub-pixel jitter the raster prepass used this frame,
-            // reapplied as the same projection shear (uploadRasterCameraUbo):
-            // without it the splats sit a fraction of a pixel off the geometry
-            // they are depth-tested against, and TAA resolves a cloud that
-            // never moved with the frame it is part of.
-            const VkExtent2D ext = renderExtent();
-            const float jClipX = 2.f * view().taaJitterTexels_[0] / static_cast<float>(ext.width);
-            const float jClipY = 2.f * view().taaJitterTexels_[1] / static_cast<float>(ext.height);
-            if (view().orthoFrame_) {
-                p.proj[12] -= jClipX;
-                p.proj[13] -= jClipY;
-                p.jitterClip[0] = -jClipX;
-                p.jitterClip[1] = -jClipY;
-            } else {
-                p.proj[8] += jClipX;
-                p.proj[9] += jClipY;
-                p.jitterClip[0] = jClipX;
-                p.jitterClip[1] = jClipY;
-            }
-
-            // View space -> previous frame's unjittered clip, in one matrix.
-            // taaSkyReproj_ is prevVP * inverse(currVPunjittered) and was built
-            // in uploadRasterCameraUbo BEFORE rasterPrevVP_ rolled over to this
-            // frame, so composing it with this frame's projection is the only
-            // way to get the real previous VP here — and it guarantees the
-            // splat motion vectors and the raster's come from the same
-            // matrices.
             {
-                Matrix4 sky, projRev, prev;
-                std::memcpy(sky.elements.data(), view().taaSkyReproj_.data(), 64);
+                Matrix4 projRev;
                 std::memcpy(projRev.elements.data(), splatProjRevZ_, 64);
-                prev.multiplyMatrices(sky, projRev);
-                std::memcpy(p.prevVPfromView, prev.elements.data(), 64);
+                finishSplatParams(p, view(), renderExtent(), projRev);
             }
-
-            // A medium is active when there is anything to extinguish along the
-            // camera->splat leg. Both terms are the ones splat_common.glsl's
-            // splatFog actually evaluates; with neither, the fog branch is
-            // skipped outright and the frame is bit-identical to a fogless one.
-            p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
-            static const bool noMotionEnv = vulkan::env::flag("THREEPP_VK_SPLAT_NOMOTION");
-            static const bool noFogEnv    = vulkan::env::flag("THREEPP_VK_SPLAT_NOFOG");
-            if (noMotionEnv) p.motionVectors = false;
-            if (noFogEnv)    p.fog = false;
-            // The factor the shade already baked into every sceneHdr store.
-            // Getting this wrong is invisible until the physical camera is on,
-            // and then the splats are wrong by the whole exposure gain.
-            p.preExposure = preExposure();
-            p.bgIsSolidColor = bgSolid_;
             p.checksum       = splatChecksum_;
 
             p.timings        = gpuTimings_.get();// per-stage split, from inside
@@ -1484,6 +1440,57 @@ void VulkanRenderer::Impl::recordSplatStampDraw(VkCommandBuffer cb, VkPipeline p
             vkCmdDraw(cb, 3, 1, 0, 0);
 }
 
+void VulkanRenderer::Impl::finishSplatParams(vulkan::SplatPass::RecordParams& p, const ViewContext& v,
+                                              VkExtent2D ext, const Matrix4& projRev) const {
+            // Same sub-pixel jitter the raster prepass used this frame,
+            // reapplied as the same projection shear (uploadRasterCameraUbo):
+            // without it the splats sit a fraction of a pixel off the geometry
+            // they are depth-tested against, and TAA resolves a cloud that
+            // never moved with the frame it is part of.
+            const float jClipX = 2.f * v.taaJitterTexels_[0] / static_cast<float>(ext.width);
+            const float jClipY = 2.f * v.taaJitterTexels_[1] / static_cast<float>(ext.height);
+            if (v.orthoFrame_) {
+                p.proj[12] -= jClipX;
+                p.proj[13] -= jClipY;
+                p.jitterClip[0] = -jClipX;
+                p.jitterClip[1] = -jClipY;
+            } else {
+                p.proj[8] += jClipX;
+                p.proj[9] += jClipY;
+                p.jitterClip[0] = jClipX;
+                p.jitterClip[1] = jClipY;
+            }
+
+            // View space -> previous frame's unjittered clip, in one matrix.
+            // taaSkyReproj_ is prevVP * inverse(currVPunjittered) and was built
+            // in uploadRasterCameraUbo BEFORE rasterPrevVP_ rolled over to this
+            // frame, so composing it with this frame's projection is the only
+            // way to get the real previous VP here — and it guarantees the
+            // splat motion vectors and the raster's come from the same
+            // matrices.
+            {
+                Matrix4 sky, prev;
+                std::memcpy(sky.elements.data(), v.taaSkyReproj_.data(), 64);
+                prev.multiplyMatrices(sky, projRev);
+                std::memcpy(p.prevVPfromView, prev.elements.data(), 64);
+            }
+
+            // A medium is active when there is anything to extinguish along the
+            // camera->splat leg. Both terms are the ones splat_common.glsl's
+            // splatFog actually evaluates; with neither, the fog branch is
+            // skipped outright and the frame is bit-identical to a fogless one.
+            p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
+            static const bool noMotionEnv = vulkan::env::flag("THREEPP_VK_SPLAT_NOMOTION");
+            static const bool noFogEnv    = vulkan::env::flag("THREEPP_VK_SPLAT_NOFOG");
+            if (noMotionEnv) p.motionVectors = false;
+            if (noFogEnv)    p.fog = false;
+            // The factor the shade already baked into every sceneHdr store.
+            // Getting this wrong is invisible until the physical camera is on,
+            // and then the splats are wrong by the whole exposure gain.
+            p.preExposure    = preExposure();
+            p.bgIsSolidColor = bgSolid_;
+}
+
 void VulkanRenderer::Impl::addSecondaryViewSplatPasses(rg::RenderGraph& g) {
             // ── Splats into a secondary view's linear-HDR scene ─────────────────
             // Same slot in the frame as the primary's (after the shade, before
@@ -1535,34 +1542,7 @@ void VulkanRenderer::Impl::addSecondaryViewSplatPasses(rg::RenderGraph& g) {
             // secondary runs the built-in TAA (VulkanCoreFrame.cpp's tail), so
             // the splats have to be jittered with the raster they are composited
             // over and reprojected with the history they are resolved against.
-            const VkExtent2D ext = v.renderExt;
-            const float jClipX = 2.f * v.taaJitterTexels_[0] / static_cast<float>(ext.width);
-            const float jClipY = 2.f * v.taaJitterTexels_[1] / static_cast<float>(ext.height);
-            if (v.orthoFrame_) {
-                p.proj[12] -= jClipX;
-                p.proj[13] -= jClipY;
-                p.jitterClip[0] = -jClipX;
-                p.jitterClip[1] = -jClipY;
-            } else {
-                p.proj[8] += jClipX;
-                p.proj[9] += jClipY;
-                p.jitterClip[0] = jClipX;
-                p.jitterClip[1] = jClipY;
-            }
-            {
-                Matrix4 sky, prev;
-                std::memcpy(sky.elements.data(), v.taaSkyReproj_.data(), 64);
-                prev.multiplyMatrices(sky, projRev);
-                std::memcpy(p.prevVPfromView, prev.elements.data(), 64);
-            }
-
-            p.fog = (heightFogEnabled_ && heightFogDensity_ > 0.f) || murkDensity_ > 0.f;
-            static const bool noMotionEnv = vulkan::env::flag("THREEPP_VK_SPLAT_NOMOTION");
-            static const bool noFogEnv    = vulkan::env::flag("THREEPP_VK_SPLAT_NOFOG");
-            if (noMotionEnv) p.motionVectors = false;
-            if (noFogEnv)    p.fog = false;
-            p.preExposure    = preExposure();
-            p.bgIsSolidColor = bgSolid_;
+            finishSplatParams(p, v, v.renderExt, projRev);
 
             auto pass = g.addPass("splats", [this, p, f = currentFrame](VkCommandBuffer c) {
                 splat_->record(c, f, p);
