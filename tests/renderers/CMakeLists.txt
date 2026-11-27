@@ -44,6 +44,46 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # whichever tests reach them first (VulkanPipelineWarmup.cpp has the
     # details). A few seconds when warm. CTest adds it to any run that selects
     # a test requiring it; `ctest -FS vulkan_pipelines` leaves it out.
+    # A plain exit-code Vulkan test: <name>.cpp linked against threepp, run by
+    # CTest, exit 42 (no Vulkan device) reported as Skipped. SRC includes src/
+    # (the renderer's own headers); CAPTURE also examples/libs
+    # (capture_util.hpp); DATA and PROJECT define DATA_FOLDER and
+    # PROJECT_FOLDER; NORT registers <name minus _test>_nort_test too, the same
+    # binary with THREEPP_VULKAN_NO_RT=1; TIMEOUT and ENVIRONMENT go on every
+    # registration.
+    function(add_vulkan_test name)
+        cmake_parse_arguments(VT "SRC;CAPTURE;DATA;PROJECT;NORT" "TIMEOUT" "ENVIRONMENT" ${ARGN})
+        add_executable(${name} ${name}.cpp)
+        target_link_libraries(${name} PRIVATE threepp)
+        if (VT_SRC OR VT_CAPTURE)
+            target_include_directories(${name} PRIVATE "${PROJECT_SOURCE_DIR}/src")
+        endif ()
+        if (VT_CAPTURE)
+            target_include_directories(${name} PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
+        endif ()
+        if (VT_DATA)
+            target_compile_definitions(${name} PRIVATE DATA_FOLDER="${THREEPP_DATA_DIR}")
+        endif ()
+        if (VT_PROJECT)
+            target_compile_definitions(${name} PRIVATE PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
+        endif ()
+        set(_props SKIP_RETURN_CODE 42)
+        if (VT_TIMEOUT)
+            list(APPEND _props TIMEOUT ${VT_TIMEOUT})
+        endif ()
+        add_test(NAME ${name} COMMAND ${name})
+        set_tests_properties(${name} PROPERTIES ${_props})
+        if (VT_ENVIRONMENT)
+            set_tests_properties(${name} PROPERTIES ENVIRONMENT "${VT_ENVIRONMENT}")
+        endif ()
+        if (VT_NORT)
+            string(REGEX REPLACE "_test$" "_nort_test" _nort ${name})
+            set(_nortEnv THREEPP_VULKAN_NO_RT=1 ${VT_ENVIRONMENT})
+            add_test(NAME ${_nort} COMMAND ${name})
+            set_tests_properties(${_nort} PROPERTIES ${_props} ENVIRONMENT "${_nortEnv}")
+        endif ()
+    endfunction()
+
     add_executable(VulkanPipelineWarmup VulkanPipelineWarmup.cpp)
     target_link_libraries(VulkanPipelineWarmup PRIVATE threepp)
     add_test(NAME VulkanPipelineWarmup COMMAND VulkanPipelineWarmup)
@@ -70,32 +110,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # SKIPs without a ray-tracing device.
     add_test_executable(VulkanDepthAov_test)
 
-    add_executable(VulkanGolden_test VulkanGolden_test.cpp)
-    target_link_libraries(VulkanGolden_test PRIVATE threepp)
-    target_include_directories(VulkanGolden_test PRIVATE
-            "${PROJECT_SOURCE_DIR}/src"
-            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
-    target_compile_definitions(VulkanGolden_test PRIVATE
-            DATA_FOLDER="${THREEPP_DATA_DIR}"
-            PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
-    add_test(NAME VulkanGolden_test COMMAND VulkanGolden_test)
-    set_tests_properties(VulkanGolden_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanGolden_test CAPTURE DATA PROJECT)
 
     # scene.environmentIntensity / backgroundIntensity / environmentRotation on
     # the Vulkan path (GLEnvironmentKnobs_test is the GL twin). Same plain
     # exit-code shape and skip code as the golden test.
-    add_executable(VulkanEnvKnobs_test VulkanEnvKnobs_test.cpp)
-    target_link_libraries(VulkanEnvKnobs_test PRIVATE threepp)
-    add_test(NAME VulkanEnvKnobs_test COMMAND VulkanEnvKnobs_test)
-    set_tests_properties(VulkanEnvKnobs_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanEnvKnobs_test)
 
     # An OrthographicCamera declared a 3D view takes the deferred path: the
     # nearest standard-material surface wins and the background shows, as
     # under a PerspectiveCamera. Same shape and skip code.
-    add_executable(VulkanOrthoView_test VulkanOrthoView_test.cpp)
-    target_link_libraries(VulkanOrthoView_test PRIVATE threepp)
-    add_test(NAME VulkanOrthoView_test COMMAND VulkanOrthoView_test)
-    set_tests_properties(VulkanOrthoView_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanOrthoView_test)
 
     # Multi-view deferred rendering: N cameras, one scene, one submission.
     # Parity against the primary, temporal-history independence, add/remove
@@ -103,37 +128,21 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # per-view depth/instance-id AOVs. Same plain exit-code + skip-42 shape as
     # the goldens; the opt-in --bench / --sweep modes report timings and are not
     # part of the assertions.
-    add_executable(VulkanMultiView_test VulkanMultiView_test.cpp)
-    target_link_libraries(VulkanMultiView_test PRIVATE threepp)
-    target_include_directories(VulkanMultiView_test PRIVATE
-            "${PROJECT_SOURCE_DIR}/src"
-            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
-    add_test(NAME VulkanMultiView_test COMMAND VulkanMultiView_test)
-    set_tests_properties(VulkanMultiView_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanMultiView_test CAPTURE)
 
     # Does a cloud OCCLUDE the post-resolve overlay? Measures the plain path's
     # correctness on the kSnapUiBlend fill route (an untextured transparent
     # MeshBasicMaterial), which is where the auto-latch has to fire for the
     # stamp to run at all. Plain exit-code + skip-42 like the goldens, without a
     # stored image: the overlay behind the cloud goes, the part beside it stays.
-    add_executable(SplatOverlayOcclusion_probe SplatOverlayOcclusion_probe.cpp)
-    target_link_libraries(SplatOverlayOcclusion_probe PRIVATE threepp)
-    target_include_directories(SplatOverlayOcclusion_probe PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME SplatOverlayOcclusion_probe COMMAND SplatOverlayOcclusion_probe)
-    set_tests_properties(SplatOverlayOcclusion_probe PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(SplatOverlayOcclusion_probe SRC)
 
     # Gaussian-splat compute tile rasterizer: bit-exact repeat-frame
     # determinism (the gate on the prefix-sum tile expansion — an atomic-append
     # expansion passes every visual check and fails this one), splat-behind-mesh
     # occlusion, and a golden image for a GENERATED cloud so the repo needs no
     # asset. Same plain exit-code + skip-42 shape as the goldens.
-    add_executable(VulkanSplat_test VulkanSplat_test.cpp)
-    target_link_libraries(VulkanSplat_test PRIVATE threepp)
-    target_include_directories(VulkanSplat_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    target_compile_definitions(VulkanSplat_test PRIVATE
-            PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
-    add_test(NAME VulkanSplat_test COMMAND VulkanSplat_test)
-    set_tests_properties(VulkanSplat_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanSplat_test SRC PROJECT)
 
     # Splats in the mirror (plans/splat-volume-reflections.md, test-ladder items
     # 3 and 4): the two claims only a rendered frame can settle — a cloud shows
@@ -146,16 +155,7 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # REGISTERED TWICE, and the pair IS the A/B: the .off run asserts the
     # opposite of what the default run asserts, so the effect is pinned to
     # svLeg rather than to "the image changed".
-    add_executable(VulkanSplatVolume_test VulkanSplatVolume_test.cpp)
-    target_link_libraries(VulkanSplatVolume_test PRIVATE threepp)
-    target_include_directories(VulkanSplatVolume_test PRIVATE
-            "${PROJECT_SOURCE_DIR}/src"
-            "${PROJECT_SOURCE_DIR}/examples/libs")# capture_util.hpp
-    target_compile_definitions(VulkanSplatVolume_test PRIVATE
-            DATA_FOLDER="${THREEPP_DATA_DIR}"
-            PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
-    add_test(NAME VulkanSplatVolume_test COMMAND VulkanSplatVolume_test)
-    set_tests_properties(VulkanSplatVolume_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanSplatVolume_test CAPTURE DATA PROJECT)
     add_test(NAME VulkanSplatVolume_test.off COMMAND VulkanSplatVolume_test)
     set_tests_properties(VulkanSplatVolume_test.off PROPERTIES
             SKIP_RETURN_CODE 42
@@ -191,23 +191,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # driver must agree on, unlike the pixel goldens above, so it is the one
     # Vulkan test CI can run on a software rasteriser. Skips 42 when there is no
     # device OR no validation layer, since without the layer it proves nothing.
-    add_executable(VulkanValidation_test VulkanValidation_test.cpp)
-    target_link_libraries(VulkanValidation_test PRIVATE threepp)
-    target_include_directories(VulkanValidation_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanValidation_test COMMAND VulkanValidation_test)
-    # Generous: on lavapipe every frame is ray-traced deferred shading on the CPU,
-    # and CTest's default 1500 s is not obviously enough on a loaded runner.
-    set_tests_properties(VulkanValidation_test PROPERTIES
-            SKIP_RETURN_CODE 42
-            TIMEOUT 2400)
-    # The same sequence in the no-ray-tracing mode (THREEPP_VULKAN_NO_RT=1): no
-    # acceleration structures, the no-ray-query shader variants. Forced by the
-    # knob so RT hardware and RT-capable lavapipe cover it too.
-    add_test(NAME VulkanValidation_nort_test COMMAND VulkanValidation_test)
-    set_tests_properties(VulkanValidation_nort_test PROPERTIES
-            ENVIRONMENT "THREEPP_VULKAN_NO_RT=1"
-            SKIP_RETURN_CODE 42
-            TIMEOUT 2400)
+    # The timeout is generous: on lavapipe every frame is ray-traced deferred
+    # shading on the CPU, and CTest's default 1500 s is not obviously enough on
+    # a loaded runner. NORT runs the same sequence in the no-ray-tracing mode
+    # (THREEPP_VULKAN_NO_RT=1): no acceleration structures, the no-ray-query
+    # shader variants. Forced by the knob so RT hardware and RT-capable lavapipe
+    # cover it too.
+    add_vulkan_test(VulkanValidation_test SRC NORT TIMEOUT 2400)
 
     # GPU per-instance world matrices vs the CPU's, bit for bit. The gate on
     # stage 1 of plans/gpu-driven-instances.md: instance_expand.comp produces
@@ -215,86 +205,50 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # thing that makes the later stages safe is that the two are provably the
     # same numbers. Numeric (not pixel), so hardware-independent — but it needs
     # a device, hence the same skip code as the goldens.
-    add_executable(VulkanInstanceExpand_test VulkanInstanceExpand_test.cpp)
-    target_link_libraries(VulkanInstanceExpand_test PRIVATE threepp)
-    target_include_directories(VulkanInstanceExpand_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanInstanceExpand_test COMMAND VulkanInstanceExpand_test)
-    set_tests_properties(VulkanInstanceExpand_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanInstanceExpand_test SRC)
 
     # setShadowCacheStaleFrames: a cached cascade waits for its redraw after
     # the static casters change, and no shadow goes missing meanwhile.
-    add_executable(VulkanShadowCacheStale_test VulkanShadowCacheStale_test.cpp)
-    target_link_libraries(VulkanShadowCacheStale_test PRIVATE threepp)
-    add_test(NAME VulkanShadowCacheStale_test COMMAND VulkanShadowCacheStale_test)
-    set_tests_properties(VulkanShadowCacheStale_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanShadowCacheStale_test)
 
     # An instance-matrix edit makes only the changed instances moving
     # (TlasStats::movingEntries), not the whole InstancedMesh.
-    add_executable(VulkanMovedInstances_test VulkanMovedInstances_test.cpp)
-    target_link_libraries(VulkanMovedInstances_test PRIVATE threepp)
-    add_test(NAME VulkanMovedInstances_test COMMAND VulkanMovedInstances_test)
-    set_tests_properties(VulkanMovedInstances_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanMovedInstances_test)
 
     # A large span's draw records, kept between frames, stay true to the entries
     # through every kind of row edit (THREEPP_VK_SPAN_RECORDS_CHECK).
-    add_executable(VulkanSpanRecords_test VulkanSpanRecords_test.cpp)
-    target_link_libraries(VulkanSpanRecords_test PRIVATE threepp)
-    add_test(NAME VulkanSpanRecords_test COMMAND VulkanSpanRecords_test)
-    set_tests_properties(VulkanSpanRecords_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanSpanRecords_test)
 
     # InstancedMesh::setColorAt tints each instance (per-entry MaterialDesc
     # albedo), set before the first frame, created late, and edited in place.
-    add_executable(VulkanInstanceColor_test VulkanInstanceColor_test.cpp)
-    target_link_libraries(VulkanInstanceColor_test PRIVATE threepp)
-    add_test(NAME VulkanInstanceColor_test COMMAND VulkanInstanceColor_test)
-    set_tests_properties(VulkanInstanceColor_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanInstanceColor_test)
 
     # In-place geometry edits: every edited attribute (vertex color, uv)
     # reaches the GPU on the occasional and the per-frame refresh paths, and a
     # packed attribute edited out of its packed range is rebuilt, not clamped.
-    add_executable(VulkanGeometryRefresh_test VulkanGeometryRefresh_test.cpp)
-    target_link_libraries(VulkanGeometryRefresh_test PRIVATE threepp)
-    add_test(NAME VulkanGeometryRefresh_test COMMAND VulkanGeometryRefresh_test)
-    set_tests_properties(VulkanGeometryRefresh_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanGeometryRefresh_test)
 
     # An auto-LOD chain lands with ray query and without it (a level is then
     # its index buffer alone), and the raster draws fewer triangles at distance.
-    add_executable(VulkanAutoLod_test VulkanAutoLod_test.cpp)
-    target_link_libraries(VulkanAutoLod_test PRIVATE threepp)
-    add_test(NAME VulkanAutoLod_test COMMAND VulkanAutoLod_test)
-    set_tests_properties(VulkanAutoLod_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanAutoLod_test)
 
     # A geometry only overlay meshes draw (wireframe, overlay layer) gets no
     # acceleration structure: it still draws, no ray meets it, its edits record
     # no BLAS refit, and a solid mesh that comes to share it is traced.
-    add_executable(VulkanOverlayBlas_test VulkanOverlayBlas_test.cpp)
-    target_link_libraries(VulkanOverlayBlas_test PRIVATE threepp)
-    add_test(NAME VulkanOverlayBlas_test COMMAND VulkanOverlayBlas_test)
-    set_tests_properties(VulkanOverlayBlas_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanOverlayBlas_test)
 
     # Object3D::visible / material visible toggles at run time: no structural
     # rebuild, and the hidden mesh is gone from the raster and the ray hits.
-    add_executable(VulkanVisibilityToggle_test VulkanVisibilityToggle_test.cpp)
-    target_link_libraries(VulkanVisibilityToggle_test PRIVATE threepp)
-    add_test(NAME VulkanVisibilityToggle_test COMMAND VulkanVisibilityToggle_test)
-    set_tests_properties(VulkanVisibilityToggle_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanVisibilityToggle_test)
 
     # A frame draws the lights and sprites the scene holds at that render():
     # hidden groups, additions, removals, a second scene and a HUD in one frame.
-    add_executable(VulkanSceneCensus_test VulkanSceneCensus_test.cpp)
-    target_link_libraries(VulkanSceneCensus_test PRIVATE threepp)
-    add_test(NAME VulkanSceneCensus_test COMMAND VulkanSceneCensus_test)
-    set_tests_properties(VulkanSceneCensus_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanSceneCensus_test)
 
     # A version bump of any one tracked geometry attribute (position, normal,
     # uv, uv2, color, index) is seen on a frame whose scene did not otherwise
     # change (the lean diff), with and without ray tracing.
-    add_executable(VulkanAttributeEdit_test VulkanAttributeEdit_test.cpp)
-    target_link_libraries(VulkanAttributeEdit_test PRIVATE threepp)
-    add_test(NAME VulkanAttributeEdit_test COMMAND VulkanAttributeEdit_test)
-    add_test(NAME VulkanAttributeEdit_nort_test COMMAND VulkanAttributeEdit_test)
-    set_tests_properties(VulkanAttributeEdit_test VulkanAttributeEdit_nort_test PROPERTIES SKIP_RETURN_CODE 42)
-    set_tests_properties(VulkanAttributeEdit_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+    add_vulkan_test(VulkanAttributeEdit_test NORT)
 
     # Content streamed through the entry list the way CellStreamer and the
     # forest's LODs drive it (cells detached and re-attached, an InstancedMesh
@@ -302,23 +256,13 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # its frame in structural rebuilds, history resets and milliseconds. The
     # gate of plans/gpu-driven-instances.md stage 2a (stable entry slots).
     # Twice: ray traced where the GPU can, and in the no-ray-tracing mode.
-    add_executable(VulkanEntryChurn_test VulkanEntryChurn_test.cpp)
-    target_link_libraries(VulkanEntryChurn_test PRIVATE threepp)
-    add_test(NAME VulkanEntryChurn_test COMMAND VulkanEntryChurn_test)
-    add_test(NAME VulkanEntryChurn_nort_test COMMAND VulkanEntryChurn_test)
-    set_tests_properties(VulkanEntryChurn_test VulkanEntryChurn_nort_test PROPERTIES SKIP_RETURN_CODE 42)
-    set_tests_properties(VulkanEntryChurn_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+    add_vulkan_test(VulkanEntryChurn_test NORT)
 
     # Stage 2 of plans/gpu-driven-instances.md: the G-buffer draw records
     # draw_gen.comp writes for instanced meshes against the CPU's, byte for
     # byte, while instances move, a count changes and the camera orbits.
     # Twice: ray traced where the GPU can, and in the no-ray-tracing mode.
-    add_executable(VulkanDrawGen_test VulkanDrawGen_test.cpp)
-    target_link_libraries(VulkanDrawGen_test PRIVATE threepp)
-    add_test(NAME VulkanDrawGen_test COMMAND VulkanDrawGen_test)
-    add_test(NAME VulkanDrawGen_nort_test COMMAND VulkanDrawGen_test)
-    set_tests_properties(VulkanDrawGen_test VulkanDrawGen_nort_test PROPERTIES SKIP_RETURN_CODE 42)
-    set_tests_properties(VulkanDrawGen_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+    add_vulkan_test(VulkanDrawGen_test NORT)
 
     # CPU wave-height query of the FFT ocean against an analytic Gerstner
     # wave: the choppy-displacement inversion and the cascade-1 rotation.
@@ -346,30 +290,20 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
 
     # More than 65,535 entries: the entry added last must still shade with its
     # own material (the ids attachment's index channel wrapped at 16 bits).
-    add_executable(VulkanInstanceIdRange_test VulkanInstanceIdRange_test.cpp)
-    target_link_libraries(VulkanInstanceIdRange_test PRIVATE threepp)
-    add_test(NAME VulkanInstanceIdRange_test COMMAND VulkanInstanceIdRange_test)
-    set_tests_properties(VulkanInstanceIdRange_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanInstanceIdRange_test)
 
     # ParticleField phase 0: the entity must be ONE entry whatever its capacity.
     # Asserts the three O(entries) CPU phases stay flat from a 10k- to a
     # 300k-particle field (read straight out of the CPU phase profiler), that a
     # field adds exactly one entry, and that its buffer plumbing provokes no
     # validation errors. Needs a device, hence the same skip code as the goldens.
-    add_executable(VulkanParticleField_test VulkanParticleField_test.cpp)
-    target_link_libraries(VulkanParticleField_test PRIVATE threepp)
-    target_include_directories(VulkanParticleField_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanParticleField_test COMMAND VulkanParticleField_test)
-    set_tests_properties(VulkanParticleField_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanParticleField_test SRC)
 
     # ParticleField::GridSmoke, measured on the solver's own state (readGridSmoke):
     # the projection leaves no divergence the solve did not, a sealed box keeps its
     # smoke, walls keep their two sides apart, a symmetric plume stays symmetric,
     # still solids move nothing, and the plume does not depend on the grid.
-    add_executable(VulkanGridSmoke_test VulkanGridSmoke_test.cpp)
-    target_link_libraries(VulkanGridSmoke_test PRIVATE threepp)
-    add_test(NAME VulkanGridSmoke_test COMMAND VulkanGridSmoke_test)
-    set_tests_properties(VulkanGridSmoke_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanGridSmoke_test)
 
     # BillboardRepr::softDistance: a sprite through the ground fades into it
     # instead of being cut along a line, off is unchanged, and a sprite with
@@ -384,26 +318,17 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # The depth of field composites without seams: no thin dark lines along
     # the gather's tile borders around the focus band, none across a bright
     # emissive just in front of the focus plane; a flat ground stays flat.
-    add_executable(VulkanDofSeam_test VulkanDofSeam_test.cpp)
-    target_link_libraries(VulkanDofSeam_test PRIVATE threepp)
-    add_test(NAME VulkanDofSeam_test COMMAND VulkanDofSeam_test)
-    set_tests_properties(VulkanDofSeam_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanDofSeam_test)
 
     # A strong spot light's beam in fog: smooth per frame, as bright settled as
     # the frames carry, and no grainier than the clear sky beside it (the march
     # is clipped to the cone and sampled equi-angularly about the lamp).
-    add_executable(VulkanSpotBeamFog_test VulkanSpotBeamFog_test.cpp)
-    target_link_libraries(VulkanSpotBeamFog_test PRIVATE threepp)
-    add_test(NAME VulkanSpotBeamFog_test COMMAND VulkanSpotBeamFog_test)
-    set_tests_properties(VulkanSpotBeamFog_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanSpotBeamFog_test)
 
     # A GrassMesh's motion vectors are its sway since the last frame: zero when
     # time is frozen or the distance gate freezes it, the wind's step when it
     # sways (TAA and the upscalers reproject the grass through them).
-    add_executable(VulkanGrassMotion_test VulkanGrassMotion_test.cpp)
-    target_link_libraries(VulkanGrassMotion_test PRIVATE threepp)
-    add_test(NAME VulkanGrassMotion_test COMMAND VulkanGrassMotion_test)
-    set_tests_properties(VulkanGrassMotion_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanGrassMotion_test)
 
     # The shared-memory ocean IFFT equals the butterfly path it replaces (to
     # 1e-5 relative RMS) and the transform both have always computed, at every
@@ -422,194 +347,114 @@ if (THREEPP_WITH_VULKAN AND THREEPP_WITH_GLFW)
     # water's G-buffer normal along the radius, a rougher struck disc, grass
     # leaning out though its distance gate froze it, no motion while still,
     # and nothing at all on a scene or a material without it.
-    add_executable(VulkanDownwash_test VulkanDownwash_test.cpp)
-    target_link_libraries(VulkanDownwash_test PRIVATE threepp)
-    add_test(NAME VulkanDownwash_test COMMAND VulkanDownwash_test)
-    set_tests_properties(VulkanDownwash_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanDownwash_test)
 
     # A dithered LOD crossfade (Mesh::setFade, InstancedMesh::setFadeAt): a
     # plain fade f and a complement fade 1 - f cover every pixel of two
     # coincident quads exactly once, in shares f and 1 - f, with a pattern
     # that moves every frame, and the temporal resolve settles on the blend.
-    add_executable(VulkanLodDither_test VulkanLodDither_test.cpp)
-    target_link_libraries(VulkanLodDither_test PRIVATE threepp)
-    add_test(NAME VulkanLodDither_test COMMAND VulkanLodDither_test)
-    set_tests_properties(VulkanLodDither_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanLodDither_test)
 
     # A threepp::Sky is the environment on the deferred renderer, not a mesh:
     # its dome builds no entry, the sky it describes lights and backs the
     # scene, follows its sun in place, and yields to a scene.environment.
-    add_executable(VulkanSky_test VulkanSky_test.cpp)
-    target_link_libraries(VulkanSky_test PRIVATE threepp)
-    target_include_directories(VulkanSky_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanSky_test COMMAND VulkanSky_test)
-    set_tests_properties(VulkanSky_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanSky_test SRC)
 
     # The path-trace feature (pathTraceBegin / pathTraceRead): a furnace, the
     # session API, a lit scene against the deferred frame, no validation errors.
-    add_executable(VulkanPathTrace_test VulkanPathTrace_test.cpp)
-    target_link_libraries(VulkanPathTrace_test PRIVATE threepp)
-    target_include_directories(VulkanPathTrace_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanPathTrace_test COMMAND VulkanPathTrace_test)
-    set_tests_properties(VulkanPathTrace_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanPathTrace_test SRC)
 
     # The path tracer's light counted once and in full: an emitter through a
     # thin pane, each fix against its switch's old way.
-    add_executable(VulkanPathTraceLights_test VulkanPathTraceLights_test.cpp)
-    target_link_libraries(VulkanPathTraceLights_test PRIVATE threepp)
-    add_test(NAME VulkanPathTraceLights_test COMMAND VulkanPathTraceLights_test)
-    set_tests_properties(VulkanPathTraceLights_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanPathTraceLights_test)
 
     # A material's aoMap (glTF occlusionTexture) darkens its indirect light,
     # never a light's: a split map under a uniform environment and under a
     # sun, the glTF strength, a map of 1, an unlit surface. Twice: ray traced
     # where the GPU can, and in the no-ray-tracing mode.
-    add_executable(VulkanAoMap_test VulkanAoMap_test.cpp)
-    target_link_libraries(VulkanAoMap_test PRIVATE threepp)
-    add_test(NAME VulkanAoMap_test COMMAND VulkanAoMap_test)
-    add_test(NAME VulkanAoMap_nort_test COMMAND VulkanAoMap_test)
-    set_tests_properties(VulkanAoMap_test VulkanAoMap_nort_test PROPERTIES SKIP_RETURN_CODE 42)
-    set_tests_properties(VulkanAoMap_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+    add_vulkan_test(VulkanAoMap_test NORT)
 
     # A material edited after its first frame (a colour, an emission, a map's
     # offset, a map swapped, an edit while hidden) shows without needsUpdate(),
     # as under the GL renderer.
-    add_executable(VulkanMaterialEdits_test VulkanMaterialEdits_test.cpp)
-    target_link_libraries(VulkanMaterialEdits_test PRIVATE threepp)
-    add_test(NAME VulkanMaterialEdits_test COMMAND VulkanMaterialEdits_test)
-    add_test(NAME VulkanMaterialEdits_nort_test COMMAND VulkanMaterialEdits_test)
-    set_tests_properties(VulkanMaterialEdits_test VulkanMaterialEdits_nort_test PROPERTIES SKIP_RETURN_CODE 42)
-    set_tests_properties(VulkanMaterialEdits_nort_test PROPERTIES ENVIRONMENT "THREEPP_VULKAN_NO_RT=1")
+    add_vulkan_test(VulkanMaterialEdits_test NORT)
 
     # A mesh removed and freed between two frames: the calls that walk the last
     # frame's entries (setEmissiveCastsLight, setStableCorrespondence,
     # enableVertexInterop) never read it, and a freed skinned clone's GPU state
     # goes with it although its geometry lives on in the template.
-    add_executable(VulkanFreedMesh_test VulkanFreedMesh_test.cpp)
-    target_link_libraries(VulkanFreedMesh_test PRIVATE threepp)
-    add_test(NAME VulkanFreedMesh_test COMMAND VulkanFreedMesh_test)
-    set_tests_properties(VulkanFreedMesh_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanFreedMesh_test)
 
     # The screenshot path's sizing. writeFramebuffer used to take w/h from the
     # canvas's requested window size while the pixels came from the swapchain;
     # a window the platform clamped (Windows work-area clamp) then over-read
     # the readback buffer by the difference and crashed. Gates the odd-height
     # case and the requested-vs-actual case, both against framebufferSize().
-    add_executable(VulkanFramebufferWrite_test VulkanFramebufferWrite_test.cpp)
-    target_link_libraries(VulkanFramebufferWrite_test PRIVATE threepp)
-    target_include_directories(VulkanFramebufferWrite_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanFramebufferWrite_test COMMAND VulkanFramebufferWrite_test)
-    set_tests_properties(VulkanFramebufferWrite_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanFramebufferWrite_test SRC)
 
     # readRGBPixels across a resize: the frame rendered, or nothing (headless).
-    add_executable(VulkanReadbackResize_test VulkanReadbackResize_test.cpp)
-    target_link_libraries(VulkanReadbackResize_test PRIVATE threepp)
-    add_test(NAME VulkanReadbackResize_test COMMAND VulkanReadbackResize_test)
-    set_tests_properties(VulkanReadbackResize_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanReadbackResize_test)
 
     # A secondary view bigger than the primary turns splats on; the primary's
     # splat sets must follow the grown tile-range buffer (headless). Only the
     # validation layer sees a set naming a destroyed buffer, so it runs strict.
-    add_executable(VulkanSplatViewGrow_test VulkanSplatViewGrow_test.cpp)
-    target_link_libraries(VulkanSplatViewGrow_test PRIVATE threepp)
-    add_test(NAME VulkanSplatViewGrow_test COMMAND VulkanSplatViewGrow_test)
-    set_tests_properties(VulkanSplatViewGrow_test PROPERTIES SKIP_RETURN_CODE 42
-            ENVIRONMENT "THREEPP_VULKAN_VALIDATION=1;THREEPP_VULKAN_STRICT_VALIDATION=1")
+    add_vulkan_test(VulkanSplatViewGrow_test ENVIRONMENT THREEPP_VULKAN_VALIDATION=1 THREEPP_VULKAN_STRICT_VALIDATION=1)
 
     # A sprite texture freed and a new one made at its address draws the new
     # one; the world-sprite and HUD caches free dead textures' images and keep
     # live ones (headless). Strict validation catches an image freed too early.
     # ParticleSprites on Vulkan's particle pass: drawn square on a wide canvas, and its
     # anisotropy reaches the particle lighting (gl/GLParticleSprites_test is the GL twin).
-    add_executable(VulkanParticleSprites_test VulkanParticleSprites_test.cpp)
-    target_link_libraries(VulkanParticleSprites_test PRIVATE threepp)
-    add_test(NAME VulkanParticleSprites_test COMMAND VulkanParticleSprites_test)
-    set_tests_properties(VulkanParticleSprites_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanParticleSprites_test)
 
-    add_executable(VulkanSpriteTextureReuse_test VulkanSpriteTextureReuse_test.cpp)
-    target_link_libraries(VulkanSpriteTextureReuse_test PRIVATE threepp)
-    add_test(NAME VulkanSpriteTextureReuse_test COMMAND VulkanSpriteTextureReuse_test)
-    set_tests_properties(VulkanSpriteTextureReuse_test PROPERTIES SKIP_RETURN_CODE 42
-            ENVIRONMENT "THREEPP_VULKAN_VALIDATION=1;THREEPP_VULKAN_STRICT_VALIDATION=1")
+    add_vulkan_test(VulkanSpriteTextureReuse_test ENVIRONMENT THREEPP_VULKAN_VALIDATION=1 THREEPP_VULKAN_STRICT_VALIDATION=1)
 
     # A mesh, geometry and material that are freed and recreated between two
     # frames come back at the same addresses, at version 0 again. The scene sync
     # compared exactly those, took the unchanged fast path, and went on rendering
     # the PREVIOUS material. Gates the unique-id compare that tells them apart.
-    add_executable(VulkanRecycledAddress_test VulkanRecycledAddress_test.cpp)
-    target_link_libraries(VulkanRecycledAddress_test PRIVATE threepp)
-    target_include_directories(VulkanRecycledAddress_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanRecycledAddress_test COMMAND VulkanRecycledAddress_test)
-    set_tests_properties(VulkanRecycledAddress_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanRecycledAddress_test SRC)
 
     # setEmissiveCastsLight shared a GeometryDesc.flags bit with "the index buffer
     # is uint16": switching a mesh back to a light made every ray that hit it read
     # its indices at the wrong width and fetch vertices far out of bounds (device
     # lost), and switching one with uint32 indices to glow-only crumpled it in
     # every reflection.
-    add_executable(VulkanEmissiveCastsLight_test VulkanEmissiveCastsLight_test.cpp)
-    target_link_libraries(VulkanEmissiveCastsLight_test PRIVATE threepp)
-    target_include_directories(VulkanEmissiveCastsLight_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanEmissiveCastsLight_test COMMAND VulkanEmissiveCastsLight_test)
-    set_tests_properties(VulkanEmissiveCastsLight_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanEmissiveCastsLight_test SRC)
 
     # The specular light of an emissive mesh on a glossy floor: a light whose
     # NEE strata are too sparse for the lobe is drawn by the reflection ray (its
     # mirrored image, where the strata drew one highlight each), and a moving
     # light keeps its strata count (floor(extra * P / P) was extra or extra - 1
     # by the bit pattern of its power, which changes every frame).
-    add_executable(VulkanEmitterSpecular_test VulkanEmitterSpecular_test.cpp)
-    target_link_libraries(VulkanEmitterSpecular_test PRIVATE threepp)
-    target_include_directories(VulkanEmitterSpecular_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanEmitterSpecular_test COMMAND VulkanEmitterSpecular_test)
-    set_tests_properties(VulkanEmitterSpecular_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanEmitterSpecular_test SRC)
 
     # Glass with ior exactly 1.0 (glTF sample SunglassesKhronos, lens front) was
     # taken for a flat alpha blend at opacity 0, whose marker WAS ior = 1, and not
     # drawn. Also gates the thin film on glass, which the glass Fresnel ignored.
-    add_executable(VulkanIorOneGlass_test VulkanIorOneGlass_test.cpp)
-    target_link_libraries(VulkanIorOneGlass_test PRIVATE threepp)
-    target_include_directories(VulkanIorOneGlass_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanIorOneGlass_test COMMAND VulkanIorOneGlass_test)
-    set_tests_properties(VulkanIorOneGlass_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanIorOneGlass_test SRC)
 
     # A dielectric's reflectance follows its ior: ((n-1)/(n+1))^2, not the constant
     # 0.04 the deferred shade used at every site (glTF sample IORTestGrid).
-    add_executable(VulkanDielectricIor_test VulkanDielectricIor_test.cpp)
-    target_link_libraries(VulkanDielectricIor_test PRIVATE threepp)
-    target_include_directories(VulkanDielectricIor_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanDielectricIor_test COMMAND VulkanDielectricIor_test)
-    set_tests_properties(VulkanDielectricIor_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanDielectricIor_test SRC)
 
     # A lamp is dimmed by the glass it shines through with the denoiser off too:
     # the inline lamp loops took the opaque shadow test alone, so a floor under
     # a smoked pane took a tenth of a point lamp denoised and all of it without.
-    add_executable(VulkanLampGlass_test VulkanLampGlass_test.cpp)
-    target_link_libraries(VulkanLampGlass_test PRIVATE threepp)
-    target_include_directories(VulkanLampGlass_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanLampGlass_test COMMAND VulkanLampGlass_test)
-    set_tests_properties(VulkanLampGlass_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanLampGlass_test SRC)
 
     # The indirect rays and alpha-tested cutouts (setIndirectOpaqueCutouts): a
     # half-open checkerboard roof over grey ground under a uniform sky, the
     # ground under it read with the GI, probe and AO rays taking the cards as
     # solid (the default) and alpha-testing them.
-    add_executable(VulkanIndirectCutouts_test VulkanIndirectCutouts_test.cpp)
-    target_link_libraries(VulkanIndirectCutouts_test PRIVATE threepp)
-    target_include_directories(VulkanIndirectCutouts_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanIndirectCutouts_test COMMAND VulkanIndirectCutouts_test)
-    set_tests_properties(VulkanIndirectCutouts_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanIndirectCutouts_test SRC)
 
     # Camera-model geometry: film gauge / focal length round-trip and the
     # reported cameraIntrinsics() checked against the renderer's own
     # projection. Numeric (not pixel) claims, so unlike the goldens this is
     # hardware-independent — but it still needs a device to construct the
     # renderer, hence the same skip code.
-    add_executable(VulkanCameraModel_test VulkanCameraModel_test.cpp)
-    target_link_libraries(VulkanCameraModel_test PRIVATE threepp)
-    target_include_directories(VulkanCameraModel_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
-    add_test(NAME VulkanCameraModel_test COMMAND VulkanCameraModel_test)
-    set_tests_properties(VulkanCameraModel_test PROPERTIES SKIP_RETURN_CODE 42)
+    add_vulkan_test(VulkanCameraModel_test SRC)
 
     # A vision sensor's near/far must bound the same quantity on both backends.
     # Both backends in ONE process, the Vulkan canvas first: that is what it
