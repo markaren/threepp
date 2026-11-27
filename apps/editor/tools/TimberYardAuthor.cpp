@@ -26,7 +26,7 @@
 //     It was the last thing drifting between two runs;
 //   * nothing samples a clock, a random_device, or an address.
 //
-// SIZE. The document is 352 KB, against a 600 KB ceiling, and the serializer's
+// SIZE. The document is 381 KB, against a 600 KB ceiling, and the serializer's
 // dominant cost is inlined geometry — a BufferGeometry writes every vertex,
 // while a BoxGeometry writes its three numbers. So the yard is built from
 // PRIMITIVES wherever a primitive will do, and the one piece of generated

@@ -187,9 +187,9 @@ namespace {
         if (!derived) {
             auto material = MeshStandardMaterial::create();
             auto mesh = Mesh::create(geometry, material);
-            // Named once, at creation: switching tube to road preserves the
-            // node, and clobbering a name the user typed is not a thing a sync
-            // pass gets to do.
+            // Named once, at creation: later syncs keep the node, and
+            // clobbering a name the user typed is not a thing a sync pass gets
+            // to do.
             mesh->name = ObjectFactory::uniqueName(spline, SplineConfig::label(config.mesh));
             mesh->castShadow = true;
             mesh->receiveShadow = true;

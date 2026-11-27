@@ -1,12 +1,12 @@
 // The program that AUTHORS the Hover Arena example, headlessly.
 //
-// The scene shipped in ExampleScenes.cpp is not hand-written JSON. It is built
+// The scene shipped in ExampleSceneHoverArena.cpp is not hand-written JSON. It is built
 // here, through the same editor core the app uses — SceneDocument, the
 // PhysicsConfig / SensorConfig / ScriptConfig / GeneratorConfig writes, and one
 // generator run driven exactly the way EditorApp::regenerate drives it — and
 // then exported with SceneDocument::toJson. So the document is provably
 // something the editor could have produced, and changing the example means
-// changing code rather than editing a 60 KB literal by hand.
+// changing code rather than editing a 170 KB literal by hand.
 //
 //   hover_arena_author scene.json [ExampleSceneHoverArena.cpp]
 //
@@ -1013,7 +1013,7 @@ namespace threepp::editor::examples::detail {
 int main(int argc, char** argv) {
 
     if (argc < 2) {
-        std::cerr << "usage: hover_arena_author <scene.json> [ExampleScenes.cpp]\n";
+        std::cerr << "usage: hover_arena_author <scene.json> [ExampleSceneHoverArena.cpp]\n";
         return 2;
     }
 

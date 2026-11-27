@@ -8,15 +8,16 @@
 // What it does on start(): walk the scene, and for every object carrying an
 // enabled PhysicsConfig create one actor of the requested body type and shape,
 // then let PhysxWorld drive that object's transform. On stop() the world is
-// destroyed; the editor then restores the pre-play snapshot, so nothing the
-// simulation did to the scene survives.
+// destroyed and the editor drops the play copy the session ran on (PlayCopy),
+// so nothing the simulation did to the scene survives.
 //
 // Soft bodies (Body::Soft) are deformable volumes, and PhysX simulates those on
 // CUDA only. The world therefore switches to GPU dynamics as soon as the scene
 // contains one — and falls back to a CPU world with the rigid bodies alone when
 // no CUDA device is available, rather than failing the whole play attempt. A
-// soft body rewrites its mesh's vertex positions every step, which the snapshot
-// undoes on Stop exactly like a moved transform.
+// soft body rewrites its mesh's vertex positions every step, into a private
+// clone of the geometry (PlayCopy::ownGeometry), so the authored mesh never
+// sees them.
 //
 // An authored granular chute (GranularConfig) escalates the world the same way
 // and for the same reason, and additionally sizes the GPU heap from the grain

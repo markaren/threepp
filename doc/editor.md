@@ -458,7 +458,7 @@ scene graph to be rendered, but must never end up in a saved file.
 changing a format-level API for a tool-level concern. Instead the editor keeps
 all of them under a single overlay `Group` registered with
 `SceneDocument::addEditorOnly()`, and the document detaches that node for the
-duration of every export (save *and* play snapshot) and re-attaches it
+duration of every export (a save, *and* the copy Play builds) and re-attaches it
 afterwards. The cost is one detach/attach per save; the benefit is that
 `ObjectExporter` stays a pure serializer.
 
@@ -485,7 +485,7 @@ Two rules make them safe rather than surprising:
 
 * **They apply when a document is OPENED, and never again.** In particular they
   are not applied by the scene-replaced listener, which is also what Stop goes
-  through: restoring the play snapshot must never teleport the camera away from
+  through: swapping back to the authored scene must never teleport the camera away from
   wherever the user drove it while watching the simulation.
 * **A document that says nothing gets nothing.** No `editorView` leaves the
   camera where it was (an example, having nothing to preserve, frames itself
@@ -686,8 +686,9 @@ Two things follow from PhysX's implementation, and the editor deals with both:
 * **The mesh is the simulation output.** `addSoftBody` bakes the world matrix
   into the geometry and zeroes the object's local transform, then writes
   world-space vertices into it each step. Nothing special is needed to undo
-  that: the play snapshot restores geometry along with everything else, so Stop
-  hands back the rest pose and the authored transform.
+  that: the session writes into the play copy's own clone of the geometry
+  (`PlayCopy::ownGeometry`), and Stop drops the copy, so the authored mesh keeps
+  the rest pose and its transform.
 
 Cooking is the expensive part of `start()`, so identical geometries share one
 cooked mesh — keyed on the geometry uuid, and only for an unscaled object, since
@@ -730,7 +731,7 @@ so it never dirties the document or the undo stack.
 During Play, `AnimationPlaySession` (always registered) walks the scene and
 plays the authored clip on every object with `autoplay` on — the default for
 anything that has clips, so an imported character moves the first time you
-press Play. The play snapshot restores all poses on Stop.
+press Play. Stop drops the play copy, so the authored poses are back.
 
 ### Sounds in `userData`
 
@@ -786,7 +787,7 @@ per authored node (parented to it with `addRef`, so the spatialization follows
 whatever moves the object) or a plain non-spatial `Audio` when `positional=0`.
 The listener rides the perspective viewport camera. Sounds with `autoplay` on
 are rewound and started; on Stop every sound is unparented and destroyed before
-the engine is, and the play snapshot takes the rest back.
+the engine is, and dropping the play copy takes the rest back.
 
 **No device, no problem.** `AudioListener`'s constructor throws when
 `ma_engine_init` fails — a headless CI machine, a driver holding the device in
@@ -870,8 +871,8 @@ by name — and either side may be an **articulation link** (a
 robot's gripper. One `PxD6Joint` configured per type backs everything except
 Distance, which is PhysX's own `PxDistanceJoint`. An unresolvable joint — a
 missing name, a body with no rigid actor — is one console line and no joint,
-never a refused Play. Stop releases the joints before the world, and the play
-snapshot takes the scene back.
+never a refused Play. Stop releases the joints before the world, and dropping
+the play copy takes the scene back.
 
 While playing, the **Physics Debug** overlay (View menu) draws the joints the
 solver is actually enforcing, from PhysX's own render buffer: an RGB frame
@@ -996,8 +997,8 @@ per-wheel local poses, steer and suspension included; the mesh's authored
 orientation is preserved and spin composes on top in chassis space, so no
 spin axis is ever inferred from the geometry. An unresolvable pick — a
 missing name, a wheel with no geometry — is one console line and no vehicle,
-never a refused Play. Stop tears the vehicle down and the play snapshot puts
-the model back where it was authored.
+never a refused Play. Stop tears the vehicle down and drops the play copy, so
+the model is back where it was authored.
 
 While a played scene has a vehicle, the editor's plain keys become the
 pedals (and the editor shortcuts on those keys yield until Stop, the same
@@ -1202,8 +1203,8 @@ move only if a script drives them. Tick **Simulate** in the Robot section and it
 becomes a PhysX **reduced-coordinate articulation** while playing: the joints
 are real DOFs, gravity and contact act on the links, a PD drive holds the
 authored pose, and — the point of the whole thing — the joint sensors below have
-something to measure. Stop restores the pre-play snapshot, so nothing the
-simulation did survives, exactly like the rigid bodies `PhysicsConfig` authors.
+something to measure. Stop drops the play copy, so nothing the simulation did
+survives, exactly like the rigid bodies `PhysicsConfig` authors.
 
 This is a separate entry from the URDF reference above because its fields are all
 scalars, so unlike the path/vector pair it rides the same flat `key=value;`

@@ -7,8 +7,9 @@
 // UNTITLED document, so the first Save asks where to put it and nothing can
 // overwrite a shipped example in place.
 //
-// The documents themselves are produced by apps/editor/tools/HoverArenaAuthor.cpp
-// and written into ExampleScenes.cpp by it; that file is generated and says so.
+// The documents themselves are produced by the author programs
+// (apps/editor/tools/<Name>Author.cpp), each into its own generated
+// ExampleScene<Name>.cpp; the registry in ExampleScenes.cpp is hand-written.
 // This header is separate so the headless test can load the same string the
 // menu does, without linking the app.
 

@@ -163,7 +163,7 @@ namespace threepp::editor {
             // 8-bit ImageLoader), so without this a --screenshot run could never be lit the way
             // the app lights it. Set as the background too, matching the menu's default.
             std::filesystem::path environment;
-            // Render the road-acceptance scene to this PNG and exit. Exists so
+            // Render the spline-tube acceptance scene to this PNG and exit. Exists so
             // a person — or a tool — can LOOK at what the geometry does before
             // anyone claims it works.
             std::filesystem::path screenshot;

@@ -12,16 +12,19 @@
 // process's.
 //
 // Only the areas a scene script plausibly needs are linked — scene graph, math,
-// geometry, curves, materials, animation, cameras, lights, robots. The renderer,
-// loader, sensor and Vulkan areas are left out: they would drag windowing and
+// geometry, curves, materials, animation, cameras, lights, robots, and the
+// loaders (so a script can make the texture scene.environment takes). The
+// renderer, sensor and Vulkan areas are left out: they would drag windowing and
 // device state into a script, and the editor already owns those.
 //
-// Physics is left out on the same grounds — a script has no business building a
-// PhysxWorld — with one deliberate exception: threepp.editor's rigid_body /
-// soft_body handles onto the bodies the play session is ALREADY simulating, and
-// the matching read handles onto the sensors it is already running. That is the
-// editor's own state, handed over, not a second physics or sensor stack. Both
-// are compiled only where the PhysX SDK was found.
+// Physics is linked, but a script cannot build a PhysxWorld: only one world may
+// exist, the one the play session steps, so denyWorldConstruction replaces the
+// constructor with one that says so, and threepp.editor.world() hands back that
+// world. threepp.editor's rigid_body / soft_body handles onto the bodies the
+// play session is ALREADY simulating, and the matching read handles onto the
+// sensors it is already running, are the editor's own state, handed over, not a
+// second physics or sensor stack. All of it is compiled only where the PhysX
+// SDK was found.
 //
 // threepp.editor.script_from_object is the same idea pointed at the session's
 // own instances rather than at physics, and is therefore NOT gated on anything:

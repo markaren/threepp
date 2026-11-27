@@ -62,8 +62,8 @@ namespace threepp::editor {
         bool closed = false;
         float tension = 0.5f;
         // Curve samples per segment. Drives the editor's overlay AND the
-        // generated mesh — a tube's tessellation, and what a road's straights
-        // and arcs are fitted from; nothing at runtime is obliged to use it.
+        // generated mesh — a tube's tessellation; nothing at runtime is
+        // obliged to use it.
         int samples = 24;
 
         MeshKind mesh = MeshKind::None;
