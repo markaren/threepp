@@ -4567,11 +4567,7 @@ void EditorApp::stopPlay() {
     clearPhysicsDebug();
     clearSensorOverlay();
 
-    std::string error;
-    if (!play_.stop(document_, &error)) {
-        logError("stop failed: " + error);
-        return;
-    }
+    play_.stop(document_);
     log("play stopped, scene restored");
     // The geometry audit: a shared mesh a session or a script wrote in place.
     logWarnings();

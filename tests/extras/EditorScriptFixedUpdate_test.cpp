@@ -636,5 +636,5 @@ TEST_CASE("pause pauses fixed_update", "[editor][scripting][physx]") {
     for (int i = 0; i < 5; ++i) play.update(kFixed);
     CHECK(static_cast<int>(ticks->position.x) == 15);
 
-    REQUIRE(play.stop(document, &error));
+    play.stop(document);
 }

@@ -217,9 +217,9 @@ namespace threepp::player {
         [[nodiscard]] std::size_t totalScriptErrors() const;
 
         // The whole point of the player: 0 when every episode ran clean, 1 when
-        // any of them failed to start, failed to stop or ended with a script
-        // error — and 1 when nothing ran at all, which is a failure to do the
-        // job rather than a vacuous success.
+        // any of them failed to start or ended with a script error — and 1 when
+        // nothing ran at all, which is a failure to do the job rather than a
+        // vacuous success.
         [[nodiscard]] int exitCode() const;
 
         // One frame of a 60 Hz simulation. The default PhysxWorld timestep too,

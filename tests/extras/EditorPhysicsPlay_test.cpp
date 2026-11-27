@@ -240,7 +240,7 @@ TEST_CASE("stop restores the mesh a soft body deformed", "[editor][physx][gpu]")
     std::string error;
     REQUIRE(controller.play(document, &error));
     for (int i = 0; i < 120; ++i) controller.update(1.f / 60.f);
-    REQUIRE(controller.stop(document, &error));
+    controller.stop(document);
 
     // Whether or not the machine had a GPU, Stop must hand back the authored
     // mesh: rest-pose geometry, authored transform, physics entry intact.
@@ -280,7 +280,7 @@ TEST_CASE("play then stop leaves no trace of the simulation", "[editor][physx]")
     REQUIRE(played);
     CHECK(played->position.y < 3.f);// it fell
 
-    REQUIRE(controller.stop(document, &error));
+    controller.stop(document);
 
     auto* restored = document.scene().getObjectByName("Falling");
     REQUIRE(restored);

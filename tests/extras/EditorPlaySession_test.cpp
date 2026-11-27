@@ -176,7 +176,7 @@ TEST_CASE("PlayController drives sessions and restores on stop", "[editor]") {
     CHECK(document.scene().getObjectByName("Doomed") == nullptr);
     CHECK(document.scene().getObjectByName("Spawned") != nullptr);
 
-    REQUIRE(controller.stop(document, &error));
+    controller.stop(document);
     CHECK(controller.stopped());
     CHECK(session->stops == 1);
 
@@ -211,7 +211,7 @@ TEST_CASE("pause suspends updates without stopping", "[editor]") {
     CHECK(session->updates == 2);
     CHECK(session->stops == 0);
 
-    REQUIRE(controller.stop(document));
+    controller.stop(document);
 }
 
 TEST_CASE("sessions start in registration order and stop in reverse", "[editor]") {
@@ -249,7 +249,7 @@ TEST_CASE("sessions start in registration order and stop in reverse", "[editor]"
     controller.addSession(std::make_shared<OrderProbe>('c', trace));
 
     REQUIRE(controller.play(document));
-    REQUIRE(controller.stop(document));
+    controller.stop(document);
 
     CHECK(trace == "abcCBA");
 }
@@ -282,7 +282,7 @@ TEST_CASE("stopping without playing is harmless", "[editor]") {
     populate(document.scene());
 
     PlayController controller;
-    CHECK(controller.stop(document));
+    controller.stop(document);
     CHECK(controller.stopped());
     controller.update(0.1f);// no-op
     CHECK(document.scene().getObjectByName("Box") != nullptr);

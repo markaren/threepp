@@ -85,9 +85,9 @@ namespace threepp::editor {
         void togglePause();
 
         // Stop the sessions and swap the document back to the authored scene
-        // (SceneDocument::endPlay). Cannot fail: true, and `error` is left
-        // alone; the geometry audit's findings are in document.warnings().
-        bool stop(SceneDocument& document, std::string* error = nullptr);
+        // (SceneDocument::endPlay). Cannot fail; the geometry audit's findings
+        // are in document.warnings().
+        void stop(SceneDocument& document);
 
         // No-op unless playing. Sessions are updated in registration order.
         void update(float dt);

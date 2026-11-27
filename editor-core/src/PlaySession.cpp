@@ -74,9 +74,9 @@ void PlayController::togglePause() {
     }
 }
 
-bool PlayController::stop(SceneDocument& document, std::string* /*error*/) {
+void PlayController::stop(SceneDocument& document) {
 
-    if (state_ == State::Stopped) return true;
+    if (state_ == State::Stopped) return;
 
     // Sessions first: they hold pointers into the play copy, which endPlay()
     // drops.
@@ -85,7 +85,6 @@ bool PlayController::stop(SceneDocument& document, std::string* /*error*/) {
     elapsed_ = 0.f;
 
     document.endPlay();
-    return true;
 }
 
 void PlayController::update(float dt) {

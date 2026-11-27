@@ -68,7 +68,7 @@ unattended evaluation wants and what keeps episode recordings reproducible.
 | code | meaning |
 | --- | --- |
 | 0 | Every episode played clean. |
-| 1 | The document would not load or play, an episode failed to stop, or **any script raised**. |
+| 1 | The document would not load or play, or **any script raised**. |
 | 2 | Usage error. |
 
 A script that raises is logged once by `ScriptPlaySession`, disabled for the

@@ -169,10 +169,7 @@ PlayerCore::~PlayerCore() {
 
     // An episode still running at destruction is a caller that threw or bailed.
     // Stop it properly rather than letting the sessions be destroyed mid-play.
-    if (!play_.stopped()) {
-        std::string error;
-        play_.stop(document_, &error);
-    }
+    if (!play_.stopped()) play_.stop(document_);
 
     // The sensor session parents nodes into sensorRig_, which is a member of
     // this same object: member destruction order would take the rig down first
@@ -379,10 +376,7 @@ EpisodeResult PlayerCore::endEpisode() {
     // destroy.
     if (sensors_) current_.sensorRows = sensors_->recordedRows();
 
-    std::string error;
-    if (!play_.stop(document_, &error)) {
-        current_.error = error.empty() ? "stop failed" : error;
-    }
+    play_.stop(document_);
     // The geometry audit: a shared mesh a session or a script wrote in place.
     for (const auto& warning : document_.warnings()) logWarn(warning);
 

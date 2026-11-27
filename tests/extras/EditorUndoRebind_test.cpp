@@ -46,7 +46,7 @@ namespace {
             std::string error;
             REQUIRE(controller.play(document, &error));
             controller.update(0.1f);
-            REQUIRE(controller.stop(document, &error));
+            controller.stop(document);
         }
 
         // The document written out and parsed back into a new graph, which

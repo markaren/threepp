@@ -38,8 +38,7 @@ namespace {
                 << "  --size=WxH     window size (default 1280x720)\n"
                 << "\n"
                 << "  Exit code 0 when every episode played clean, 1 when the document would\n"
-                << "  not load or play, when an episode failed to stop, or when any script\n"
-                << "  raised. 2 is a usage error.\n";
+                << "  not load or play, or when any script raised. 2 is a usage error.\n";
     }
 
 }// namespace
