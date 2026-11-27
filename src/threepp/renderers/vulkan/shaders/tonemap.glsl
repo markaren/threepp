@@ -6,8 +6,7 @@
 //   particle.frag        the lit particle path, which composites over that
 //                        already-encoded frame (white balance and the grade
 //                        LUT skipped)
-// overlay_display.glsl holds an od-prefixed copy for the overlay passes:
-// KEEP IN SYNC with it.
+// overlay_display.glsl includes it for the overlay passes.
 
 #ifndef THREEPP_TONEMAP_GLSL
 #define THREEPP_TONEMAP_GLSL

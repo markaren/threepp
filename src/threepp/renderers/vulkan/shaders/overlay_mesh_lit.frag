@@ -45,5 +45,5 @@ void main() {
     const float ndl = max(dot(N, normalize(lit.sunDir.xyz)), 0.0);
     vec3 c = pc.color.rgb * (lit.ambient.rgb + lit.sunColor.rgb * lit.sunDir.w * ndl);
     c = odAcesNarkowicz(c);
-    outColor = vec4(odLinearToSRGB(c), pc.color.a);
+    outColor = vec4(linearToSRGB(c), pc.color.a);
 }

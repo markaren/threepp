@@ -28,5 +28,5 @@ layout(location = 0) out vec4 outColor;
 void main() {
     vec2 d = gl_PointCoord - vec2(0.5);
     if (dot(d, d) > 0.25) discard;
-    outColor = vec4(odLinearToSRGB(pc.color.rgb * vColor), 1.0);
+    outColor = vec4(linearToSRGB(pc.color.rgb * vColor), 1.0);
 }

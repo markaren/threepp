@@ -33,5 +33,5 @@ layout(push_constant) uniform Pc {
 
 void main() {
     vec4 t = texture(spriteMap, vUv);
-    outColor = vec4(odLinearToSRGB(pc.color.rgb * t.rgb), pc.color.a * t.a);
+    outColor = vec4(linearToSRGB(pc.color.rgb * t.rgb), pc.color.a * t.a);
 }

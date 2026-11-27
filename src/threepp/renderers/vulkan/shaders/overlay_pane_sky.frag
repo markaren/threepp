@@ -53,5 +53,5 @@ void main() {
     const float lod = pc.params.z * float(max(textureQueryLevels(envTex), 1) - 1);
     vec3 c = textureLod(envTex, vec2(u, v), lod).rgb * pc.params.y * pc.params.x;
     c = odAcesNarkowicz(c);
-    outColor = vec4(odLinearToSRGB(c), 1.0);
+    outColor = vec4(linearToSRGB(c), 1.0);
 }

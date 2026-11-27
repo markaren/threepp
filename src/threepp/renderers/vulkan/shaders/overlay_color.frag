@@ -23,5 +23,5 @@ layout(location = 0) out vec4 outColor;
 #include "overlay_display.glsl"
 
 void main() {
-    outColor = vec4(odLinearToSRGB(pc.color.rgb * vColor), pc.color.w);
+    outColor = vec4(linearToSRGB(pc.color.rgb * vColor), pc.color.w);
 }
