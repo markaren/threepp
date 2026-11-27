@@ -697,27 +697,6 @@ void VulkanRenderer::Impl::ensureGbufDummyMS() {
 
 void VulkanRenderer::Impl::ensureHybridResources() {
             ensureGbufDummyMS();
-            if (dummyUvBuffer_.handle == VK_NULL_HANDLE) {
-                // 1 MB of zeros = 131,072 vec2 vertices. Bound to vertex input
-                // 2 when a mesh has no UV attribute. Sized generously because
-                // the gbuffer pipeline's binding has fixed stride=8: the GPU
-                // reads `vertexCount * 8` bytes, so the dummy must cover the
-                // largest mesh's vertex count or we walk off the allocation.
-                // 1 MB covers virtually any real-world mesh; if you hit the
-                // limit, grow this on demand from ensureSceneBuilt.
-                constexpr VkDeviceSize kDummyUvBytes = 1u << 20;
-                dummyUvBuffer_ = createBuffer(
-                        ctx->allocator(), ctx->device(),
-                        kDummyUvBytes,
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                        VMA_MEMORY_USAGE_AUTO,
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-                void* mapped = nullptr;
-                check(vmaMapMemory(ctx->allocator(), dummyUvBuffer_.alloc, &mapped), "vmaMapMemory(dummy uv)");
-                std::memset(mapped, 0, kDummyUvBytes);
-                flushHostWrites(ctx->allocator(), dummyUvBuffer_.alloc);
-                vmaUnmapMemory(ctx->allocator(), dummyUvBuffer_.alloc);
-            }
             if (gbufSampler_ == VK_NULL_HANDLE) {
                 VkSamplerCreateInfo sci{};
                 sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;

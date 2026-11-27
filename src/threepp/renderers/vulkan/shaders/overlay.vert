@@ -21,7 +21,7 @@ void main() {
     vec4 clip = pc.mvp * vec4(inPos, 1.0);
     // threepp's projection matrix follows the GL convention (Y up in NDC).
     // Vulkan NDC has Y pointing down, so we negate Y at the gl_Position
-    // boundary — same correction gbuffer.vert applies. Without this the
+    // boundary — same correction gbuffer_indirect.vert applies. Without this the
     // overlay is vertically mirrored, which combined with depth-test
     // failures from the inverted positions can look like the geometry is
     // "rotating with the camera" (the user's reported symptom).

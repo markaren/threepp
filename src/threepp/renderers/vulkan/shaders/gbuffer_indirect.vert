@@ -5,9 +5,9 @@
 #extension GL_EXT_buffer_reference2      : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-// Indirect-drawing variant of gbuffer.vert. Replaces fixed-function vertex
-// input bindings with bindless pulls from per-mesh buffer device addresses,
-// so the whole G-buffer pass can ship as 1–3 vkCmdDrawIndirect calls
+// The G-buffer pass's vertex shader. No fixed-function vertex input
+// bindings: it pulls from per-mesh buffer device addresses, so the whole
+// G-buffer pass can ship as 1–3 vkCmdDrawIndirect calls
 // (one per cull mode) instead of N vkCmdDrawIndexed calls. That cuts the
 // GPU command-processor overhead from ~15 µs/draw × N down to a near-fixed
 // cost regardless of mesh count — see the perf notes around
@@ -102,7 +102,7 @@ void main() {
     const vec4 prevWorldPos = motionMat[d.instanceCustomIndex] * d.model * vec4(inPrevPos, 1.0);
 
     // Cofactor = det·(inverse-transpose): correct normals under non-uniform
-    // scale, normalize-safe, no per-vertex inverse (see gbuffer.vert).
+    // scale, normalize-safe, no per-vertex inverse.
     const mat3 nm = mat3(d.model);
     vWorldNormal = mat3(cross(nm[1], nm[2]), cross(nm[2], nm[0]), cross(nm[0], nm[1])) * inNormal;
 

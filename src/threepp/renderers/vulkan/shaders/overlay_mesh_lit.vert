@@ -27,7 +27,7 @@ layout(location = 0) out vec3 vNormal;
 void main() {
     vec4 clip = pc.mvp * vec4(inPos, 1.0);
     // GL-convention projection (Y up in NDC) → Vulkan (Y down): negate at the
-    // gl_Position boundary, same as overlay.vert / gbuffer.vert.
+    // gl_Position boundary, same as overlay.vert / gbuffer_indirect.vert.
     clip.y = -clip.y;
     gl_Position = clip;
     vNormal = mat3(pc.nrm0.xyz, pc.nrm1.xyz, pc.nrm2.xyz) * inNormal;

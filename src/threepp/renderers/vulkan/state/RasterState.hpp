@@ -35,7 +35,6 @@ namespace threepp::vulkan::impl {
         // VK_NULL_HANDLE. Kept separate from rasterGbufRenderPass (the 1×
         // path) so the default (msaa=1) code path is 100% untouched.
         VkRenderPass rasterGbufRenderPassMS = VK_NULL_HANDLE;
-        VkPipeline   rasterGbufPipelineMS         = VK_NULL_HANDLE;
         VkPipeline   rasterGbufIndirectPipelineMS = VK_NULL_HANDLE;
         VkPipeline   rasterGbufDecalPipelineMS    = VK_NULL_HANDLE;
         VkPipeline   rasterGbufParticlePipelineMS = VK_NULL_HANDLE;
@@ -55,12 +54,12 @@ namespace threepp::vulkan::impl {
 
         VkDescriptorSetLayout rasterDsLayout       = VK_NULL_HANDLE;
         VkPipelineLayout      rasterPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline            rasterGbufPipeline   = VK_NULL_HANDLE;
-        // Indirect-drawing variant: uses gbuffer_indirect.vert with bindless
-        // vertex pulling, declares zero vertex input bindings, consumes the
-        // per-frame DrawInfo SSBO at binding 4. Selected by default for the
-        // gbuf pass since it collapses N draws into 1-4 vkCmdDrawIndirect
-        // calls — see recordRasterGbufPass.
+        // The G-buffer pipeline: gbuffer_indirect.vert with bindless vertex
+        // pulling, zero vertex input bindings, the per-frame DrawInfo SSBO at
+        // binding 4; the opaque buckets draw through it in 1-4
+        // vkCmdDrawIndirect calls (recordRasterGbufPass), decals and
+        // particle fields through the variants below. Non-null also means
+        // the raster G-buffer path is ready.
         VkPipeline            rasterGbufIndirectPipeline = VK_NULL_HANDLE;
         // Decal variant of the indirect pipeline (bucket [3], drawn last):
         // depth-write OFF, attachments 0-3 write-masked to zero, attachment 4
@@ -81,12 +80,6 @@ namespace threepp::vulkan::impl {
         // attachments. Nearest avoids bilinear smearing of normal/motion/ids
         // at silhouettes — primary visibility from raster is already exact-pixel.
         VkSampler gbufSampler_ = VK_NULL_HANDLE;
-
-        // Fallback UV vertex buffer: 8 bytes of zeros, bound to vertex input
-        // location 2 when a mesh has no UV attribute (rec->uv.handle is null).
-        // Lets the gbuffer pipeline keep a fixed 3-binding layout regardless
-        // of per-mesh UV availability.
-        Buffer dummyUvBuffer_{};
 
         // Raster G-buffer MSAA sample count (1/2/4). 1 = today's single-sample
         // path, byte-identical output, default. See setGbufferMsaa. Reallocation

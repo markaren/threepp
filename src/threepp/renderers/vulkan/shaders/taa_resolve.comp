@@ -536,8 +536,8 @@ void main() {
     // turning into flicker on a static view (dilatedMotionPx is 0 there).
     const float velocityBump = clamp(dilatedMotionPx / 18.0, 0.0, 0.4);
     // is_skinned flag (bit 3) is informational; SkinnedMesh now has proper
-    // per-vertex motion vectors via a prev-pose vertex buffer (gbuffer.vert
-    // reads it at attribute 3). The previous force-high-alpha hack is gone —
+    // per-vertex motion vectors via its previous pose (gbuffer_indirect.vert
+    // reads it through DrawInfo.prevPosAddr). The previous force-high-alpha hack is gone —
     // velocity bump alone now correctly tracks deformation.
     //
     // LUMA ANTI-FLICKER (Karis): where the current (1-spp jittered) sample

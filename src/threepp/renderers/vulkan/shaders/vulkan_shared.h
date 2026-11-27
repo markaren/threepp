@@ -79,7 +79,7 @@
 #define kRayMaskAll        0x07u
 
 // Per-instance flag word — packed host-side (VulkanCoreIndirect.cpp) into
-// DrawInfo.flags, carried through gbuffer.vert into the gbuffer IDs
+// DrawInfo.flags, carried through gbuffer_indirect.vert into the gbuffer IDs
 // attachment's .z channel (rgba32ui; flags live in bits 0..7 and the
 // semantic CLASS id in bits 8..15, bits 16..31 are zero). THE canonical bit
 // layout; shader consumers go through the instance_flags.glsl accessors

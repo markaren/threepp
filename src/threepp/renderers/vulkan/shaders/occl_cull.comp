@@ -42,7 +42,7 @@ layout(set = 0, binding = 1, std430) writeonly buffer DstCmds { DrawCmd dstCmds[
 layout(set = 0, binding = 2, std430) readonly  buffer Meta    { CullMeta meta[]; };
 layout(set = 0, binding = 3, std430) buffer VisBits           { uint visBits[]; };// 1 bit per instance (cullBit)
 layout(set = 0, binding = 4) uniform sampler2D hizTex;// FARTHEST (min-reduce) pyramid
-// The raster camera UBO (raster_camera_ubo.glsl, the block gbuffer.vert
+// The raster camera UBO (raster_camera_ubo.glsl, the block gbuffer_indirect.vert
 // reads). Only the JITTERED current VP is read: the phase-1 depth was
 // rasterized with it, so the AABB projection compares apples to apples.
 #define RASTER_CAM_BINDING 5

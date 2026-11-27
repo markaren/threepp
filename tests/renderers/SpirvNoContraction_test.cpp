@@ -8,7 +8,7 @@
 
 #include "threepp/renderers/vulkan/shaders/bloom_down.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.spv.h"
-#include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
 
 #include <set>
 
@@ -159,7 +159,7 @@ TEST_CASE("embedded shaders: decorated, still well-formed, same bindings") {
     const std::vector<std::vector<uint32_t>> modules = {
             {std::begin(kBloomDownCompSpv), std::end(kBloomDownCompSpv)},
             {std::begin(kDeferredShadeCompSpv), std::end(kDeferredShadeCompSpv)},
-            {std::begin(kGbufferVertSpv), std::end(kGbufferVertSpv)},
+            {std::begin(kGbufferIndirectVertSpv), std::end(kGbufferIndirectVertSpv)},
     };
     for (const auto& in : modules) {
         NoContractionStats st;

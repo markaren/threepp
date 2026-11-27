@@ -1073,7 +1073,7 @@ void VulkanRenderer::Impl::recordOverlayDepthImport(VkCommandBuffer cb) {
 }
 
 void VulkanRenderer::Impl::addGbufferPasses(rg::RenderGraph& g) {
-            if (rasterGbufPipeline == VK_NULL_HANDLE) return;
+            if (rasterGbufIndirectPipeline == VK_NULL_HANDLE) return;
             const uint32_t f = currentFrame;
             auto& gb = view().rasterGbufs[f];
             constexpr auto kColor   = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -3978,14 +3978,14 @@ void VulkanRenderer::Impl::addPrimaryViewPasses(rg::RenderGraph& g, uint32_t ima
 
             // Hybrid debug view: the chosen G-buffer channel is resolved
             // straight to the swapchain and the primary's frame is finished.
-            if (rasterGbufPipeline != VK_NULL_HANDLE && hybridDebugView_ != HybridDebugView::Off) {
+            if (rasterGbufIndirectPipeline != VK_NULL_HANDLE && hybridDebugView_ != HybridDebugView::Off) {
                 importSwapchain(g, imageIndex);
                 addHybridDebugResolvePass(g, imageIndex, currentFrame);
                 return;
             }
             // Events-only mode (~500 Hz event camera): clear the swapchain,
             // skip shade/post entirely.
-            if (eventsOnlyMode_ && eventCamEnabled_ && rasterGbufPipeline != VK_NULL_HANDLE) {
+            if (eventsOnlyMode_ && eventCamEnabled_ && rasterGbufIndirectPipeline != VK_NULL_HANDLE) {
                 importSwapchain(g, imageIndex);
                 addEventsOnlyClearPass(g, imageIndex);
                 return;

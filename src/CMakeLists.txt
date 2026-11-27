@@ -1472,7 +1472,6 @@ if (THREEPP_WITH_VULKAN)
     # Hybrid raster G-buffer prepass — produces depth/normal/motion/IDs
     # for the path tracer to skip its primary BVH trace. See raygen.rgen
     # for the consumer side.
-    compile_vulkan_shader(threepp "${_vk_shaders}/gbuffer.vert" kGbufferVertSpv)
     compile_vulkan_shader(threepp "${_vk_shaders}/gbuffer.frag" kGbufferFragSpv)
     # Indirect-drawing variant of the G-buffer vertex shader. Reads per-mesh
     # data (model matrix, attribute buffer device addresses, flags) from an

@@ -1,6 +1,5 @@
 #include "VulkanCoreImpl.hpp"
 
-#include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/particlefield_billboard.frag.spv.h"
@@ -1205,77 +1204,8 @@ void VulkanRenderer::Impl::createRasterDsLayoutAndPool() {
         }
 
 void VulkanRenderer::Impl::createRasterGbufPipeline() {
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kGbufferVertSpv);
-            vsmci.pCode    = kGbufferVertSpv;
-            VkShaderModule vertModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vertModule),
-                  "vkCreateShaderModule(gbuffer.vert)");
-
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kGbufferFragSpv);
-            fsmci.pCode    = kGbufferFragSpv;
-            VkShaderModule fragModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &fragModule),
-                  "vkCreateShaderModule(gbuffer.frag)");
-
-            VkPipelineShaderStageCreateInfo stages[2]{};
-            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-            stages[0].module = vertModule;
-            stages[0].pName  = "main";
-            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-            stages[1].module = fragModule;
-            stages[1].pName  = "main";
-
-            // Vertex input mirrors the BLAS allocation layout: positions /
-            // normals / uvs / prev-positions packed (R32G32B32_SFLOAT for
-            // pos+normal+prevPos, R32G32_SFLOAT for uv). The BLAS allocations
-            // have VERTEX_BUFFER_BIT so they bind directly. Meshes without
-            // a UV attribute bind dummyUvBuffer_ at binding 2; static meshes
-            // bind their own vertex buffer at binding 3 (prev == curr).
-            VkVertexInputBindingDescription vibs[4]{};
-            vibs[0].binding   = 0;
-            vibs[0].stride    = 3 * sizeof(float);
-            vibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            vibs[1].binding   = 1;
-            vibs[1].stride    = 3 * sizeof(float);
-            vibs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            vibs[2].binding   = 2;
-            vibs[2].stride    = 2 * sizeof(float);
-            vibs[2].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            vibs[3].binding   = 3;
-            vibs[3].stride    = 3 * sizeof(float);
-            vibs[3].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-            VkVertexInputAttributeDescription vias[4]{};
-            vias[0].location = 0;
-            vias[0].binding  = 0;
-            vias[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
-            vias[0].offset   = 0;
-            vias[1].location = 1;
-            vias[1].binding  = 1;
-            vias[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
-            vias[1].offset   = 0;
-            vias[2].location = 2;
-            vias[2].binding  = 2;
-            vias[2].format   = VK_FORMAT_R32G32_SFLOAT;
-            vias[2].offset   = 0;
-            vias[3].location = 3;
-            vias[3].binding  = 3;
-            vias[3].format   = VK_FORMAT_R32G32B32_SFLOAT;
-            vias[3].offset   = 0;
-
-            VkPipelineVertexInputStateCreateInfo vi{};
-            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vi.vertexBindingDescriptionCount   = 4;
-            vi.pVertexBindingDescriptions      = vibs;
-            vi.vertexAttributeDescriptionCount = 4;
-            vi.pVertexAttributeDescriptions    = vias;
-
+            // The state every G-buffer pipeline below shares (gpci); each one
+            // adds its own shader stages and an empty vertex input state.
             VkPipelineInputAssemblyStateCreateInfo ia{};
             ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
             ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -1346,9 +1276,6 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
 
             VkGraphicsPipelineCreateInfo gpci{};
             gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-            gpci.stageCount          = 2;
-            gpci.pStages             = stages;
-            gpci.pVertexInputState   = &vi;
             gpci.pInputAssemblyState = &ia;
             gpci.pViewportState      = &vp;
             gpci.pRasterizationState = &rs;
@@ -1359,18 +1286,11 @@ void VulkanRenderer::Impl::createRasterGbufPipeline() {
             gpci.layout              = rasterPipelineLayout;
             gpci.renderPass          = rasterGbufRenderPass;
             gpci.subpass             = 0;
-            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
-                                            &rasterGbufPipeline),
-                  "vkCreateGraphicsPipelines(rasterGbuf)");
 
-            vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
-            vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
-
-            // Indirect-drawing variant: same fragment shader + same render
-            // pass, but uses gbuffer_indirect.vert with bindless vertex
-            // pulling. No vertex input bindings — the VS reads positions /
-            // normals / UVs via buffer-device-address dereferences keyed
-            // by gl_InstanceIndex into the DrawInfo SSBO at binding 4.
+            // The G-buffer pipeline: gbuffer_indirect.vert with bindless
+            // vertex pulling. No vertex input bindings — the VS reads
+            // positions / normals / UVs via buffer-device-address dereferences
+            // keyed by gl_InstanceIndex into the DrawInfo SSBO at binding 4.
             VkShaderModuleCreateInfo vciInd{};
             vciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             vciInd.codeSize = sizeof(kGbufferIndirectVertSpv);

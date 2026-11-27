@@ -507,7 +507,6 @@ VulkanRenderer::Impl::~Impl() {
             et.mark("raster gbuf images");
             // (rasterCameraUbos / drawInfoBuffers / indirectCmdBuffers are
             //  freed in the per-view loop above, alongside the camera UBOs.)
-            if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
             if (rasterGbufIndirectPipeline) vkDestroyPipeline(d, rasterGbufIndirectPipeline, nullptr);
             if (rasterGbufParticlePipeline) vkDestroyPipeline(d, rasterGbufParticlePipeline, nullptr);
             if (rasterGbufDecalPipeline)    vkDestroyPipeline(d, rasterGbufDecalPipeline, nullptr);
@@ -636,7 +635,6 @@ VulkanRenderer::Impl::~Impl() {
             overlayPass_.reset();// destroy sprite/line pipelines + caches while device is alive
             et.mark("particle and line caches, overlay pass");
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
-            destroyBuffer(ctx->allocator(), dummyUvBuffer_);
 
 #if defined(THREEPP_WITH_FSR)
             // Destroy the ffx-api context while the Vulkan device is still alive

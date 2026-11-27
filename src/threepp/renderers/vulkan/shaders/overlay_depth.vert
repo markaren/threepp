@@ -2,7 +2,7 @@
 #extension GL_GOOGLE_include_directive : enable
 
 // Hybrid raster overlay's UNJITTERED depth prepass. Same scene-geometry
-// submit as gbuffer.vert but writes only depth, using cam.currVPunjittered
+// submit as the G-buffer pass but writes only depth, using cam.currVPunjittered
 // instead of cam.currVPjittered. This produces a depth attachment whose
 // per-pixel z values exactly match what overlay.vert computes when shading
 // wireframe / line overlays — so the overlay pass's depth test compares
@@ -30,7 +30,7 @@ layout(location = 0) in vec3 inPos;
 void main() {
     vec4 worldPos = pc.model * vec4(inPos, 1.0);
     vec4 clip     = cam.currVPunjittered * worldPos;
-    // Vulkan NDC y-flip — same correction gbuffer.vert applies.
+    // Vulkan NDC y-flip — same correction gbuffer_indirect.vert applies.
     clip.y        = -clip.y;
     gl_Position   = clip;
 }

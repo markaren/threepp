@@ -1391,7 +1391,7 @@ bool VulkanRenderer::Impl::beginDeferredFrame(Object3D& scene, Camera& camera) {
                 }
                 // The async-compute pilot takes full frames only: the hybrid
                 // debug view and events-only frames build no shade to overlap.
-                const bool gbufOnlyFrame = rasterGbufPipeline != VK_NULL_HANDLE &&
+                const bool gbufOnlyFrame = rasterGbufIndirectPipeline != VK_NULL_HANDLE &&
                                            (hybridDebugView_ != HybridDebugView::Off ||
                                             (eventsOnlyMode_ && eventCamEnabled_));
                 asyncFrame_ = asyncPilot_ && !gbufOnlyFrame;
@@ -3599,7 +3599,7 @@ void VulkanRenderer::Impl::updateWaterMirror(Camera& camera) {
             const VkExtent2D want{std::max(8u, uint32_t(float(pr.width) * sc + 0.5f)),
                                   std::max(8u, uint32_t(float(pr.height) * sc + 0.5f))};
             const bool wanted = !ctx->rayQuerySupported() && oceanPresent_ &&
-                                camera.is<PerspectiveCamera>() && rasterGbufPipeline != VK_NULL_HANDLE &&
+                                camera.is<PerspectiveCamera>() && rasterGbufIndirectPipeline != VK_NULL_HANDLE &&
                                 pr.width > 0u && pr.height > 0u;
             if (waterMirrorView_ != 0u) {
                 const bool fits = wanted && waterMirrorExt_.width == want.width &&
