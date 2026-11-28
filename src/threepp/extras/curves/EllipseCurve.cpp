@@ -1,7 +1,9 @@
 
 #include "threepp/extras/curves/EllipseCurve.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace threepp;
 
@@ -17,13 +19,18 @@ void EllipseCurve::getPoint(float t, Vector2& target) const {
 
     auto twoPi = math::TWO_PI;
     auto deltaAngle = this->aEndAngle - this->aStartAngle;
-    auto samePoints = std::abs(deltaAngle) < std::numeric_limits<float>::epsilon();
+
+    // angles a whole number of turns apart, like a and a + 2 PI, are only equal up to rounding,
+    // which can leave a few ulps either side of 0 or 2 PI below
+    const auto epsilon = 8 * std::numeric_limits<float>::epsilon() *
+                         std::max({twoPi, std::abs(this->aStartAngle), std::abs(this->aEndAngle)});
+    auto samePoints = std::abs(deltaAngle) < epsilon;
 
     // ensures that deltaAngle is 0 .. 2 PI
     while (deltaAngle < 0) deltaAngle += twoPi;
     while (deltaAngle > twoPi) deltaAngle -= twoPi;
 
-    if (deltaAngle < std::numeric_limits<float>::epsilon()) {
+    if (deltaAngle < epsilon || twoPi - deltaAngle < epsilon) {
 
         if (samePoints) {
 
