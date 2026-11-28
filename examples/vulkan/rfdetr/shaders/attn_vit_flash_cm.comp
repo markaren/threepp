@@ -1,0 +1,154 @@
+#version 450
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_clustered : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : require
+// attn_vit_flash.comp on tensor cores: for query i of group b and head h,
+//   out[b*T+i, h*64+e] = sum_j softmax_j(scale * q_i . k_j) * v_j[e]
+// with S = Q K^T and P V as 16x16x16 fp16 matrix products (VK_KHR_cooperative_matrix,
+// fp32 sums) and the online softmax in fp32. A workgroup is four 32-wide subgroups and
+// 64 queries of one head; a subgroup owns 16 queries, keeps them (scaled, fp16) as four
+// A fragments, and walks the keys 64 at a time through shared memory:
+//   S (16x64) = Q K^T                      16 products
+//   two invocations per query row: the row's tile maximum (a clustered max), the
+//   rescale of its running sum and output, P = exp(S - max) as fp16
+//   P V (16x64) on fresh accumulators       16 products, added to the outputs
+// The outputs, maxima and sums stay in registers (invocation 2r+h holds row r, dims
+// h*HD/2 .. h*HD/2 + HD/2 - 1). Head dim HD = 64 (the ViT, the default) or 32 (the decoders'
+// self-attention, built with HD=32); 32-wide subgroups (the host checks).
+// Bindings: 0 qkv [B*T, 3D] laid out [Q | K | V] per token, 1 out [B*T, D].
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint T, H, d, B;
+    float scale;
+    uint _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Qkv { vec4 qkv4[]; };
+layout(std430, binding = 1) writeonly buffer Out { vec4 out4[]; };
+
+#ifndef HD
+#define HD 64
+#endif
+const uint BQ = 64u, BKT = 64u, HD4 = HD / 4, HD16 = HD / 16, HALF = HD / 2;
+const uint LDH = HD + 8u;// fp16 K / V row stride (16-byte aligned, rows shift banks)
+const uint LDP = 72u;    // fp16 P row stride (64 keys)
+const uint LDS = 68u;    // fp32 row stride of a subgroup's 16x64 score / product scratch
+shared float16_t sK[BKT * LDH];     // K tile [key][dim]
+shared float16_t sV[BKT * LDH];     // V tile [key][dim]
+shared float16_t sP[4u * 16u * LDP];// per subgroup: Q staging, then P [query][key]
+shared float sS[4u * 16u * LDS];    // per subgroup: S, then P V [query][dim]
+
+#define ACC coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+#define MA coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+#define MB coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+
+void main() {
+    const uint tid = gl_LocalInvocationIndex, sg = gl_SubgroupID, lane = gl_SubgroupInvocationID;
+    const uint h = gl_WorkGroupID.y, b = gl_WorkGroupID.z;
+    const uint q0 = gl_WorkGroupID.x * BQ + sg * 16u;// this subgroup's first query
+    const uint D4 = p.H * HD4, S4 = 3u * D4;
+    const uint rowBase = b * p.T;
+    const uint row = lane >> 1u, hf = lane & 1u;// this invocation's query row, and which half of the dims
+    const uint pBase = sg * 16u * LDP, sBase = sg * 16u * LDS;
+
+    // Q (scaled) into fp16 fragments, staged through the subgroup's P scratch.
+    [[unroll]] for (uint i = 0u; i < HD / 8u; ++i) {
+        const uint e = lane + i * 32u;// float4 e of the 16 x HD block: row e/HD4, dims (e%HD4)*4
+        const uint qi = min(q0 + e / HD4, p.T - 1u);
+        const vec4 v = qkv4[(rowBase + qi) * S4 + h * HD4 + e % HD4] * p.scale;
+        const uint o = pBase + (e / HD4) * LDP + (e % HD4) * 4u;
+        sP[o] = float16_t(v.x); sP[o + 1u] = float16_t(v.y); sP[o + 2u] = float16_t(v.z); sP[o + 3u] = float16_t(v.w);
+    }
+    subgroupMemoryBarrierShared();
+    subgroupBarrier();
+    MA qf[HD16];
+    [[unroll]] for (uint kd = 0u; kd < HD16; ++kd)
+        coopMatLoad(qf[kd], sP, pBase + kd * 16u, LDP, gl_CooperativeMatrixLayoutRowMajor);
+
+    float o[HALF];
+    [[unroll]] for (uint e = 0u; e < HALF; ++e) o[e] = 0.0;
+    float m = -3.4e38, l = 0.0;
+
+    for (uint j0 = 0u; j0 < p.T; j0 += BKT) {
+        barrier();// the previous tile's K and V are no longer read
+        [[unroll]] for (uint i = 0u; i < HD4 / 2u; ++i) {
+            const uint lin = tid + i * 128u;// float4 lin of the 64 x HD tile: key lin/HD4, dims (lin%HD4)*4
+            const uint j = lin / HD4, dq = lin % HD4;
+            vec4 kv = vec4(0.0), vv = vec4(0.0);
+            if (j0 + j < p.T) {
+                const uint src = (rowBase + j0 + j) * S4 + h * HD4 + dq;
+                kv = qkv4[src + D4];
+                vv = qkv4[src + 2u * D4];
+            }
+            const uint dst = j * LDH + dq * 4u;
+            sK[dst] = float16_t(kv.x); sK[dst + 1u] = float16_t(kv.y); sK[dst + 2u] = float16_t(kv.z); sK[dst + 3u] = float16_t(kv.w);
+            sV[dst] = float16_t(vv.x); sV[dst + 1u] = float16_t(vv.y); sV[dst + 2u] = float16_t(vv.z); sV[dst + 3u] = float16_t(vv.w);
+        }
+        barrier();
+
+        // S = Q K^T: four 16x16 blocks of keys.
+        [[unroll]] for (uint kb = 0u; kb < 4u; ++kb) {
+            ACC s = ACC(0.0);
+            [[unroll]] for (uint kd = 0u; kd < HD16; ++kd) {
+                MB kf;
+                coopMatLoad(kf, sK, kb * 16u * LDH + kd * 16u, LDH, gl_CooperativeMatrixLayoutColumnMajor);
+                s = coopMatMulAdd(qf[kd], kf, s);
+            }
+            coopMatStore(s, sS, sBase + kb * 16u, LDS, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        subgroupMemoryBarrierShared();
+        subgroupBarrier();
+
+        // Online softmax on this invocation's 32 scores of its row.
+        float sv[32];
+        float tmax = -3.4e38;
+        [[unroll]] for (uint c = 0u; c < 32u; ++c) {
+            const uint col = hf * 32u + c;
+            sv[c] = j0 + col < p.T ? sS[sBase + row * LDS + col] : -3.4e38;
+            tmax = max(tmax, sv[c]);
+        }
+        const float mNew = max(m, subgroupClusteredMax(tmax, 2u));
+        const float corr = exp(m - mNew);
+        m = mNew;
+        l *= corr;
+        [[unroll]] for (uint e = 0u; e < HALF; ++e) o[e] *= corr;
+        [[unroll]] for (uint c = 0u; c < 32u; ++c) {
+            const float pv = exp(sv[c] - mNew);
+            l += pv;
+            sP[pBase + row * LDP + hf * 32u + c] = float16_t(pv);
+        }
+        subgroupMemoryBarrierShared();
+        subgroupBarrier();
+
+        // P V into fresh accumulators, added to the outputs through the scratch.
+        [[unroll]] for (uint db = 0u; db < HD16; ++db) {
+            ACC pvAcc = ACC(0.0);
+            [[unroll]] for (uint kk = 0u; kk < 4u; ++kk) {
+                MA pf;
+                MB vf;
+                coopMatLoad(pf, sP, pBase + kk * 16u, LDP, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(vf, sV, kk * 16u * LDH + db * 16u, LDH, gl_CooperativeMatrixLayoutRowMajor);
+                pvAcc = coopMatMulAdd(pf, vf, pvAcc);
+            }
+            coopMatStore(pvAcc, sS, sBase + db * 16u, LDS, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        subgroupMemoryBarrierShared();
+        subgroupBarrier();
+        [[unroll]] for (uint e = 0u; e < HALF; ++e) o[e] += sS[sBase + row * LDS + hf * HALF + e];
+        subgroupBarrier();// the scratch is rewritten by the next tile's S
+    }
+
+    const float inv = 1.0 / subgroupClusteredAdd(l, 2u);
+    const uint qi = q0 + row;
+    if (qi < p.T) {
+        const uint dst = (rowBase + qi) * D4 + h * HD4 + hf * (HD / 8u);
+        [[unroll]] for (uint e = 0u; e < HD / 8u; ++e)
+            out4[dst + e] = vec4(o[e * 4u], o[e * 4u + 1u], o[e * 4u + 2u], o[e * 4u + 3u]) * inv;
+    }
+}

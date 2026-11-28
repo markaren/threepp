@@ -1,0 +1,309 @@
+#version 450
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : require
+// Tensor-core version of gemm.comp, same push constants and epilogue:
+//   Y[m, n] = epi( sum_k A[m, k] * B(k, n) )
+// with the products in fp16 and the sums in fp32 (VK_KHR_cooperative_matrix, 16x16x16,
+// subgroup scope). Built per B layout like gemm.comp:
+//   B_NK   (default, nn.Linear) A = the fp32 activations [M,K], rounded to fp16 on their way
+//          into shared memory; B = the fp16 copy of the weight [N,K].
+//   B_KN   (1x1 conv) A = the fp16 copy of the conv weight [out_c, K]; B = the fp32 CHW
+//          input [K, N], rounded to fp16 into shared memory.
+//   B_CONV (kxk conv) A as for B_KN; B = the implicit im2col of the fp32 CHW input.
+// A workgroup is four 32-wide subgroups in a 2x2 grid over a BM x BN tile, so a subgroup
+// owns (BM/2) x (BN/2) outputs as 16x16 accumulators. k advances 32 per tile through
+// padded shared memory, double-buffered with the next tile fetched into registers during
+// the current one's math (NOPREFETCH: one buffer, fetch then multiply, two barriers).
+// The accumulators reach the epilogue through one 16x16 fp32 scratch per subgroup.
+// Split-K and the PARTIAL flag as in gemm.comp. The host guarantees: K, lda and aOff
+// multiples of 4 (and ldb, bOff for B_NK / B_KN, N for B_KN); 32-wide subgroups.
+// Bindings: 0 A, 1 B, 2 bias, 3 Y, 4 res, 5 gamma.
+
+#ifndef BM
+#define BM 64
+#endif
+#ifndef BN
+#define BN 64
+#endif
+#if !defined(B_KN) && !defined(B_CONV)
+#define B_NK
+#endif
+#define FM (BM / 32)// accumulator rows of 16 per subgroup
+#define FN (BN / 32)// accumulator columns of 16 per subgroup
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, K, kChunk;
+    uint lda, ldb, ldc, ldr;
+    uint aOff, bOff, cOff, rOff;
+    uint biasOff, flags, _p0, _p1;
+    uint inH, inW, outW, kh;// B_CONV only
+    uint kw, cstride, pad, _p2;
+} p;
+
+const uint F_BIAS = 1u, F_RES = 2u, F_GAMMA = 4u, F_PARTIAL = 8u, F_BIASROW = 16u;// act = (flags >> 8) & 15: 1 GELU, 2 ReLU
+
+#ifdef B_NK
+layout(std430, binding = 0) readonly buffer A4 { vec4 a4[]; };
+layout(std430, binding = 1) readonly buffer W4 { f16vec4 w4[]; };
+#else
+layout(std430, binding = 0) readonly buffer A16 { f16vec4 a16[]; };
+#ifdef B_KN
+layout(std430, binding = 1) readonly buffer B4 { vec4 b4[]; };
+#else
+layout(std430, binding = 1) readonly buffer B1 { float b1[]; };
+#endif
+#endif
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 2) readonly buffer Bias4 { vec4 bias4[]; };
+layout(std430, binding = 3) writeonly buffer Y4 { vec4 y4[]; };
+layout(std430, binding = 3) writeonly buffer Y1 { float y1[]; };
+layout(std430, binding = 4) readonly buffer R1 { float res[]; };
+layout(std430, binding = 4) readonly buffer R4 { vec4 res4[]; };
+layout(std430, binding = 5) readonly buffer G1 { float gam[]; };
+layout(std430, binding = 5) readonly buffer G4 { vec4 gam4[]; };
+
+const uint BK = 32u;
+const uint LD4 = BK / 4u + 2u;// [row][k] smem stride in f16vec4s: 40 halfs, 80 bytes (rows shift banks)
+const uint LDB4 = BN / 4u + 2u;// [k][n] smem stride in f16vec4s (B_KN / B_CONV)
+#ifdef NOPREFETCH
+const uint NBUF = 1u;
+#else
+const uint NBUF = 2u;
+#endif
+shared f16vec4 sA[NBUF * BM * LD4];// [buf][m][k]
+#ifdef B_NK
+shared f16vec4 sB[NBUF * BN * LD4];// [buf][n][k], read column-major as W^T
+#else
+shared f16vec4 sB[NBUF * BK * LDB4];// [buf][k][n]
+#endif
+shared vec4 sC[4u * 64u];// a 16x16 fp32 scratch per subgroup
+
+const uint A_LOADS = BM * BK / 4u / 128u;// four-element groups per invocation per A tile
+#ifdef B_NK
+vec4 ra[A_LOADS];
+const uint B_LOADS = BN * BK / 4u / 128u;
+f16vec4 rb[B_LOADS];
+#else
+f16vec4 ra[A_LOADS];
+#ifdef B_KN
+const uint B_LOADS = BK * BN / 4u / 128u;
+vec4 rb[B_LOADS];
+#else
+const uint B_LOADS = BK * BN / 128u;// floats, one tile column per invocation
+float rb[B_LOADS];
+uint cn;     // this invocation's tile column while gathering B
+int cy0, cx0;// its output position's top-left input sample
+bool cvalid;
+#endif
+#endif
+uint tid, bm0, bn0, wm, wn;
+
+coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc[FM][FN];
+
+float erf1(float z) {// as gemm.comp / gemm_reduce.comp
+    float s = z < 0.0 ? -1.0 : 1.0;
+    float a = abs(z);
+    float t = 1.0 / (1.0 + 0.3275911 * a);
+    float poly = (((( 1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+                    - 0.284496736) * t + 0.254829592) * t;
+    return s * (1.0 - poly * exp(-a * a));
+}
+
+// Rows of A (and of a B_NK weight) are fetched eight invocations to a row, four elements each.
+void loadTiles(uint k0, uint kEnd) {
+    [[unroll]] for (uint r = 0u; r < A_LOADS; ++r) {
+        const uint lin = tid + r * 128u;
+        const uint gm = bm0 + lin / 8u, gk = k0 + (lin % 8u) * 4u;
+#ifdef B_NK
+        ra[r] = (gm < p.M && gk < kEnd) ? a4[(p.aOff + gm * p.lda + gk) >> 2u] : vec4(0.0);
+#else
+        ra[r] = (gm < p.M && gk < kEnd) ? a16[(p.aOff + gm * p.lda + gk) >> 2u] : f16vec4(0.0);
+#endif
+    }
+#if defined(B_NK)
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        const uint lin = tid + r * 128u;
+        const uint gn = bn0 + lin / 8u, gk = k0 + (lin % 8u) * 4u;
+        rb[r] = (gn < p.N && gk < kEnd) ? w4[(p.bOff + gn * p.ldb + gk) >> 2u] : f16vec4(0.0);
+    }
+#elif defined(B_KN)
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {// rows of B are k: four consecutive n each
+        const uint lin = tid + r * 128u;
+        const uint gk = k0 + lin / (BN / 4u), gn = bn0 + (lin % (BN / 4u)) * 4u;
+        rb[r] = (gk < kEnd && gn < p.N) ? b4[(p.bOff + gk * p.ldb + gn) >> 2u] : vec4(0.0);
+    }
+#else
+    const uint khw = p.kh * p.kw;
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {// one output position, BK/(128/BN) values of k
+        const uint gk = k0 + tid / BN + r * (128u / BN);
+        float v = 0.0;
+        if (cvalid && gk < kEnd) {
+            const uint ic = gk / khw;
+            const uint rem = gk - ic * khw;
+            const uint ky = rem / p.kw;
+            const int iy = cy0 + int(ky), ix = cx0 + int(rem - ky * p.kw);
+            if (iy >= 0 && iy < int(p.inH) && ix >= 0 && ix < int(p.inW))
+                v = b1[p.bOff + (ic * p.inH + uint(iy)) * p.inW + uint(ix)];
+        }
+        rb[r] = v;
+    }
+#endif
+}
+
+void storeTiles(uint buf) {
+    [[unroll]] for (uint r = 0u; r < A_LOADS; ++r) {
+        const uint lin = tid + r * 128u;
+        sA[(buf * BM + lin / 8u) * LD4 + lin % 8u] = f16vec4(ra[r]);
+    }
+#if defined(B_NK)
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        const uint lin = tid + r * 128u;
+        sB[(buf * BN + lin / 8u) * LD4 + lin % 8u] = rb[r];
+    }
+#elif defined(B_KN)
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        const uint lin = tid + r * 128u;
+        sB[(buf * BK + lin / (BN / 4u)) * LDB4 + lin % (BN / 4u)] = f16vec4(rb[r]);
+    }
+#else
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        const uint kk = tid / BN + r * (128u / BN);
+        sB[(buf * BK + kk) * LDB4 + cn / 4u][cn % 4u] = float16_t(rb[r]);
+    }
+#endif
+}
+
+void compute(uint buf) {
+    [[unroll]] for (uint kk = 0u; kk < BK / 4u; kk += 4u) {// 16 k per step, in f16vec4s
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> fa[FM];
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> fb[FN];
+        [[unroll]] for (uint i = 0u; i < FM; ++i)
+            coopMatLoad(fa[i], sA, (buf * BM + wm * (BM / 2u) + i * 16u) * LD4 + kk, LD4,
+                        gl_CooperativeMatrixLayoutRowMajor);
+        [[unroll]] for (uint j = 0u; j < FN; ++j)
+#ifdef B_NK
+            coopMatLoad(fb[j], sB, (buf * BN + wn * (BN / 2u) + j * 16u) * LD4 + kk, LD4,
+                        gl_CooperativeMatrixLayoutColumnMajor);
+#else
+            coopMatLoad(fb[j], sB, (buf * BK + kk * 4u) * LDB4 + (wn * (BN / 2u) + j * 16u) / 4u, LDB4,
+                        gl_CooperativeMatrixLayoutRowMajor);
+#endif
+        [[unroll]] for (uint i = 0u; i < FM; ++i)
+            [[unroll]] for (uint j = 0u; j < FN; ++j) acc[i][j] = coopMatMulAdd(fa[i], fb[j], acc[i][j]);
+    }
+}
+
+// gemm.comp's epilogue for one float4 of outputs at (gm, gn).
+void emit(uint gm, uint gn, vec4 v, bool vec) {
+    if (gn >= p.N) return;
+    const uint act = (p.flags >> 8u) & 15u;
+    const uint gmc = min(gm, p.M - 1u);
+    uint o;
+    if ((p.flags & F_PARTIAL) != 0u) {
+        o = (gl_WorkGroupID.z * p.M + gm) * p.N + gn;
+    } else {
+        if ((p.flags & F_BIASROW) != 0u) {
+            v += vec4(bias[p.biasOff + gmc]);
+        } else if ((p.flags & F_BIAS) != 0u) {
+            if (vec) v += bias4[(p.biasOff + gn) >> 2u];
+            else [[unroll]] for (uint c = 0u; c < 4u; ++c) v[c] += bias[p.biasOff + min(gn + c, p.N - 1u)];
+        }
+        if (act == 1u) {
+            [[unroll]] for (uint c = 0u; c < 4u; ++c) v[c] = 0.5 * v[c] * (1.0 + erf1(v[c] * 0.7071067811865475));
+        } else if (act == 2u) {
+            v = max(v, vec4(0.0));
+        }
+        if ((p.flags & F_RES) != 0u) {
+            vec4 g = vec4(1.0), r;
+            if (vec) {
+                if ((p.flags & F_GAMMA) != 0u) g = gam4[gn >> 2u];
+                r = res4[(p.rOff + gmc * p.ldr + gn) >> 2u];
+            } else {
+                [[unroll]] for (uint c = 0u; c < 4u; ++c) {
+                    const uint n = min(gn + c, p.N - 1u);
+                    if ((p.flags & F_GAMMA) != 0u) g[c] = gam[n];
+                    r[c] = res[p.rOff + gmc * p.ldr + n];
+                }
+            }
+            v = r + g * v;
+        }
+        o = p.cOff + gm * p.ldc + gn;
+    }
+    if (gm >= p.M) return;
+    if (vec) {
+        y4[o >> 2u] = v;
+    } else {
+        [[unroll]] for (uint c = 0u; c < 4u; ++c)
+            if (gn + c < p.N) y1[o + c] = v[c];
+    }
+}
+
+void main() {
+    tid = gl_LocalInvocationID.x;
+    wm = gl_SubgroupID / 2u;
+    wn = gl_SubgroupID % 2u;
+    bm0 = gl_WorkGroupID.y * BM;
+    bn0 = gl_WorkGroupID.x * BN;
+    const uint kBeg = gl_WorkGroupID.z * p.kChunk;
+    const uint kEnd = min(p.K, kBeg + p.kChunk);
+    [[unroll]] for (uint i = 0u; i < FM; ++i)
+        [[unroll]] for (uint j = 0u; j < FN; ++j)
+            acc[i][j] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+#ifdef B_CONV
+    cn = tid % BN;
+    const uint gnc = bn0 + cn;
+    cvalid = gnc < p.N;
+    const uint oy = gnc / p.outW;
+    cy0 = int(oy * p.cstride) - int(p.pad);
+    cx0 = int((gnc - oy * p.outW) * p.cstride) - int(p.pad);
+#endif
+
+    const uint nTiles = (kEnd - kBeg + BK - 1u) / BK;
+#ifdef NOPREFETCH
+    for (uint t = 0u; t < nTiles; ++t) {
+        loadTiles(kBeg + t * BK, kEnd);
+        storeTiles(0u);
+        barrier();
+        compute(0u);
+        barrier();
+    }
+#else
+    loadTiles(kBeg, kEnd);
+    storeTiles(0u);
+    barrier();
+    for (uint t = 0u; t < nTiles; ++t) {
+        const uint cur = t & 1u;
+        const bool more = t + 1u < nTiles;
+        if (more) loadTiles(kBeg + (t + 1u) * BK, kEnd);
+        compute(cur);
+        if (more) storeTiles(cur ^ 1u);
+        barrier();
+    }
+#endif
+
+    // Epilogue: each accumulator through the subgroup's scratch, two float4s per invocation.
+    const bool partial = (p.flags & F_PARTIAL) != 0u;
+    const bool vec = partial ? (p.N & 3u) == 0u
+                             : ((p.N | p.ldc | p.cOff | p.biasOff) & 3u) == 0u &&
+                               ((p.flags & F_RES) == 0u || ((p.ldr | p.rOff) & 3u) == 0u);
+    const uint sg = gl_SubgroupID, lane = gl_SubgroupInvocationID;
+    [[unroll]] for (uint i = 0u; i < FM; ++i) {
+        [[unroll]] for (uint j = 0u; j < FN; ++j) {
+            coopMatStore(acc[i][j], sC, sg * 64u, 4u, gl_CooperativeMatrixLayoutRowMajor);
+            subgroupMemoryBarrierShared();
+            subgroupBarrier();
+            [[unroll]] for (uint h = 0u; h < 2u; ++h) {
+                const uint e = lane + h * 32u;// float4 e of the 16x16 tile: row e/4, columns (e%4)*4..+3
+                emit(bm0 + wm * (BM / 2u) + i * 16u + e / 4u, bn0 + wn * (BN / 2u) + j * 16u + (e % 4u) * 4u,
+                     sC[sg * 64u + e], vec);
+            }
+            subgroupBarrier();
+        }
+    }
+}

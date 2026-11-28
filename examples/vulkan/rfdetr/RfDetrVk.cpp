@@ -18,6 +18,10 @@
 #include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_conv128x64.spv.h"
 #include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_conv64x64.spv.h"
 #include "threepp/renderers/vulkan/shaders/gemm_reduce.comp.rfdetr.spv.h"
+// gemm_cm.comp: the tensor-core GEMM (fp16 products, fp32 sums) for nn.Linear layers.
+#include "threepp/renderers/vulkan/shaders/gemm_cm.comp.rfdetr_cm64x64.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm_cm.comp.rfdetr_cmkn.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm_cm.comp.rfdetr_cmconv.spv.h"
 #include "threepp/renderers/vulkan/shaders/layernorm.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/softmax.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/attn_scores.comp.rfdetr.spv.h"
@@ -36,6 +40,8 @@
 #include "threepp/renderers/vulkan/shaders/topk_rank.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/query_refs.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/attn_vit_flash.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/attn_vit_flash_cm.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/attn_vit_flash_cm.comp.rfdetr_hd32.spv.h"
 #include "threepp/renderers/vulkan/shaders/repeat_rows.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/group_pack.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/group_unpack.comp.rfdetr.spv.h"
@@ -80,6 +86,28 @@ namespace {
 
     uint32_t divCeil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
+    // IEEE binary16, round to nearest even.
+    uint16_t toHalf(float f) {
+        uint32_t x;
+        std::memcpy(&x, &f, sizeof(x));
+        const uint32_t sign = (x >> 16) & 0x8000u, mant = x & 0x7FFFFFu;
+        const int32_t exp = int32_t((x >> 23) & 0xFFu) - 127 + 15;
+        if (((x >> 23) & 0xFFu) == 0xFFu) return uint16_t(sign | 0x7C00u | (mant ? 0x200u : 0u));// inf, nan
+        if (exp >= 31) return uint16_t(sign | 0x7C00u);                                          // overflow
+        if (exp <= 0) {                                                                          // subnormal
+            if (exp < -10) return uint16_t(sign);
+            const uint32_t m = mant | 0x800000u, shift = uint32_t(14 - exp);
+            uint32_t h = m >> shift;
+            const uint32_t rem = m & ((1u << shift) - 1u), half = 1u << (shift - 1u);
+            if (rem > half || (rem == half && (h & 1u))) ++h;
+            return uint16_t(sign | h);
+        }
+        uint32_t h = (uint32_t(exp) << 10) | (mant >> 13);
+        const uint32_t rem = mant & 0x1FFFu;
+        if (rem > 0x1000u || (rem == 0x1000u && (h & 1u))) ++h;// a carry rounds up into the exponent
+        return uint16_t(sign | h);
+    }
+
     // A weight shape as text, for the loader's errors.
     std::string shapeStr(const std::vector<uint32_t>& s) {
         std::string out = "[";
@@ -107,12 +135,14 @@ RfDetrConfig RfDetrConfig::forVariant(RfDetrVariant v) {
     return c;
 }
 
-RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
-    : vk_(static_cast<VkDevice>(r.nativeDevice()),
+RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant, bool tensorCores)
+    : vk_(static_cast<VkInstance>(r.nativeInstance()),
+          static_cast<VkDevice>(r.nativeDevice()),
           static_cast<VkPhysicalDevice>(r.nativePhysicalDevice()),
           static_cast<VkQueue>(r.nativeGraphicsQueue()),
           r.graphicsQueueFamily()),
-      cfg_(RfDetrConfig::forVariant(variant)) {
+      cfg_(RfDetrConfig::forVariant(variant)),
+      tensorCores_(tensorCores && vk_.coopMatF16()) {
 
     // gemm.comp: [B layout][tile] (kTiles in gemm_()).
     gemmPipe_[0][0] = vk_.createPipe(kRfGemmNK128x64Spv, sizeof(kRfGemmNK128x64Spv), 6, sizeof(GemmParams), "gemm_nk_128x64");
@@ -121,6 +151,13 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
     gemmPipe_[1][1] = vk_.createPipe(kRfGemmKN64x64Spv, sizeof(kRfGemmKN64x64Spv), 6, sizeof(GemmParams), "gemm_kn_64x64");
     gemmPipe_[2][0] = vk_.createPipe(kRfGemmCONV128x64Spv, sizeof(kRfGemmCONV128x64Spv), 6, sizeof(GemmParams), "gemm_conv_128x64");
     gemmPipe_[2][1] = vk_.createPipe(kRfGemmCONV64x64Spv, sizeof(kRfGemmCONV64x64Spv), 6, sizeof(GemmParams), "gemm_conv_64x64");
+    if (tensorCores_) {// gemm_cm.comp: [B layout]
+        gemmCmPipe_[0] = vk_.createPipe(kRfGemmCm64x64Spv, sizeof(kRfGemmCm64x64Spv), 6, sizeof(GemmParams), "gemm_cm_nk");
+        gemmCmPipe_[1] = vk_.createPipe(kRfGemmCmKnSpv, sizeof(kRfGemmCmKnSpv), 6, sizeof(GemmParams), "gemm_cm_kn");
+        gemmCmPipe_[2] = vk_.createPipe(kRfGemmCmConvSpv, sizeof(kRfGemmCmConvSpv), 6, sizeof(GemmParams), "gemm_cm_conv");
+    }
+    std::cout << "RfDetrVk: matrix products " << (tensorCores_ ? "on tensor cores (fp16 products, fp32 sums)" : "in fp32")
+              << "\n";
     gemmReducePipe_ = vk_.createPipe(kRfGemmReduceSpv, sizeof(kRfGemmReduceSpv), 5, sizeof(GemmReduceParams), "gemm_reduce");
     layerNormPipe_  = vk_.createPipe(kRfLayerNormSpv, sizeof(kRfLayerNormSpv), 4, sizeof(LNParams), "layernorm");
     softmaxPipe_    = vk_.createPipe(kRfSoftmaxSpv,   sizeof(kRfSoftmaxSpv),   2, sizeof(SoftmaxParams), "softmax");
@@ -147,10 +184,19 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
 
     // Fused attention when the device has clustered subgroup adds and the head dim
     // is the kernel's 64; otherwise scores + softmax + apply.
+    // With tensor cores, its matrix products in fp16 (attn_vit_flash_cm.comp).
     useFlashAttn_ = vk_.subgroupClustered() && cfg_.embedDim / cfg_.numHeads == 64;
-    if (useFlashAttn_)
+    const bool flashCm = useFlashAttn_ && tensorCores_;
+    if (flashCm)
+        attnFlashPipe_ = vk_.createPipe(kRfAttnFlashCmSpv, sizeof(kRfAttnFlashCmSpv), 2, sizeof(AttnVitParams), "attn_vit_flash_cm");
+    else if (useFlashAttn_)
         attnFlashPipe_ = vk_.createPipe(kRfAttnFlashSpv, sizeof(kRfAttnFlashSpv), 2, sizeof(AttnVitParams), "attn_vit_flash");
-    std::cout << "RfDetrVk: ViT attention " << (useFlashAttn_ ? "fused" : "in three passes") << "\n";
+    std::cout << "RfDetrVk: ViT attention " << (flashCm ? "fused, on tensor cores" : useFlashAttn_ ? "fused" : "in three passes")
+              << "\n";
+    // The decoders' self-attention (head dim 32): one pass on tensor cores, else three.
+    if (tensorCores_ && vk_.subgroupClustered())
+        attnCm32Pipe_ = vk_.createPipe(kRfAttnFlashCm32Spv, sizeof(kRfAttnFlashCm32Spv), 2, sizeof(AttnVitParams),
+                                       "attn_head32_cm");
 
     // Partial-sum scratch for split-K GEMMs: room for 4 planes of [maxTokens, 512]
     // (gemm_() picks no split that would not fit). One buffer reused by every split
@@ -178,8 +224,10 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
 RfDetrVk::~RfDetrVk() {
     for (auto& row : gemmPipe_)
         for (auto& pipe : row) vk_.destroyPipe(pipe);
+    for (auto& pipe : gemmCmPipe_) vk_.destroyPipe(pipe);
     vk_.destroyPipe(gemmReducePipe_);
     vk_.destroyPipe(attnFlashPipe_);
+    vk_.destroyPipe(attnCm32Pipe_);
     vk_.destroyPipe(layerNormPipe_);
     vk_.destroyPipe(softmaxPipe_);
     vk_.destroyPipe(attnScoresPipe_);
@@ -327,7 +375,34 @@ void RfDetrVk::loadWeights(const std::string& path) {
         throw std::runtime_error("RfDetrVk: checkpoint has no refpoint_embed [>=" +
                                  std::to_string(cfg_.numQueries) + ", 4]");
 
-    std::cout << "RfDetrVk::loadWeights: " << weights_.size() << " GPU tensors (fp32)\n";
+    // fp16 copies of the 2D weights (and the fused qkv) for the tensor-core GEMMs.
+    weights16_.clear();
+    if (tensorCores_) {
+        auto upload16 =[&](const std::string& name, const std::vector<float>& data, const std::vector<uint32_t>& shape) {
+            std::vector<uint16_t> h(data.size());
+            for (size_t i = 0; i < data.size(); ++i) h[i] = toHalf(data[i]);
+            VkTensor t = vk_.createOwnedRaw(VkDeviceSize(h.size()) * sizeof(uint16_t));
+            t.shape = shape;
+            vk_.upload(t.buffer, h.data(), h.size() * sizeof(uint16_t));
+            weights16_.emplace(name, std::move(t));
+        };
+        for (const auto& [name, data] : w.data) {
+            const auto& sh = w.shapes.at(name);
+            if (sh.size() == 2 && sh[1] % 4u == 0u) upload16(name, data, sh);
+            if (sh.size() == 4 && (sh[1] * sh[2] * sh[3]) % 4u == 0u)// a conv weight as [out_c, in_c*kh*kw]
+                upload16(name, data, {sh[0], sh[1] * sh[2] * sh[3]});
+        }
+        for (int L = 0; L < cfg_.numLayers; ++L) {
+            std::string p = "backbone.0.encoder.encoder.encoder.layer." + std::to_string(L) + ".attention.attention.";
+            auto qw = w.data.find(p + "query.weight"), kw = w.data.find(p + "key.weight"), vw = w.data.find(p + "value.weight");
+            if (qw == w.data.end() || kw == w.data.end() || vw == w.data.end()) continue;
+            const uint32_t K = w.shapes.at(p + "query.weight")[1];
+            auto fw = concat3(qw->second, kw->second, vw->second);
+            upload16(p + "qkv.weight", fw, {uint32_t(fw.size() / K), K});
+        }
+    }
+    std::cout << "RfDetrVk::loadWeights: " << weights_.size() << " GPU tensors (fp32)"
+              << (weights16_.empty() ? "" : ", " + std::to_string(weights16_.size()) + " fp16 copies") << "\n";
 }
 
 // Records g with the tile and K split whose estimated time is least, among those
@@ -346,32 +421,47 @@ void RfDetrVk::gemm_(const Gemm& g) {
     struct TileCfg { uint32_t bm, bn, bk; float fmaPerNs; };
     static constexpr TileCfg kTiles[2] = {{128u, 64u, 32u, 215.f}, {64u, 64u, 16u, 170.f}};
     const float sms = float(vk_.smCount());
+    // GEMMs with an fp16 copy of their weight (B of a linear layer, A of a conv) go to
+    // gemm_cm.comp's 64x64 tiles when the device has tensor cores. Those workgroups are
+    // short and want ~3 per SM to hide their loads (timed per shape on an RTX 5080,
+    // PORTING_NOTES §11): the smallest split that gets there.
+    const bool cm = tensorCores_ && (g.layout == GemmB::NK ? g.b16 != VK_NULL_HANDLE : g.a16 != VK_NULL_HANDLE);
     int tile = 0;
     uint32_t splits = 1, chunk = g.K;
-    float best = std::numeric_limits<float>::max(), mostGroups = 0.f;
-    bool enough = false;// some candidate reaches the workgroup floor
-    for (int t = 0; t < 2; ++t) {
-        const TileCfg& tc = kTiles[t];
+    if (cm) {
         for (uint32_t s : {1u, 2u, 4u, 8u}) {
-            const uint32_t c = divCeil(divCeil(g.K, s), tc.bk) * tc.bk;// k per split, whole k-tiles
+            const uint32_t c = divCeil(divCeil(g.K, s), 32u) * 32u;
             const uint32_t n = divCeil(g.K, c);
             if (n != s || (n > 1 && uint64_t(n) * g.M * g.N > splitKPartialFloats_)) continue;
-            const float groups = float(divCeil(g.M, tc.bm) * divCeil(g.N, tc.bn) * n);
-            float ns = std::ceil(groups / sms) * float(tc.bm * tc.bn) * float(c + 64u) / tc.fmaPerNs + 1000.f;
-            if (n > 1) ns += 1000.f + float(n + 1) * float(g.M) * float(g.N) * 4.f / 1.5f;// ~1.5 B/ns
-            const bool ok = groups >= 1.7f * sms;
-            // Past the floor the estimate decides; below it (tiny GEMMs) the most workgroups.
-            if (ok ? (!enough || ns < best) : (!enough && groups > mostGroups)) {
-                best = ok ? ns : best;
-                mostGroups = groups;
-                enough = enough || ok;
-                tile = t;
-                splits = n;
-                chunk = c;
+            splits = n;
+            chunk = c;
+            if (float(divCeil(g.M, 64u) * divCeil(g.N, 64u) * n) >= 3.f * sms) break;
+        }
+    } else {
+        float best = std::numeric_limits<float>::max(), mostGroups = 0.f;
+        bool enough = false;// some candidate reaches the workgroup floor
+        for (int t = 0; t < 2; ++t) {
+            const TileCfg& tc = kTiles[t];
+            for (uint32_t s : {1u, 2u, 4u, 8u}) {
+                const uint32_t c = divCeil(divCeil(g.K, s), tc.bk) * tc.bk;// k per split, whole k-tiles
+                const uint32_t n = divCeil(g.K, c);
+                if (n != s || (n > 1 && uint64_t(n) * g.M * g.N > splitKPartialFloats_)) continue;
+                const float groups = float(divCeil(g.M, tc.bm) * divCeil(g.N, tc.bn) * n);
+                float ns = std::ceil(groups / sms) * float(tc.bm * tc.bn) * float(c + 64u) / tc.fmaPerNs + 1000.f;
+                if (n > 1) ns += 1000.f + float(n + 1) * float(g.M) * float(g.N) * 4.f / 1.5f;// ~1.5 B/ns
+                const bool ok = groups >= 1.7f * sms;
+                // Past the floor the estimate decides; below it (tiny GEMMs) the most workgroups.
+                if (ok ? (!enough || ns < best) : (!enough && groups > mostGroups)) {
+                    best = ok ? ns : best;
+                    mostGroups = groups;
+                    enough = enough || ok;
+                    tile = t;
+                    splits = n;
+                    chunk = c;
+                }
             }
         }
     }
-
     const uint32_t epi = (g.bias ? (g.biasPerRow ? kGemmBiasRow : kGemmBias) : 0u) | (g.res ? kGemmRes : 0u) |
                          (g.gamma ? kGemmGamma : 0u) | (g.act << 8u);
     const VkBuffer none = vk_.dummy();
@@ -382,9 +472,13 @@ void RfDetrVk::gemm_(const Gemm& g) {
                   g.biasOff, splits > 1 ? kGemmPartial : epi, 0u, 0u,
                   g.inH, g.inW, g.outW, g.kh,
                   g.kw, g.stride, g.pad, 0u};
-    const TileCfg& tc = kTiles[tile];
-    vk_.dispatch(gemmPipe_[int(g.layout)][tile], {g.a, g.b, bias, splits > 1 ? splitKPartials_.buffer : g.y, res, gamma},
-                 &gp, sizeof(gp), divCeil(g.N, tc.bn), divCeil(g.M, tc.bm), splits);
+    const uint32_t bm = cm ? 64u : kTiles[tile].bm, bn = cm ? 64u : kTiles[tile].bn;
+    const VkPipe& pipe = cm ? gemmCmPipe_[int(g.layout)] : gemmPipe_[int(g.layout)][tile];
+    // The tensor-core GEMM reads the fp16 copy of the weight operand.
+    const VkBuffer opA = cm && g.layout != GemmB::NK ? g.a16 : g.a;
+    const VkBuffer opB = cm && g.layout == GemmB::NK ? g.b16 : g.b;
+    vk_.dispatch(pipe, {opA, opB, bias, splits > 1 ? splitKPartials_.buffer : g.y, res, gamma},
+                 &gp, sizeof(gp), divCeil(g.N, bn), divCeil(g.M, bm), splits);
     if (splits > 1) {
         GemmReduceParams rp{g.M, g.N, splits, epi, g.ldc, g.ldr, g.cOff, g.rOff, g.biasOff, 0u, 0u, 0u};
         vk_.dispatch(gemmReducePipe_, {splitKPartials_.buffer, bias, g.y, res, gamma}, &rp, sizeof(rp),
@@ -417,6 +511,7 @@ Tensor RfDetrVk::conv_(const Tensor& x, const std::string& wKey, const std::stri
         g.bias = weights_.at(bKey).buffer;
         g.biasPerRow = true;// one per output channel
     }
+    if (auto it = weights16_.find(wKey); it != weights16_.end()) g.a16 = it->second.buffer;
     if (kh == 1 && kw == 1 && stride == 1 && pad == 0) {
         g.layout = GemmB::KN;
         g.ldb = inH * inW;
@@ -474,6 +569,7 @@ Tensor RfDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::st
     g.lda = K;
     g.ldb = K;
     g.ldc = N;
+    if (auto it = weights16_.find(wKey); it != weights16_.end()) g.b16 = it->second.buffer;
     if (!bKey.empty() && weights_.count(bKey)) g.bias = weights_.at(bKey).buffer;
     g.act = act;
     if (res) {
@@ -503,6 +599,7 @@ void RfDetrVk::linearRowsInto_(const Tensor& a, const std::string& wKey, const s
     g.cOff = cOff;
     g.bias = weights_.at(bKey).buffer;
     g.biasOff = n0;
+    if (auto it = weights16_.find(wKey); it != weights16_.end()) g.b16 = it->second.buffer;
     gemm_(g);
 }
 
@@ -546,6 +643,13 @@ Tensor RfDetrVk::attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T
     Tensor out = vk_.createTensorV({B * T, H * d});
     std::vector<VkBuffer> ssbos = {attn.buffer, qkv.buffer, out.buffer};
     vk_.dispatch(attnVitApplyPipe_, ssbos, &ap, sizeof(ap), divCeil(d, 8), divCeil(T, 8), B * H);
+    return out;
+}
+
+Tensor RfDetrVk::attnHead32_(const Tensor& qkv, uint32_t T, uint32_t B, uint32_t H) {
+    AttnVitParams ap{T, H, 32u, B, 1.0f / std::sqrt(32.0f), 0u, 0u, 0u};
+    Tensor out = vk_.createTensorV({B * T, H * 32u});
+    vk_.dispatch(attnCm32Pipe_, {qkv.buffer, out.buffer}, &ap, sizeof(ap), divCeil(T, 64), H, B);
     return out;
 }
 
@@ -727,8 +831,9 @@ void RfDetrVk::keypointLayer_(int layer, Tensor& tgt, Tensor& kp, const Tensor& 
     linearRowsInto_(feat, p + ".kp_inst_self_attn.in_proj_weight", p + ".kp_inst_self_attn.in_proj_bias",
                     2u * D, D, qkv, 2u * D);
     const uint32_t H = cfg_.saHeads, d = D / H;
-    Tensor probs = softmaxRows_(attnVitScores_(qkv, G, Nq, H, d), Nq * H * G, G);
-    Tensor ctx = attnVitApply_(probs, qkv, G, Nq, H, d);
+    Tensor ctx = attnCm32Pipe_.pipeline ? attnHead32_(qkv, G, Nq, H)
+                                        : attnVitApply_(softmaxRows_(attnVitScores_(qkv, G, Nq, H, d), Nq * H * G, G),
+                                                        qkv, G, Nq, H, d);
     Tensor groupOut = linear_(ctx, p + ".kp_inst_self_attn.out_proj.weight", p + ".kp_inst_self_attn.out_proj.bias");
     // Back to instance and keypoint rows with the residuals; the instance takes the
     // group's answer through a learned (tiny) layer scale.
@@ -830,8 +935,10 @@ RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const BackboneTensors& bb) {
         linearRowsInto_(add_(tgt, qp), p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias",
                         0u, 2u * D, qkv, 0u);
         linearRowsInto_(tgt, p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias", 2u * D, D, qkv, 2u * D);
-        Tensor sSm   = softmaxRows_(attnScores_(qkv, Nq, cfg_.saHeads), cfg_.saHeads * Nq, Nq);
-        Tensor heads = attnApply_(qkv, sSm, Nq, cfg_.saHeads);
+        Tensor heads = attnCm32Pipe_.pipeline
+                               ? attnHead32_(qkv, Nq, 1u, cfg_.saHeads)
+                               : attnApply_(qkv, softmaxRows_(attnScores_(qkv, Nq, cfg_.saHeads), cfg_.saHeads * Nq, Nq),
+                                            Nq, cfg_.saHeads);
         Tensor n1 = layerNorm_(linear_(heads, p + ".self_attn.out_proj.weight", p + ".self_attn.out_proj.bias", 0u, &tgt),
                                p + ".norm1.weight", p + ".norm1.bias", D);
 

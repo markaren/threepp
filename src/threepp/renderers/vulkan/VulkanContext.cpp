@@ -1220,19 +1220,15 @@ namespace threepp::vulkan {
             features2.pNext = &f12;
         }
 
-#if defined(THREEPP_WITH_FSR)
-        // ── AMD FidelityFX FSR 3.1 device features ──────────────────────────
-        // The FSR VK backend selects FP16 shader permutations when the device
-        // advertises 16-bit float support, and its shaders use subgroup-size
-        // control. Those SPIR-V capabilities must be ENABLED on the logical
-        // device, or the backend creates pipelines using capabilities the device
-        // never enabled and crashes (a null-path deref) inside ffxCreateContext.
-        // All of these are core 1.1/1.2/1.3 feature bits — no extra device
-        // extensions — and enabling them is inert for threepp's own shaders
-        // (which don't use them). Query support first so vkCreateDevice never
-        // fails on a GPU that lacks a bit; enable only the supported subset.
+        // Support for the optional features enabled below (FSR's 16-bit and
+        // subgroup set, the cooperative-matrix set), so vkCreateDevice never asks
+        // for a bit the device lacks.
+        const bool coopMatExt = hasExtension(deviceExtensions(physicalDevice_), VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR supCM{};
+        supCM.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
         VkPhysicalDeviceVulkan13Features supF13{};
         supF13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        supF13.pNext = coopMatExt ? &supCM : nullptr;
         VkPhysicalDeviceVulkan12Features supF12{};
         supF12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         supF12.pNext = &supF13;
@@ -1244,18 +1240,49 @@ namespace threepp::vulkan {
         sup2.pNext = &supF11;
         vkGetPhysicalDeviceFeatures2(physicalDevice_, &sup2);
 
-        // 16-bit storage (Vulkan 1.1) — threepp has no VkPhysicalDeviceVulkan11Features
-        // yet, so add one and prepend it to the chain (doesn't disturb the tail).
-        VkPhysicalDeviceVulkan11Features fsrF11{};
-        fsrF11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-        fsrF11.storageBuffer16BitAccess           = supF11.storageBuffer16BitAccess;
-        fsrF11.uniformAndStorageBuffer16BitAccess = supF11.uniformAndStorageBuffer16BitAccess;
+        // The chain's one VkPhysicalDeviceVulkan11Features (a structure type may
+        // appear only once), prepended so it doesn't disturb the tail.
+        VkPhysicalDeviceVulkan11Features f11{};
+        f11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        f11.pNext = features2.pNext;
+        features2.pNext = &f11;
+
+        // Tensor-core matrix multiplies for compute work that shares this device
+        // (the Vulkan inference examples' VkInfer): VK_KHR_cooperative_matrix with
+        // fp16 inputs needs the extension and its feature, the Vulkan memory model,
+        // shaderFloat16 and 16-bit storage buffers. Enabled whenever the device has
+        // all of them, which is what VkInfer relies on; no renderer shader uses them.
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR fCM{};
+        fCM.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        if (coopMatExt && supCM.cooperativeMatrix && supF12.vulkanMemoryModel && supF12.shaderFloat16 &&
+            supF11.storageBuffer16BitAccess) {
+            extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+            fCM.cooperativeMatrix = VK_TRUE;
+            fCM.pNext = features2.pNext;
+            features2.pNext = &fCM;
+            f12.vulkanMemoryModel = VK_TRUE;
+            f12.vulkanMemoryModelDeviceScope = supF12.vulkanMemoryModelDeviceScope;
+            f12.shaderFloat16 = VK_TRUE;
+            f11.storageBuffer16BitAccess = VK_TRUE;
+        }
+
+#if defined(THREEPP_WITH_FSR)
+        // ── AMD FidelityFX FSR 3.1 device features ──────────────────────────
+        // The FSR VK backend selects FP16 shader permutations when the device
+        // advertises 16-bit float support, and its shaders use subgroup-size
+        // control. Those SPIR-V capabilities must be ENABLED on the logical
+        // device, or the backend creates pipelines using capabilities the device
+        // never enabled and crashes (a null-path deref) inside ffxCreateContext.
+        // All of these are core 1.1/1.2/1.3 feature bits — no extra device
+        // extensions — and enabling them is inert for threepp's own shaders
+        // (which don't use them). Query support first so vkCreateDevice never
+        // fails on a GPU that lacks a bit; enable only the supported subset.
+        f11.storageBuffer16BitAccess           = supF11.storageBuffer16BitAccess;
+        f11.uniformAndStorageBuffer16BitAccess = supF11.uniformAndStorageBuffer16BitAccess;
         f12.shaderFloat16              = supF12.shaderFloat16;              // FP16 shader path
         f13.subgroupSizeControl        = supF13.subgroupSizeControl;        // required subgroup size
         f13.computeFullSubgroups       = supF13.computeFullSubgroups;
         features2.features.shaderInt16 = sup2.features.shaderInt16;
-        fsrF11.pNext    = features2.pNext;
-        features2.pNext = &fsrF11;
 #endif
 
         VkDeviceCreateInfo ci{};

@@ -22,8 +22,10 @@ namespace {
 
 }// namespace
 
-VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily)
+VkInfer::VkInfer(VkInstance instance, VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily)
     : device_(device), phys_(phys), queue_(queue), queueFamily_(queueFamily) {
+
+    detectCoopMat_(instance);
 
     {
         VkPhysicalDeviceSubgroupProperties sg{};
@@ -119,6 +121,56 @@ VkInfer::~VkInfer() {
     if (descPool_) vkDestroyDescriptorPool(device_, descPool_, nullptr);
     if (oneShotPool_) vkDestroyCommandPool(device_, oneShotPool_, nullptr);
     if (cmdPool_) vkDestroyCommandPool(device_, cmdPool_, nullptr);
+}
+
+void VkInfer::detectCoopMat_(VkInstance instance) {
+    uint32_t n = 0;
+    vkEnumerateDeviceExtensionProperties(phys_, nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> exts(n);
+    vkEnumerateDeviceExtensionProperties(phys_, nullptr, &n, exts.data());
+    if (std::none_of(exts.begin(), exts.end(), [](const VkExtensionProperties& e) {
+            return std::strcmp(e.extensionName, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) == 0;
+        }))
+        return;
+
+    // The features VulkanContext enables together with the extension when the device has them all.
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR cm{};
+    cm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+    VkPhysicalDeviceVulkan12Features f12{};
+    f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    f12.pNext = &cm;
+    VkPhysicalDeviceVulkan11Features f11{};
+    f11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    f11.pNext = &f12;
+    VkPhysicalDeviceFeatures2 f2{};
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &f11;
+    vkGetPhysicalDeviceFeatures2(phys_, &f2);
+    if (!cm.cooperativeMatrix || !f12.vulkanMemoryModel || !f12.shaderFloat16 || !f11.storageBuffer16BitAccess) return;
+
+    // The tensor-core kernels tile a workgroup as 32-wide subgroups.
+    VkPhysicalDeviceSubgroupProperties sg{};
+    sg.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+    VkPhysicalDeviceProperties2 p2{};
+    p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    p2.pNext = &sg;
+    vkGetPhysicalDeviceProperties2(phys_, &p2);
+    if (sg.subgroupSize != 32) return;
+
+    auto shapesOf = reinterpret_cast<PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR>(
+            vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR"));
+    if (!shapesOf) return;
+    uint32_t count = 0;
+    shapesOf(phys_, &count, nullptr);
+    std::vector<VkCooperativeMatrixPropertiesKHR> shapes(count);
+    for (auto& s : shapes) s.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR;
+    shapesOf(phys_, &count, shapes.data());
+    coopMatF16_ = std::any_of(shapes.begin(), shapes.end(), [](const VkCooperativeMatrixPropertiesKHR& s) {
+        return s.MSize == 16 && s.NSize == 16 && s.KSize == 16 && s.AType == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+               s.BType == VK_COMPONENT_TYPE_FLOAT16_KHR && s.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+               s.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR && s.scope == VK_SCOPE_SUBGROUP_KHR &&
+               !s.saturatingAccumulation;
+    });
 }
 
 void VkInfer::markTimestamp(const char* label) {
@@ -687,7 +739,7 @@ void VkInfer::submitAndWait_() {
             for (uint32_t i = 1; i < tsCount_; ++i) {
                 if (tsIsDispatch_[i]) continue;
                 const double d = ms(lastMark, i);
-                if (d > 0.30) std::cerr << "    [gpu]   " << tsLabels_[i] << ": " << d << " ms\n";
+                if (d > 0.05) std::cerr << "    [gpu]   " << tsLabels_[i] << ": " << d << " ms\n";
                 lastMark = i;
             }
             // Kernels: a dispatch owns the time since the timestamp before it

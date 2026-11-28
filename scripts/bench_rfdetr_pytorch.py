@@ -1,27 +1,55 @@
-"""PyTorch RF-DETR-Nano baseline for benchmarking against the Vulkan-compute port.
+"""PyTorch RF-DETR baseline for vulkan_rfdetr_inference, tuned for speed and timed the same way.
 
-Times the *same* model (Roboflow `rfdetr` pretrained Nano, 384x384, fp32) on the
-same GPU so the numbers are directly comparable to vulkan_rfdetr_inference.exe.
+The Vulkan port's --bench times infer() on an image decoded once: the RGBA copy into the frame
+staging, the upload, the resize + normalize on the GPU, the forward pass, the readback and the
+postprocess. This script times PyTorch along the same path: the RGBA image copied into pinned
+staging, uploaded, resized + normalized on the GPU, the forward pass, rfdetr's own PostProcess on
+the GPU, and the kept detections copied back.
 
-Reports two figures:
-  * model.forward  — raw nn.Module forward only (apples-to-apples vs the Vulkan
-                     GPU compute; both fp32, both 384x384).
-  * predict()      — end-to-end incl. pre/post-processing (the Vulkan exe's
-                     wall-clock 24.8 ms / 40.2 FPS also includes pre/post).
+Configs, all on rfdetr's own optimized path (RFDETR.inference(), rebuilt step by step so the
+module can be timed directly: deepcopy -> export() -> cast -> TorchScript trace -> freeze ->
+rfdetr's CUDA graph wrapper):
+    fp32-eager   export-mode eager forward, TF32 off (the package's default numerics)
+    fp32-graph   trace + freeze + one CUDA graph, TF32 off (the Vulkan port's precision)
+    tf32-graph   the same with TF32 matmuls and convolutions
+    fp16-graph   half-precision weights and activations + CUDA graph
+    bf16-graph   bfloat16 + CUDA graph
+
+Per config: the forward pass's GPU time (CUDA events) and the end-to-end wall time (median, p10,
+p90 after a 2 s warm-up, as --bench does), and the detections at 0.5 against fp32-eager's: the
+confidence and, per detection matched by box IoU, the box and keypoint error in image pixels.
 
 Usage:
-  python bench_rfdetr_pytorch.py [--image bus.jpg] [--device cuda] \
-                                 [--runs 50] [--warmup 10] [--half] [--vulkan-ms 24.8]
+  python bench_rfdetr_pytorch.py --variant nano|small|medium [--image bus.jpg] [--runs 100]
+  python bench_rfdetr_pytorch.py --variant keypoint --checkpoint rf-detr-keypoint-preview-xlarge.pth
+  [--configs fp32-graph,fp16-graph] [--accuracy-only]
+
+Written against rfdetr 1.12.1 and torch 2.12.1+cu130 (it uses rfdetr's private trace and CUDA
+graph helpers). Without Triton (torch.compile) or TensorRT, fp16-graph is the fastest PyTorch
+config available.
 """
 import argparse
+import gc
+import os
+import statistics
 import time
+from copy import deepcopy
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+from PIL import Image
+
+CONFIGS = {
+    "fp32-eager": (torch.float32, False, False),
+    "fp32-graph": (torch.float32, True, False),
+    "tf32-graph": (torch.float32, True, True),
+    "fp16-graph": (torch.float16, True, True),
+    "bf16-graph": (torch.bfloat16, True, True),
+}
 
 
 def find_default_image() -> str:
-    import os
     here = os.path.dirname(os.path.abspath(__file__))
     for rel in ("../cmake-build-relwithdebinfo/_deps/threepp_data-src/images/bus.jpg",
                 "../data/images/bus.jpg", "bus.jpg"):
@@ -31,175 +59,145 @@ def find_default_image() -> str:
     return "bus.jpg"
 
 
-def timed(fn, runs: int, warmup: int, cuda: bool) -> float:
-    """Return mean ms/iter over `runs` (after `warmup`), syncing CUDA properly."""
-    for _ in range(warmup):
-        fn()
-    if cuda:
-        torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    for _ in range(runs):
-        fn()
-    if cuda:
-        torch.cuda.synchronize()
-    return (time.perf_counter() - t0) / runs * 1000.0
+def load(variant: str, checkpoint: str | None):
+    import rfdetr
+    if variant == "keypoint":
+        return rfdetr.RFDETRKeypointPreview(pretrain_weights=checkpoint, num_classes=1, device="cuda")
+    classes = {"nano": rfdetr.RFDETRNano, "small": rfdetr.RFDETRSmall, "medium": rfdetr.RFDETRMedium}
+    return classes[variant](device="cuda")  # downloads pretrained weights on first use
+
+
+def build(det, dtype: torch.dtype, graph: bool, R: int, dev: torch.device):
+    """RFDETR.inference(compile=graph, dtype=dtype, compile_backend="cudagraph"), keeping the module."""
+    from rfdetr.detr import _CUDAGraphInferenceModel, _trace_for_prediction
+    m = deepcopy(det.model.model).to(dev).eval()
+    m.export()
+    m = m.to(dtype=dtype)
+    if not graph:
+        return m
+    dummy = torch.randn(1, 3, R, R, device=dev, dtype=dtype)
+    traced = torch.jit.freeze(_trace_for_prediction(m, dummy))
+    return _CUDAGraphInferenceModel(traced, dummy, dev)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--variant", choices=("nano", "small", "medium", "keypoint"), default="nano")
+    ap.add_argument("--checkpoint", help="rf-detr-keypoint-preview-xlarge.pth, for --variant keypoint")
     ap.add_argument("--image", default=find_default_image())
-    ap.add_argument("--variant", choices=("nano", "small", "medium"), default="nano")
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--runs", type=int, default=50)
-    ap.add_argument("--warmup", type=int, default=10)
-    ap.add_argument("--half", action="store_true", help="also time an fp16 forward")
-    ap.add_argument("--vulkan-ms", type=float, default=24.8,
-                    help="measured Vulkan-port wall-clock ms, for the comparison line")
+    ap.add_argument("--runs", type=int, default=100)
+    ap.add_argument("--configs", default=",".join(CONFIGS))
+    ap.add_argument("--accuracy-only", action="store_true", help="skip the timing")
     args = ap.parse_args()
+    if args.variant == "keypoint" and not args.checkpoint:
+        ap.error("--variant keypoint needs --checkpoint")
 
-    dev = args.device
-    cuda = dev.startswith("cuda")
-    if cuda and not torch.cuda.is_available():
-        print("CUDA requested but unavailable; falling back to CPU.")
-        dev, cuda = "cpu", False
-    if cuda:
-        torch.backends.cudnn.benchmark = True  # autotune conv algos (fair-baseline protocol)
+    dev = torch.device("cuda", 0)
+    torch.backends.cudnn.benchmark = True
+    det = load(args.variant, args.checkpoint)
+    R = int(det.model.resolution)
+    post = det.model.postprocess
+    mean = torch.tensor(det.means, device=dev).view(1, 3, 1, 1)
+    std = torch.tensor(det.stds, device=dev).view(1, 3, 1, 1)
+    print(f"RF-DETR {args.variant}: {R}x{R}, torch {torch.__version__}, {torch.cuda.get_device_name(0)}", flush=True)
 
-    from rfdetr import RFDETRNano, RFDETRSmall, RFDETRMedium
-    variants = {"nano": RFDETRNano, "small": RFDETRSmall, "medium": RFDETRMedium}
-    print(f"Loading RF-DETR-{args.variant} (downloads pretrained weights on first run)...")
-    det = variants[args.variant]()
-    R = det.model_config.resolution
-    module = det.model.model.eval().to(dev)
+    rgba = np.ascontiguousarray(np.asarray(Image.open(args.image).convert("RGBA")))
+    H, W = rgba.shape[:2]
+    pinned = torch.empty((H, W, 4), dtype=torch.uint8).pin_memory()
+    pinned_np = pinned.numpy()
+    gpu_img = torch.empty((H, W, 4), dtype=torch.uint8, device=dev)
+    target = torch.tensor([[H, W]], device=dev)
 
-    if cuda:
-        name = torch.cuda.get_device_name(0)
-        print(f"Device: {dev}  ({name})   resolution: {R}x{R}")
-    else:
-        print(f"Device: cpu   resolution: {R}x{R}")
+    def preprocess(dtype):
+        pinned_np[...] = rgba  # the host copy into the staging, as the Vulkan port's recordUpload does
+        gpu_img.copy_(pinned, non_blocking=True)
+        x = gpu_img[..., :3].permute(2, 0, 1).unsqueeze(0).float().div_(255.0)
+        x = F.interpolate(x, size=(R, R), mode="bilinear", align_corners=False)
+        return ((x - mean) / std).to(dtype)
 
-    # Full-res RGB (for the lean end-to-end path, which resizes — like the Vulkan
-    # exe's infer()), plus a pre-normalized [1,3,R,R] tensor for forward-only timing.
-    from PIL import Image
-    rgb_full = np.asarray(Image.open(args.image).convert("RGB"))  # (H,W,3) uint8
-    img_h, img_w = rgb_full.shape[:2]
-    mean = np.array([0.485, 0.456, 0.406], np.float32)
-    std = np.array([0.229, 0.224, 0.225], np.float32)
-    arr = (np.asarray(Image.fromarray(rgb_full).resize((R, R), Image.BILINEAR), np.float32) / 255.0 - mean) / std
-    x = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous().to(dev)
-    mean_t = torch.tensor(mean, device=dev).view(1, 3, 1, 1)
-    std_t = torch.tensor(std, device=dev).view(1, 3, 1, 1)
+    def heads(out):
+        d = {"pred_boxes": out[0].float(), "pred_logits": out[1].float()}
+        if len(out) > 2:
+            d["pred_keypoints"] = out[2].float()
+        return d
 
-    # Lean end-to-end: minimal pre/post (resize -> normalize -> forward -> sigmoid +
-    # threshold + cxcywh->xyxy + scale -> results to CPU), matching what the Vulkan
-    # infer() does. This is the FAIR baseline — supervision's predict() adds a large
-    # convenience-API tax that no deployment would pay.
-    def lean_e2e(fwd, dtype):
-        pil = Image.fromarray(rgb_full).resize((R, R), Image.BILINEAR)
-        t = torch.from_numpy(np.asarray(pil, np.float32)).to(dev).permute(2, 0, 1).unsqueeze(0).div_(255.0)
-        t = ((t - mean_t) / std_t).to(dtype)
-        out = fwd(t)
-        logits = (out["pred_logits"] if isinstance(out, dict) else out[0])[0].float()
-        boxes = (out["pred_boxes"] if isinstance(out, dict) else out[1])[0].float()
-        prob = logits.sigmoid()
-        cx, cy, w, h = boxes.unbind(-1)
-        xyxy = torch.stack([(cx - w / 2) * img_w, (cy - h / 2) * img_h,
-                            (cx + w / 2) * img_w, (cy + h / 2) * img_h], -1)
-        idx = (prob > 0.5).nonzero(as_tuple=False)
-        _ = (xyxy[idx[:, 0]].cpu(), prob[idx[:, 0], idx[:, 1]].cpu(), idx[:, 1].cpu())
+    def postprocess(out):
+        r = post(heads(out), target)[0]
+        keep = r["scores"] > 0.5
+        return {k: v[keep].cpu() for k, v in r.items() if isinstance(v, torch.Tensor) and v.shape[:1] == keep.shape}
 
-    # Collected per config: (label, forward_ms, predict_e2e_ms, lean_e2e_ms).
-    results: list[tuple[str, float | None, float | None, float | None]] = []
-
-    print("\n=== timing ===")
-    e2e_runs, e2e_warm = max(args.runs // 5, 3), max(args.warmup // 2, 2)
-
-    def bench_predict() -> float | None:
+    results, ref = [], None
+    for name in args.configs.split(","):
+        dtype, graph, tf32 = CONFIGS[name]
+        torch.backends.cuda.matmul.allow_tf32 = tf32
+        torch.backends.cudnn.allow_tf32 = tf32
+        fwd = None
         try:
+            fwd = build(det, dtype, graph, R, dev)  # outside inference_mode, as RFDETR.inference() does
             with torch.inference_mode():
-                return timed(lambda: det.predict(args.image, threshold=0.5), e2e_runs, e2e_warm, cuda)
-        except Exception as e:  # noqa: BLE001
-            print(f"    predict() failed ({type(e).__name__}: {e})")
-            return None
+                x = preprocess(dtype)
+                dets = postprocess(fwd(x))
+                if ref is None:
+                    ref = dets
+                # Against the first config: confidences, and per detection (matched by IoU) box + keypoints.
+                n, same = len(dets["scores"]), len(dets["scores"]) == len(ref["scores"])
+                dconf = ((dets["scores"].sort(descending=True).values - ref["scores"].sort(descending=True).values)
+                         .abs().max().item()) if same and n else float("nan")
+                dbox = dkp = 0.0
+                for i in range(len(ref["scores"])):
+                    if not n:
+                        dbox = float("inf")
+                        break
+                    b, rb = dets["boxes"], ref["boxes"][i]
+                    inter = ((torch.minimum(b[:, 2], rb[2]) - torch.maximum(b[:, 0], rb[0])).clamp(min=0) *
+                             (torch.minimum(b[:, 3], rb[3]) - torch.maximum(b[:, 1], rb[1])).clamp(min=0))
+                    union = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1]) + (rb[2] - rb[0]) * (rb[3] - rb[1]) - inter
+                    j = int((inter / union).argmax())
+                    dbox = max(dbox, (b[j] - rb).abs().max().item())
+                    if "keypoints" in dets:
+                        dkp = max(dkp, (dets["keypoints"][j][..., :2] - ref["keypoints"][i][..., :2]).abs().max().item())
+                acc = (n, same, dconf, dbox, dkp)
+                if args.accuracy_only:
+                    results.append((name, None, None, None, None, acc))
+                    continue
 
-    # Pre/post overhead (resize+normalize+sigmoid+topk+decode) is model-agnostic, so
-    # measure it once on the eager model (which returns the dict lean_e2e expects) and
-    # compose lean-e2e = forward + overhead for the traced configs (whose exported
-    # forward returns a different structure).
-    lean_overhead = [None]  # boxed for closure assignment
+                for _ in range(20):
+                    fwd(x)
+                s, e = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+                fw = []
+                for _ in range(args.runs):
+                    s.record()
+                    fwd(x)
+                    e.record()
+                    e.synchronize()
+                    fw.append(s.elapsed_time(e))
 
-    def bench_config(label: str, fwd, dtype: torch.dtype, measure_lean: bool) -> None:
-        xo = x.to(dtype)
-        with torch.inference_mode():
-            mf = timed(lambda: fwd(xo), args.runs, args.warmup, cuda)
-            if measure_lean:
-                ml = timed(lambda: lean_e2e(fwd, dtype), e2e_runs, e2e_warm, cuda)
-                lean_overhead[0] = ml - mf  # the pre+post cost
-            else:
-                ml = mf + lean_overhead[0] if lean_overhead[0] is not None else None
-        mp = bench_predict()  # supervision predict() (convenience API)
-        print(f"  {label:13s} forward {mf:6.2f} ({1000.0/mf:5.1f} FPS)   "
-              f"lean-e2e {ml:6.2f} ({1000.0/ml:5.1f} FPS)" if ml else
-              f"  {label:13s} forward {mf:6.2f} ({1000.0/mf:5.1f} FPS)")
-        results.append((f"PyTorch {label.strip()}", mf, mp, ml))
-
-    # (1) Eager fp32 — the package default; also fixes the model-agnostic pre/post cost.
-    bench_config("eager fp32", module, torch.float32, measure_lean=True)
-
-    # (2,3) optimize_for_inference: TorchScript trace, fp32 then fp16 (the documented
-    # deployment path). Reset between configs with remove_optimized_model().
-    def bench_optimized(dtype: torch.dtype, label: str) -> None:
-        try:
-            det.remove_optimized_model()
-            det.optimize_for_inference(compile=True, batch_size=1, dtype=dtype)
-            bench_config(label, det.model.inference_model, dtype, measure_lean=False)
-        except Exception as e:  # noqa: BLE001
-            print(f"  {label:13s} failed ({type(e).__name__}: {e})")
+                t0 = time.perf_counter()
+                while time.perf_counter() - t0 < 2.0:  # hold the boost clock, as --bench does
+                    postprocess(fwd(preprocess(dtype)))
+                e2e = []
+                for _ in range(args.runs):
+                    t = time.perf_counter()
+                    postprocess(fwd(preprocess(dtype)))
+                    e2e.append((time.perf_counter() - t) * 1000.0)
+            e2e.sort()
+            q = lambda f: e2e[int(f * (len(e2e) - 1) + 0.5)]  # noqa: E731
+            results.append((name, statistics.median(fw), statistics.median(e2e), q(0.1), q(0.9), acc))
+            print(f"  {name:<11} forward {statistics.median(fw):7.2f} ms   end-to-end median "
+                  f"{statistics.median(e2e):7.2f}  p10 {q(0.1):6.2f}  p90 {q(0.9):6.2f} ms", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {name:<11} failed: {type(exc).__name__}: {str(exc)[:300]}", flush=True)
         finally:
-            try:
-                det.remove_optimized_model()
-            except Exception:  # noqa: BLE001
-                pass
+            fwd = None
+            gc.collect()
+            torch.cuda.empty_cache()
 
-    bench_optimized(torch.float32, "TS fp32")
-    if cuda:
-        bench_optimized(torch.float16, "TS fp16")
-
-    # (4) TensorRT — gold-standard NVIDIA baseline. Only if installed.
-    try:
-        import tensorrt  # noqa: F401
-        print("  TensorRT: tensorrt is installed but no engine-build path is wired here yet.")
-    except ImportError:
-        print("  TensorRT: skipped (tensorrt not installed). For a reviewer-proof upper bound,\n"
-              "           `pip install tensorrt`, export via rfdetr's ONNX path, build an engine,\n"
-              "           and add it as config (5).")
-
-    # Detections (sanity: should be bus + 4 people, matching the Vulkan port).
-    try:
-        det_out = det.predict(args.image, threshold=0.5)
-        names = det_out.data.get("class_name") if hasattr(det_out, "data") else None
-        print(f"\n=== detections (threshold 0.5) ===  {len(det_out)} found")
-        order = np.argsort(-det_out.confidence)
-        for i in order:
-            nm = names[i] if names is not None else str(int(det_out.class_id[i]))
-            x1, y1, x2, y2 = det_out.xyxy[i]
-            print(f"  {str(nm):16s}  conf {det_out.confidence[i]:.3f}  "
-                  f"[{int(x1)},{int(y1)},{int(x2)},{int(y2)}]")
-    except Exception as e:  # noqa: BLE001
-        print(f"detections failed ({type(e).__name__}: {e})")
-
-    print(f"\n=== summary (RTX 4070, {R}x{R}, fp32 unless noted) ===")
-    cell = lambda v: f"{v:6.1f}" if v else f"{'-':>6s}"  # noqa: E731
-    fps = lambda v: f"{1000.0 / v:5.1f}" if v else f"{'-':>5s}"  # noqa: E731
-    hdr = f"  {'config':22s} {'fwd ms':>7s} {'lean-e2e ms':>12s} {'lean FPS':>9s} {'predict() ms':>13s}"
-    print(hdr)
-    print("  " + "-" * (len(hdr) - 2))
-    print(f"  {'Vulkan (this work)':22s} {'-':>7s} {args.vulkan_ms:12.1f} {fps(args.vulkan_ms):>9s} {'-':>13s}")
-    for label, mf, mp, ml in results:
-        print(f"  {label:22s} {cell(mf):>7s} {cell(ml):>12s} {fps(ml):>9s} {cell(mp):>13s}")
-    print("\n  lean-e2e = minimal resize+normalize / forward / sigmoid+topk+box-decode (the FAIR")
-    print("  comparison; matches the Vulkan exe's infer()). predict() = supervision convenience")
-    print("  API (large host tax; not a deployment path). fwd = nn.Module compute only.")
+    first = args.configs.split(",")[0]
+    print(f"\ndetections > 0.5 against {first}:")
+    for name, _, _, _, _, (n, same, dconf, dbox, dkp) in results:
+        print(f"  {name:<11} {n} found{'' if same else ' (count differs)'}"
+              f"{'' if dconf != dconf else f', confidence within {dconf:.4f}'}, boxes within {dbox:.2f} px"
+              f"{f', keypoints within {dkp:.2f} px' if args.variant == 'keypoint' else ''}")
 
 
 if __name__ == "__main__":

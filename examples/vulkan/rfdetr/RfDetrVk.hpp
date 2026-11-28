@@ -61,8 +61,12 @@ namespace rfdetr {
     /// cross-attention into the second projector, FFN) and a keypoint head.
     class RfDetrVk {
     public:
+        // tensorCores: where the device has fp16 tensor cores (VkInfer::coopMatF16()), the
+        // GEMMs, convolutions and attention take their products in fp16 with fp32 sums,
+        // ~2x faster at ~1e-3 relative error (confidences within ~0.002). false keeps
+        // every product in fp32, matching PyTorch's fp32 forward to ~1e-5.
         explicit RfDetrVk(threepp::VulkanRenderer& renderer,
-                          RfDetrVariant variant = RfDetrVariant::Nano);
+                          RfDetrVariant variant = RfDetrVariant::Nano, bool tensorCores = true);
         ~RfDetrVk();
         RfDetrVk(const RfDetrVk&) = delete;
         RfDetrVk& operator=(const RfDetrVk&) = delete;
@@ -113,13 +117,19 @@ namespace rfdetr {
                                                          float scoreThresh) const;
 
         [[nodiscard]] const RfDetrConfig& config() const { return cfg_; }
+        // Whether the matrix products run on fp16 tensor cores (see the constructor).
+        [[nodiscard]] bool tensorCores() const { return tensorCores_; }
 
     private:
         VkInfer vk_;
         RfDetrConfig cfg_;
+        bool tensorCores_ = false;
         // gemm.comp's builds, [B layout (GemmB)][tile: 128x64, 64x64], and its split-K
         // reduction.
         std::array<std::array<VkPipe, 2>, 3> gemmPipe_{};
+        // gemm_cm.comp's tensor-core builds, [B layout (GemmB)] (created when
+        // VkInfer::coopMatF16()).
+        std::array<VkPipe, 3> gemmCmPipe_{};
         VkPipe gemmReducePipe_;
         VkPipe layerNormPipe_, softmaxPipe_;
         VkPipe attnScoresPipe_, attnApplyPipe_, addPipe_;
@@ -132,6 +142,9 @@ namespace rfdetr {
         // Fused ViT attention (created when VkInfer::subgroupClustered() and head dim 64;
         // else scores + softmax + apply).
         VkPipe attnFlashPipe_;
+        // The decoders' head-dim-32 self-attention in one pass on tensor cores
+        // (attn_vit_flash_cm.comp built with HD=32); null without them.
+        VkPipe attnCm32Pipe_;
         bool useFlashAttn_ = false;
 
         // Keypoint variant, from the checkpoint's keypoint schema (_kp_active_mask
@@ -156,6 +169,8 @@ namespace rfdetr {
         VkTensor rgbaInput_;
 
         std::unordered_map<std::string, VkTensor> weights_;
+        // fp16 copies of the 2D weights for the tensor-core GEMMs (when VkInfer::coopMatF16()).
+        std::unordered_map<std::string, VkTensor> weights16_;
 
         // ── GEMM ──
         // gemm.comp's B operand: an nn.Linear weight [N,K], a 1x1 conv's CHW input
@@ -166,6 +181,8 @@ namespace rfdetr {
         struct Gemm {
             GemmB layout = GemmB::NK;
             VkBuffer a = VK_NULL_HANDLE, b = VK_NULL_HANDLE, y = VK_NULL_HANDLE;
+            VkBuffer b16 = VK_NULL_HANDLE;// fp16 copy of an NK weight: allows the tensor-core GEMM
+            VkBuffer a16 = VK_NULL_HANDLE;// fp16 copy of a conv weight (A of KN / Conv): the same
             uint32_t M = 0, N = 0, K = 0;
             uint32_t lda = 0, ldb = 0, ldc = 0;
             uint32_t aOff = 0, bOff = 0, cOff = 0;
@@ -208,6 +225,9 @@ namespace rfdetr {
         Tensor attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B, uint32_t H, uint32_t d);
         // Both in one pass with an online softmax (attn_vit_flash.comp): out [B*T, D].
         Tensor attnVitFlash_(const Tensor& qkv, uint32_t T, uint32_t B);
+        // B groups of T tokens, H heads of dim 32 (the decoders), in one pass: out [B*T, H*32].
+        // Needs attnCm32Pipe_.
+        Tensor attnHead32_(const Tensor& qkv, uint32_t T, uint32_t B, uint32_t H);
         // One DINOv2 transformer block. global=true runs full attention (B=1,T=M).
         Tensor vitLayer_(const Tensor& x, int layerIdx, bool global);
 

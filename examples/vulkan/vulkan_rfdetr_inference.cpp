@@ -7,6 +7,8 @@
 ///
 ///   --variant nano|small|medium|keypoint picks the model (default nano);
 ///   keypoint is RF-DETR Keypoint: people with their 17 COCO keypoints.
+///   --fp32 keeps every matrix product in fp32 where the GPU would use fp16
+///   tensor cores (exact against PyTorch's fp32; ~2x slower).
 ///   --bench, --validate and --shot run in a hidden window.
 ///
 ///   image    – JPEG/PNG input image
@@ -115,6 +117,11 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
     std::cout << "\nRunning full forward pass..." << std::endl;
     auto fw = model.runForward(inIt->second, /*captureIntermediates=*/true);
 
+    // fp32 products match PyTorch to ~1e-5; fp16 tensor-core products to ~1e-3 relative,
+    // so those runs are judged on the relative error.
+    const bool fp16 = model.tensorCores();
+    std::cout << "\nMatrix products: " << (fp16 ? "fp16 tensor cores, judged on relL1 < 5e-3 (--fp32 for the fp32 check)"
+                                                 : "fp32, judged on maxAbsErr < 2e-2") << "\n";
     auto compare = [&](const char* name, const std::vector<float>& got, const std::string& key) {
         auto it = ref.data.find(key);
         if (it == ref.data.end()) { std::cout << "  " << name << ": ref '" << key << "' missing\n"; return; }
@@ -128,10 +135,10 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
             double d = std::abs(double(got[i]) - double(want[i]));
             maxAbs = std::max(maxAbs, d); sumAbs += d; sumRef += std::abs(double(want[i]));
         }
+        const double relL1 = sumRef > 0 ? sumAbs / sumRef : 0.0;
         std::cout << "  " << std::left << std::setw(7) << name << std::right
                   << "  maxAbsErr " << std::scientific << std::setprecision(3) << maxAbs
-                  << "  relL1 " << (sumRef > 0 ? sumAbs / sumRef : 0.0)
-                  << (maxAbs < 2e-2 ? "   OK" : "   CHECK") << "\n";
+                  << "  relL1 " << relL1 << ((fp16 ? relL1 < 5e-3 : maxAbs < 2e-2) ? "   OK" : "   CHECK") << "\n";
     };
 
     std::cout << "\nNumeric validation vs captured reference:\n";
@@ -171,7 +178,7 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
             if (mx > 0.05) ++bad;
         }
         std::cout << "  " << name << ": " << bad << "/" << rows << " query rows diverge (>0.05)"
-                  << " (top-K ordering on noise - see notes)\n";
+                  << " (near-tied proposals swap in the top-K under small drift - see notes)\n";
     };
     rowDiag("logits", fw.predLogits, "pred_logits", uint32_t(model.config().numClasses));
     rowDiag("boxes", fw.predBoxes, "pred_boxes", 4);
@@ -196,6 +203,47 @@ static int runValidation(rfdetr::RfDetrVk& model, const std::string& weightsPath
     // PostProcess on the same tensor (none above the threshold on a noise input).
     const int R = model.config().resolution;
     const auto dets = model.postprocess(fw, R, R, 0.5f);
+
+    // The same postprocess on PyTorch's own heads: the detections are what a swap of
+    // near-tied queries in the top-K leaves unchanged, so they are the end-to-end check.
+    {
+        rfdetr::RfDetrVk::ForwardOut ref32;
+        auto take = [&](const std::string& key, std::vector<float>& dst) {
+            if (auto it = ref.data.find(key); it != ref.data.end()) dst = it->second;
+        };
+        take("pred_logits", ref32.predLogits);
+        take("pred_boxes", ref32.predBoxes);
+        if (keypoints) take("pred_keypoints", ref32.predKeypoints);
+        if (ref32.predLogits.size() == fw.predLogits.size() && ref32.predBoxes.size() == fw.predBoxes.size() &&
+            ref32.predKeypoints.size() == fw.predKeypoints.size()) {
+            const auto want = model.postprocess(ref32, R, R, 0.5f);
+            double dConf = 0, dBox = 0, dKp = 0;
+            bool matched = want.size() == dets.size();
+            for (const auto& w : want) {// each of PyTorch's detections against our best-overlapping one
+                double bestIou = 0;
+                const rfdetr::Detection* best = nullptr;
+                for (const auto& d : dets) {
+                    const double ix = std::max(0.0, double(std::min(w.x2, d.x2) - std::max(w.x1, d.x1)));
+                    const double iy = std::max(0.0, double(std::min(w.y2, d.y2) - std::max(w.y1, d.y1)));
+                    const double un = double(w.x2 - w.x1) * (w.y2 - w.y1) + double(d.x2 - d.x1) * (d.y2 - d.y1) - ix * iy;
+                    if (d.classId == w.classId && un > 0 && ix * iy / un > bestIou) { bestIou = ix * iy / un; best = &d; }
+                }
+                if (!best) { matched = false; continue; }
+                dConf = std::max(dConf, double(std::abs(best->confidence - w.confidence)));
+                dBox = std::max({dBox, double(std::abs(best->x1 - w.x1)), double(std::abs(best->y1 - w.y1)),
+                                 double(std::abs(best->x2 - w.x2)), double(std::abs(best->y2 - w.y2))});
+                for (size_t k = 0; k < w.keypoints.size() && k < best->keypoints.size(); ++k)
+                    dKp = std::max({dKp, double(std::abs(best->keypoints[k].x - w.keypoints[k].x)),
+                                    double(std::abs(best->keypoints[k].y - w.keypoints[k].y))});
+            }
+            std::cout << "\nDetections against PyTorch's on the same input: " << dets.size() << " vs " << want.size()
+                      << std::fixed << std::setprecision(4) << ", confidence within " << dConf << std::setprecision(2)
+                      << ", boxes within " << dBox << " px";
+            if (keypoints) std::cout << ", keypoints within " << dKp << " px";
+            std::cout << ((matched && dConf < 1e-2 && dBox < 1.0 && dKp < 2.0) ? "   OK" : "   CHECK") << "\n"
+                      << std::scientific;
+        }
+    }
     std::cout << "\nDetections on the reference input (" << R << "x" << R << " input pixels, score > 0.5): "
               << dets.size() << "\n" << std::fixed;
     for (const auto& d : dets) {
@@ -355,6 +403,18 @@ int main(int argc, char** argv) {
         }
     }
 
+    // --fp32: every matrix product in fp32 even where the GPU has tensor cores (the
+    // fp32 match with PyTorch, and the path GPUs without them take).
+    bool fp32 = false;
+    for (size_t i = 0; i < args.size();) {
+        if (args[i] == "--fp32") {
+            fp32 = true;
+            args.erase(args.begin() + i);
+        } else {
+            ++i;
+        }
+    }
+
     // --bench <N>: time N inferences after the warmup, print them, exit (no viewer).
     int benchRuns = 0;
     for (size_t i = 0; i + 1 < args.size();) {
@@ -368,8 +428,8 @@ int main(int argc, char** argv) {
 
     const bool validate = !args.empty() && args[0] == "--validate";
     if ((validate && args.size() < 3) || (!validate && args.size() < 2)) {
-        std::cerr << "Usage: " << argv[0] << " [--variant nano|small|medium|keypoint] <image> <weights> [--shot out.png | --bench N]\n"
-                  << "   or: " << argv[0] << " [--variant nano|small|medium|keypoint] --validate <weights> <ref.bin>\n";
+        std::cerr << "Usage: " << argv[0] << " [--variant nano|small|medium|keypoint] [--fp32] <image> <weights> [--shot out.png | --bench N]\n"
+                  << "   or: " << argv[0] << " [--variant nano|small|medium|keypoint] [--fp32] --validate <weights> <ref.bin>\n";
         return 1;
     }
 
@@ -382,7 +442,7 @@ int main(int argc, char** argv) {
     renderer.setClearColor(Color(0x1a1a2e));
 
     try {
-        rfdetr::RfDetrVk model(renderer, variant);
+        rfdetr::RfDetrVk model(renderer, variant, /*tensorCores=*/!fp32);
         if (validate)
             return runValidation(model, args[1], args[2]);
         return runDetection(canvas, renderer, model, args[0], args[1], shotPath, benchRuns);

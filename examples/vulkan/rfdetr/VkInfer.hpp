@@ -113,7 +113,7 @@ namespace rfdetr {
 
     class VkInfer {
     public:
-        VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily);
+        VkInfer(VkInstance instance, VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily);
         ~VkInfer();
 
         // Clustered subgroup operations in compute shaders (GL_KHR_shader_subgroup_clustered),
@@ -122,6 +122,10 @@ namespace rfdetr {
         // Streaming multiprocessors (NVIDIA) / compute units (AMD), for sizing GEMM
         // grids; 32 where the device does not say.
         [[nodiscard]] uint32_t smCount() const { return smCount_; }
+        // fp16 tensor-core matrix multiplies (VK_KHR_cooperative_matrix: 16x16x16, fp16 A/B,
+        // fp32 accumulation, subgroup scope, 32-wide subgroups), with the device features
+        // VulkanContext enables for them.
+        [[nodiscard]] bool coopMatF16() const { return coopMatF16_; }
 
         VkInfer(const VkInfer&) = delete;
         VkInfer& operator=(const VkInfer&) = delete;
@@ -255,6 +259,8 @@ namespace rfdetr {
         VkFence frameFence_ = VK_NULL_HANDLE;
 
         bool subgroupClustered_ = false;
+        bool coopMatF16_ = false;
+        void detectCoopMat_(VkInstance instance);
         uint32_t smCount_ = 32;
 
         // Profiling timestamps (enabled by RFDETR_PROFILE): marks and, after

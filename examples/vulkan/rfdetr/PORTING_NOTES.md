@@ -6,7 +6,8 @@ validated, optimized, and honestly benchmarked. Builds on the earlier YOLOv8n an
 RT-DETR ports that established the shared `VkInfer` harness and most shaders (the
 RT-DETR port was deleted on 2026-11-27; git history keeps it).
 
-Target/host for all numbers: NVIDIA RTX 4070, fp32, 384×384 input.
+Target/host for the numbers before the dated sections: NVIDIA RTX 4070, fp32, 384×384 input.
+The dated sections (2026-11-27 on) are on an RTX 5080 and name their precision.
 
 ---
 
@@ -234,7 +235,8 @@ fp32 accumulation, 64x64 tiles, split-K planes into the same reduce) matched the
 within 0.0015 but was slower: Nano 11.3 vs 10.7 ms and Medium 20.2 vs 18.6 ms with the fused
 attention, and worse still without split-K. At M ≈ 580 to 1300 tokens the GEMMs are limited
 by how few workgroups fill the GPU, not by arithmetic, so tensor cores have little to speed
-up until the kernel itself is restructured. Not kept.
+up until the kernel itself is restructured. Not kept. *(Superseded by §11: restructured a day
+later, the cooperative-matrix GEMM runs 2.1–3.1× faster than §10's fp32 kernel per shape.)*
 
 ---
 
@@ -261,22 +263,53 @@ This was where rigor mattered most, and where I corrected myself twice.
   with op count. fp16 is the mirror image: it helps the compute-bound CNN (YOLO
   11.5→9.5 ms) but not the memory-bound transformer. Clean framing: "transformer
   detectors are dispatch/memory-bound; CNN detectors are conv-compute-bound."
+  *(Superseded on the RTX 5080: once a CUDA graph removes the launch overhead, fp16
+  makes RF-DETR 1.5–2.1× faster than fp32. The transformer was dispatch-bound, not
+  memory-bound.)*
 
-### Honest standing (same GPU, fp32, end-to-end, lean pre/post)
+### Honest standing (same GPU, end-to-end, lean pre/post)
+
+RTX 5080, 2026-11-28, after §11 (`scripts/bench_rfdetr_pytorch.py`; PyTorch is rfdetr 1.12.1's
+own optimized path, a frozen TorchScript trace replayed as one CUDA graph). The four columns
+come from one interleaved run, medians of 100 after a 2 s warm-up:
+
+| bus.jpg, end to end | Vulkan fp16 tensor cores | Vulkan fp32 (`--fp32`) | PyTorch fp32 graph | PyTorch fp16 graph |
+|---|---|---|---|---|
+| Nano | 1.99 ms | 3.71 ms | 4.75 ms | 2.31 ms |
+| Medium | 3.01 ms | 6.43 ms | 7.10 ms | 3.31 ms |
+| Keypoint | 5.37 ms | 10.93 ms | 15.17 ms | 7.47 ms |
+
+The run before it measured PyTorch's eager fp32 at 13.6 / 15.8 / 28.4 ms and its TF32 graph
+at 3.19 / 5.20 / 11.75 ms.
+
+- **At each precision the Vulkan port is faster end to end:** 1.28 / 1.10 / 1.39× over
+  PyTorch's fp32 graph and 1.16 / 1.10 / 1.39× over its fp16 graph.
+- **The forward alone is even in fp32 and behind in fp16.** In fp32 the whole GPU frame
+  (3.4 / 6.1 / 10.4 ms) roughly matches cuBLAS's forward (3.6 / 5.9 / 12.1 ms). In fp16
+  Medium's GPU frame is 2.67 ms and Keypoint's 5.06 ms, against PyTorch's 2.2 and 4.4 ms
+  forward: ~10–15 % behind once the preprocess is taken out. The end-to-end lead is the
+  lighter pre/post (rfdetr's keypoint postprocess alone takes ~3 ms on the GPU) and the
+  replayed frame.
+- fp16 costs little on either side. PyTorch's fp16 Keypoint is within 0.0012 confidence and
+  0.64 px keypoints of its fp32; bf16 is no faster and moves keypoints up to 9 px. The
+  Vulkan port's numbers are in §11.
+- No Triton (`torch.compile`) or TensorRT on this machine; both are untested here and could
+  be faster.
+
+RTX 4070, May (before §6's later work and §10):
 - **RF-DETR:** ~23.6 ms (42 FPS) vs optimized PyTorch ~21.5 ms (46 FPS) — within
   ~10%, approaching parity.
 - **YOLOv8n:** 7.9 ms (126.8 FPS) vs TorchScript 8.2 ms — parity (within noise);
   the lean C++ pre/post offsets the conv compute gap at ~8 ms.
-- The Vulkan path is **not** a speed win on NVIDIA (cuBLAS/cuDNN win the compute).
-  The defensible contribution is **framework-free, vendor-portable (runs on any
-  Vulkan GPU — Mali/Adreno/Intel/AMD), and co-resident with the renderer on one
-  device** — none of which the faster PyTorch numbers can claim. TensorRT (not
-  installed) would widen the compute gap further, so latency claims must stay
-  "competitive," never "faster."
+- At that time the Vulkan path was a speed win on NVIDIA **only at equal (fp32)
+  precision**; tensor cores (PyTorch fp16, TensorRT) kept the lead until §11. The
+  defensible contribution is still **framework-free, vendor-portable (runs on any Vulkan
+  GPU — Mali/Adreno/Intel/AMD), and co-resident with the renderer on one device**. Say
+  "faster" only at equal precision and against what was measured.
 
-Baselines live in `scripts/bench_rfdetr_pytorch.py` and `scripts/yolo_benchmark.py`
-(each: eager / TorchScript / fp16 / TensorRT-if-present, forward / lean-e2e /
-convenience-`predict()` columns).
+Baselines live in `scripts/bench_rfdetr_pytorch.py` (fp32 eager and fp32 / TF32 / fp16 / bf16
+CUDA graph, forward and end-to-end, with each config's detections checked against fp32) and
+`scripts/yolo_benchmark.py` (eager / TorchScript / fp16 / TensorRT-if-present).
 
 ---
 
@@ -336,7 +369,7 @@ keypoint equal to 0.1 px. From the JPEG (stb_image decode, GPU resize) the third
 the two projectors ~6 ms, the decoder ~7.6 ms; GEMMs are ~23 ms of the total. That is twice
 Medium at the same input size, because patch 12 gives 2304 patches to Medium's 1296 and the
 global attention grows with their square. Roboflow quotes 9.8 ms on a T4 with TensorRT fp16.
-§10 brings it to 10.9 ms.
+§10 brings it to 10.9 ms in fp32, §11 to 5.4 ms on tensor cores.
 
 ---
 
@@ -409,8 +442,96 @@ totals, or remove a block and difference them. `RFDETR_PROFILE` now also prints 
 time from `beginFrame()` to the submit.
 
 **Left:** the GEMMs at ~45-49 % of fp32 peak; attention at ~13 TFLOPS on windowed layers;
-the decoder at 1.7 ms of mostly small dispatches (~200 per inference). Tensor cores would
-need the cooperative-matrix features enabled on the renderer's device.
+the decoder at 1.7 ms of mostly small dispatches (~200 per inference). Tensor cores came
+next (§11).
+
+---
+
+## 11. fp16 tensor cores (2026-11-28, RTX 5080)
+
+| bus.jpg, RTX 5080, end to end (median of 100, interleaved) | fp32 (`--fp32`) | tensor cores (default) | PyTorch fp16 CUDA graph |
+|---|---|---|---|
+| Nano (384 px) | 3.71 ms | 1.99 ms | 2.31 ms |
+| Medium (576 px) | 6.43 ms | 3.01 ms | 3.31 ms |
+| Keypoint (576 px, patch 12) | 10.93 ms | 5.37 ms | 7.47 ms |
+
+Every matrix product now runs on tensor cores where the device has them: the GEMMs, the
+convolutions (as implicit GEMMs) and attention's QKᵀ and PV take fp16 inputs and sum in
+fp32 through `VK_KHR_cooperative_matrix` (16x16x16, subgroup scope). Everything else stays
+fp32: the activations in memory, LayerNorm, softmax, the epilogues, the deformable sampling,
+the postprocess. `--fp32` (`RfDetrVk(renderer, variant, /*tensorCores=*/false)`) keeps §10's
+exact path, which is also what a GPU without the features takes.
+
+**The device.** The renderer's `VulkanContext` now enables, when the GPU supports all of
+them, the extension and its feature, the Vulkan memory model, `shaderFloat16` and 16-bit
+storage buffers; no renderer shader uses them, and the device's one
+`VkPhysicalDeviceVulkan11Features` is now shared with FSR's block. `VkInfer` uses tensor cores
+only if the device also has 32-wide subgroups and lists the 16x16x16 fp16 × fp16 → fp32 shape.
+
+**GEMM (`gemm_cm.comp`).** The same push constants, B layouts and fused epilogue as
+`gemm.comp`. A 64x64 tile is four subgroups in a 2x2 grid with 2x2 accumulators each; k
+advances 32 per step through padded, double-buffered shared memory, the next step's tile
+loaded into registers during the current one's products. The weights get fp16 copies at load:
+nn.Linear `[N,K]`, conv weights as `[out_c, in_c·kh·kw]`, so the 1x1 and kxk convolutions keep
+the implicit im2col with the weight as the A operand. The fp32 activations are rounded to
+fp16 on their way into shared memory, and the accumulators reach the epilogue through one
+16x16 scratch per subgroup. Timed as in §10 (a GEMM repeated in the frame, totals
+differenced), the 64x64 tensor-core tile at its best split against the best fp32 tile and
+split, on Keypoint's shapes:
+
+| GEMM (M x N x K) | fp32 | tensor cores |
+|---|---|---|
+| ViT qkv 2308 x 1152 x 384 | 81.7 µs | 30.4 µs |
+| ViT fc1 2308 x 1536 x 384 | 102.0 µs | 42.1 µs |
+| ViT fc2 2308 x 384 x 1536 | 98.7 µs (split 2) | 41.6 µs (split 2) |
+| ViT attention output 2308 x 384 x 384 | 40.7 µs | 13.1 µs (split 2) |
+| keypoint FFN up 1700 x 1024 x 256 | 37.1 µs | 17.7 µs |
+| keypoint FFN down 1700 x 256 x 1024 | 44.8 µs (split 4) | 16.0 µs (split 4) |
+| value projections, enc_output 2304 x 256 x 256 | 20.6 µs (split 2) | 8.4 µs (split 2) |
+
+That is 2.1–3.1× per shape. `RfDetrVk::gemm_` sends every GEMM with an fp16 weight copy to this
+tile, with the smallest split of 1, 2, 4 or 8 that gives at least three workgroups per SM;
+that rule picks the measured best split on every shape above. The other tiles tried (64x128
+with and without register prefetch, 128x64) were slower on all of them but one, where 64x128
+without prefetch won by 3 %.
+
+**Attention (`attn_vit_flash_cm.comp`).** §10's flash attention with both products on tensor
+cores. A workgroup is four subgroups and 64 queries of one head; a subgroup keeps its 16
+queries (scaled, fp16) as A fragments and walks the keys 64 at a time: S = QKᵀ, then the
+online softmax in fp32 with two invocations per query row (a clustered max over the pair),
+P = exp(S − max) in fp16 through shared memory, and PV on fresh accumulators added to the
+outputs, which stay in fp32 registers. It is built for head dim 64 (the ViT) and 32 (the
+decoders' self-attention: the instance attention over 100 or 300 queries and the keypoint
+group attention). The head-dim-32 build replaced the decoders' three-pass kernels, whose
+softmax ran one invocation per 300-wide row: Medium's decoder 1.02 → 0.38 ms, its GPU frame
+3.33 → 2.67 ms.
+
+| Keypoint GPU frame, bus.jpg | ms |
+|---|---|
+| fp32 (§10) | 10.26 |
+| nn.Linear GEMMs on tensor cores | 7.45 |
+| + ViT attention | 5.77 |
+| + projector convolutions | 5.30 |
+| + decoder self-attention | 5.06 |
+
+**Accuracy.** fp16 inputs move every stage by ~1e-3 relative: on Keypoint's bus.jpg reference
+the patch embedding through both projectors is within relL1 5e-4 to 1.3e-3, against 6e-7 to
+3e-6 in fp32. The decoder's top-K then swaps some near-tied proposals, as §5 describes, so its
+per-row comparison flags rows (38 of Keypoint's 100 logit rows; most rows of the Nano and
+Medium noise references). `--validate` therefore judges stages on relL1 < 5e-3 under fp16
+(max abs < 2e-2 in fp32), and it also runs PyTorch's captured heads through the same
+postprocess and compares the detections: Keypoint on bus.jpg gives the same 3 people,
+confidences within 0.0003, boxes within 0.02 px, keypoints within 0.07 px. The Nano and Medium
+references are noise with no detections, so for them the check is bus.jpg against `--fp32`:
+the same objects on all three variants, confidences within 0.002, boxes within 0.5 px.
+
+**Checks.** `--validate` gives the expected result in both modes on all three variants: every
+stage through the projectors OK, the decoder rows as above, the detections OK. Runs under the
+validation layer with synchronization validation log nothing: the benchmark of all three
+variants on tensor cores, Keypoint's also with `--fp32`, and Keypoint's `--validate`.
+
+**Left:** the fp16 forward trails cuBLAS by ~10–15 % (§7); Keypoint's decoder is ~1.0 ms of
+mostly small dispatches.
 
 ---
 
@@ -426,5 +547,9 @@ need the cooperative-matrix features enabled on the renderer's device.
   choice were redone; splitting K and a smaller tile fixed it.
 - Benchmark against *optimized* baselines with the *right flags* (`cudnn.benchmark`)
   and a *fair* pre/post; the framework's convenience API is not a deployment path.
+- Re-test a negative result once the kernels around it change: the tensor-core GEMM that
+  lost on 2026-11-27 (§6) won 2.1–3.1× per shape a day later, restructured (§11).
 - For a hand-written portable compute path, the honest pitch is portability and
-  deployment footprint, not beating vendor-optimized inference on the vendor's GPU.
+  deployment footprint first. Speed claims hold at equal precision, against what was
+  measured (PyTorch's fastest path here, no TensorRT or Triton) and end to end, where the
+  lighter pre/post counts; the fp16 forward alone still trails cuBLAS.

@@ -91,6 +91,15 @@ if (THREEPP_WITH_INFERENCE)
             compile_vulkan_shader(${target} "${_rf_sh}/gemm.comp" kRfGemm${_layout}64x64Spv
                     VARIANT_SUFFIX rfdetr_${_l}64x64 DEFINES B_${_layout} BM=64 BN=64 TM=4 TN=4)
         endforeach ()
+        # gemm_cm.comp: the tensor-core GEMM (VK_KHR_cooperative_matrix, fp16 products,
+        # fp32 sums), 64x64 tiles, built per B layout like gemm.comp; used where the
+        # device has it.
+        compile_vulkan_shader(${target} "${_rf_sh}/gemm_cm.comp" kRfGemmCm64x64Spv
+                VARIANT_SUFFIX rfdetr_cm64x64 DEFINES BM=64 BN=64)
+        compile_vulkan_shader(${target} "${_rf_sh}/gemm_cm.comp" kRfGemmCmKnSpv
+                VARIANT_SUFFIX rfdetr_cmkn DEFINES B_KN BM=64 BN=64)
+        compile_vulkan_shader(${target} "${_rf_sh}/gemm_cm.comp" kRfGemmCmConvSpv
+                VARIANT_SUFFIX rfdetr_cmconv DEFINES B_CONV BM=64 BN=64)
         compile_vulkan_shader(${target} "${_rf_sh}/gemm_reduce.comp"         kRfGemmReduceSpv    VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(${target} "${_rf_sh}/layernorm.comp"           kRfLayerNormSpv     VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(${target} "${_rf_sh}/softmax.comp"             kRfSoftmaxSpv       VARIANT_SUFFIX rfdetr)
@@ -103,6 +112,9 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_scores.comp"     kRfAttnVitScoresSpv VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_apply.comp"      kRfAttnVitApplySpv  VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_flash.comp"      kRfAttnFlashSpv     VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_flash_cm.comp"   kRfAttnFlashCmSpv   VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_flash_cm.comp"   kRfAttnFlashCm32Spv
+                VARIANT_SUFFIX rfdetr_hd32 DEFINES HD=32)
         # C2f projector: de-window taps, channel-wise LayerNorm (+SiLU).
         compile_vulkan_shader(${target} "${_rf_sh}/unwindow.comp"            kRfUnwindowSpv      VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(${target} "${_rf_sh}/layernorm_chw.comp"       kRfLnChwSpv         VARIANT_SUFFIX rfdetr)
