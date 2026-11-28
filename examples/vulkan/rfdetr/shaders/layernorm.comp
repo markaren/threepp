@@ -1,7 +1,13 @@
 #version 450
-// LayerNorm along the last axis. One thread per row (M rows of width D).
+// LayerNorm along the last axis of an [M, D] buffer, D <= 512 (the host checks).
+// 32 invocations per row, four rows per workgroup: each holds every 32nd value of
+// its row in registers, so the row is read once (coalesced) and the variance is
+// taken around the mean like the two-pass reference. The sums go through shared
+// memory, so no subgroup features are needed.
 // Bindings: 0 x, 1 gamma, 2 beta, 3 y. Params via push constant.
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+#extension GL_EXT_control_flow_attributes : require
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PC {
     uint M, D;
@@ -13,21 +19,46 @@ layout(std430, binding = 1) readonly buffer Gamma { float gamma[]; };
 layout(std430, binding = 2) readonly buffer Beta  { float beta[]; };
 layout(std430, binding = 3)          buffer Y     { float y[]; };
 
-void main() {
-    uint m = gl_GlobalInvocationID.x;
-    if (m >= p.M) return;
-    uint base = m * p.D;
+const uint LANES = 32u, ROWS = 4u, MAXV = 16u;// MAXV * LANES = 512
+shared float partial[LANES * ROWS];
+shared float stat[ROWS];
 
-    float sum = 0.0;
-    for (uint k = 0u; k < p.D; k++) sum += x[base + k];
-    float mean = sum / float(p.D);
-
-    float sqsum = 0.0;
-    for (uint k = 0u; k < p.D; k++) {
-        float d = x[base + k] - mean;
-        sqsum += d * d;
+// The row's total of v over its 32 invocations, for every one of them.
+float rowSum(float v, uint lane, uint rl) {
+    partial[rl * LANES + lane] = v;
+    barrier();
+    if (lane == 0u) {
+        float t = 0.0;
+        for (uint j = 0u; j < LANES; ++j) t += partial[rl * LANES + j];
+        stat[rl] = t;
     }
-    float inv = inversesqrt(sqsum / float(p.D) + p.eps);
-    for (uint k = 0u; k < p.D; k++)
-        y[base + k] = (x[base + k] - mean) * inv * gamma[k] + beta[k];
+    barrier();
+    return stat[rl];
+}
+
+void main() {
+    const uint lane = gl_LocalInvocationID.x % LANES, rl = gl_LocalInvocationID.x / LANES;
+    const uint m = gl_WorkGroupID.x * ROWS + rl;
+    const uint base = min(m, p.M - 1u) * p.D;// rows past M compute and are dropped
+
+    float v[MAXV];
+    float s = 0.0;
+    [[unroll]] for (uint i = 0u; i < MAXV; ++i) {
+        const uint k = lane + i * LANES;
+        v[i] = k < p.D ? x[base + k] : 0.0;
+        s += v[i];
+    }
+    const float mean = rowSum(s, lane, rl) / float(p.D);
+    float q = 0.0;
+    [[unroll]] for (uint i = 0u; i < MAXV; ++i) {
+        const float dv = v[i] - mean;
+        q += lane + i * LANES < p.D ? dv * dv : 0.0;
+    }
+    barrier();// stat[] is reused
+    const float inv = inversesqrt(rowSum(q, lane, rl) / float(p.D) + p.eps);
+    if (m >= p.M) return;
+    [[unroll]] for (uint i = 0u; i < MAXV; ++i) {
+        const uint k = lane + i * LANES;
+        if (k < p.D) y[base + k] = (v[i] - mean) * inv * gamma[k] + beta[k];
+    }
 }

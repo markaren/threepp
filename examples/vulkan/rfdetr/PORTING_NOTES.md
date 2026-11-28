@@ -208,7 +208,9 @@ all of them and the `RF_NOSPLITK` switch is gone.
 (one-submit build, 10.2 ms of GPU work per inference) it showed attention
 (`attn_vit_scores` + `attn_vit_apply`) at 3.8 ms, the GEMMs with their split-K reduce passes
 at 3.7 ms, the projector convolutions at 1.0 ms and everything else at ~1.9 ms. LayerNorm
-and softmax, though one thread per row, are under 0.1 ms in total.
+and softmax, though one thread per row, are under 0.1 ms in total. *(Wrong for LayerNorm:
+the per-kernel sums misattribute time between dispatches; see §10, where a row-parallel
+LayerNorm saved 4.7 ms on the Keypoint variant.)*
 
 The attention kernels wrote the [T,T] scores, read them back for the softmax and again for
 the apply, and read Q, K and V straight from global memory. `attn_vit_flash.comp` does all
@@ -334,6 +336,81 @@ keypoint equal to 0.1 px. From the JPEG (stb_image decode, GPU resize) the third
 the two projectors ~6 ms, the decoder ~7.6 ms; GEMMs are ~23 ms of the total. That is twice
 Medium at the same input size, because patch 12 gives 2304 patches to Medium's 1296 and the
 global attention grows with their square. Roboflow quotes 9.8 ms on a T4 with TensorRT fp16.
+§10 brings it to 10.9 ms.
+
+---
+
+## 10. Speed: one GEMM, register-blocked attention, row-parallel LayerNorm (2026-11-28, RTX 5080)
+
+| bus.jpg, RTX 5080, fp32, end to end (median of 3 interleaved runs x 100) | before | after |
+|---|---|---|
+| Keypoint (576 px, patch 12) | 36.41 ms | 10.94 ms |
+| Nano (384 px) | 10.46 ms | 3.75 ms |
+| Medium (576 px) | 18.04 ms | 6.54 ms |
+
+Keypoint GPU time went 34.1 → 10.3 ms. The detections and every keypoint are identical at
+printed precision (one Nano score moves in the fourth decimal); `--validate` stays at fp32
+level on all three variants (Keypoint taps ≤ 2.6e-4, keypoint head ≤ 1e-2 max abs error, the
+same noise rows diverge on Nano and Medium); a run under the validation layer with
+synchronization validation logs nothing; the synthetic demo's detect went 11.7 → 4.6 ms.
+
+**One GEMM for every linear layer and conv (`gemm.comp`).** The old `linear.comp` computed
+4x4 outputs per invocation from scalar, uncoalesced loads; the projector convolutions ran in
+`conv2d.comp` at one output per invocation. Now a single kernel, built per B layout
+(nn.Linear weight `[N,K]`, a 1x1 conv's CHW input `[K,N]`, or a kxk conv's im2col gathered
+while loading, never stored) and per tile, does all of them with float4 loads and
+register-blocked micro-tiles, and its epilogue fuses what used to be separate passes: the
+bias (per column, or per output channel for a conv), GELU or ReLU, and the residual with its
+LayerScale. Split-K writes partial planes that `gemm_reduce.comp` sums with the same
+epilogue. Data movement went with it: the C2f branches and the de-windowed taps are written
+straight into the buffers that read them, and the decoder's in_proj computes only the rows
+each input needs, straight into the fused qkv layout (no splice, a third fewer FLOPs).
+Fourteen kernels are gone.
+
+**Two tiles, chosen per GEMM.** Timed per shape (a GEMM repeated 11 times in the frame,
+divided out; single-dispatch timestamps can't be trusted, see below):
+- 128x64 with 8x8 per invocation, 32 k per tile and *no* register prefetch is fastest on the
+  big GEMMs (qkv 82 µs, fc1 102 µs, fc2 split in two 104 µs: ~45-49 % of fp32 peak);
+- 64x64 with 4x4 per invocation and prefetch wins where the big tile makes too few
+  workgroups (the 2308x384x384 attention out-projection: 25 µs against 87 unsplit on the
+  big tile; the decoder's 1700-2304-row GEMMs, split in two to four).
+`RfDetrVk::gemm_` estimates each tile and split of 1, 2, 4 or 8 as the busiest SM's whole
+workgroups at the tile's measured rate (215 and 170 FMA/ns per SM) plus the split's reduce
+traffic, among the candidates that give each SM at least 1.7 workgroups; on the twenty-odd
+shapes measured it predicts within a few µs and picks the measured best or within ~3 % of it.
+Negative results: 128x128 tiles (256 invocations x 8x8: too many registers, one workgroup
+per SM), register prefetch on the big tile (same reason), splits of 3 (342 workgroups on 252
+slots leave a ragged second wave).
+
+**Attention (`attn_vit_flash.comp`) rewritten like a GEMM.** A workgroup takes 64 queries of
+a head and walks the keys 64 at a time; an invocation holds 4 queries x 8 keys of scores,
+then 4 queries x 8 dims of output, so each float4 read from shared memory feeds 8-16 FMAs
+(the old kernel did one scalar read per FMA). The row maximum is shared over an 8-lane
+cluster per key tile; P goes through shared memory over the K tile it came from. Windowed
+layers 0.98 → ~0.6 ms, global 2.3 → 1.15 ms at that point.
+
+**LayerNorm, the biggest single win.** `layernorm.comp` ran one invocation per row: for a
+2308x384 token buffer, 2308 invocations each walking a row three times, every warp load
+touching 32 cache lines. Now 32 invocations share a row, hold it in registers and read it
+once: Keypoint GPU 15.0 → 10.3 ms across its ~60 LayerNorms. The per-kernel table had put
+all LayerNorms at 0.045 ms. `layernorm_chw.comp` (the projectors' channel norm) got the
+same treatment for ~0.1 ms.
+
+**Record once, replay.** `infer()` records its frame with a key (the image size); while
+`VkInfer::replayable` holds (no arena slot, staging buffer or descriptor set replaced since)
+the next call only copies the image into the staging and submits the same command buffer.
+Host recording was ~2.4 ms per Keypoint inference; now 0.
+
+**Profiling caveat.** On this setup (NVIDIA, Windows, a desktop sharing the GPU) a single
+dispatch's timestamp can bill its time to a neighbour: a 1.4 GFLOP fc2 showed 8 µs, a reduce
+over 100x256 showed 305 µs. Barriers before the timestamps did not change it. Frame totals
+and stage marks are sound; to price one kernel, repeat it in the frame and difference the
+totals, or remove a block and difference them. `RFDETR_PROFILE` now also prints the host
+time from `beginFrame()` to the submit.
+
+**Left:** the GEMMs at ~45-49 % of fp32 peak; attention at ~13 TFLOPS on windowed layers;
+the decoder at 1.7 ms of mostly small dispatches (~200 per inference). Tensor cores would
+need the cooperative-matrix features enabled on the renderer's device.
 
 ---
 
@@ -344,8 +421,9 @@ global attention grows with their square. Roboflow quotes 9.8 ms on a T4 with Te
 - Read the reference source for the *exact* config; checkpoints reveal overrides
   the docs don't (`dec_layers`, tap indexing).
 - Reproduce a wrong stage in NumPy from captured inputs to localize GPU bugs.
-- Profile before optimizing; small models are GPU-underutilized by nature, and the
-  bottleneck (small-N GEMM occupancy) is structural, not fixable by fusion.
+- Profile before optimizing, and check the profiler: per-dispatch timestamps misled this
+  port twice (§10). Small-N GEMM occupancy looked structural until the kernel and the tile
+  choice were redone; splitting K and a smaller tile fixed it.
 - Benchmark against *optimized* baselines with the *right flags* (`cudnn.benchmark`)
   and a *fair* pre/post; the framework's convenience API is not a deployment path.
 - For a hand-written portable compute path, the honest pitch is portability and

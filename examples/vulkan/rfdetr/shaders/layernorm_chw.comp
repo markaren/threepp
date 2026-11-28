@@ -1,14 +1,22 @@
 #version 450
 // ConvNeXt-style LayerNorm over the channel dim of a [C, HW] feature map
-// (normalize the C-vector at each spatial position). One thread per position.
-// Optional fused activation on the output: act 0 = none, 2 = SiLU.
+// (normalize the C-vector at each spatial position), C <= 512 (the host checks).
+// A workgroup takes 32 consecutive positions; 8 invocations share a position,
+// each holding every 8th channel of it in registers, so the map is read once
+// (consecutive positions: coalesced) and the variance is taken around the mean
+// like the two-pass reference. Optional fused activation on the output: act 0 =
+// none, 2 = SiLU. The result goes to channels [outOff, outOff+C) of y, so a C2f
+// branch lands straight in its slot of the concat buffer.
 // Bindings: 0 x, 1 gamma, 2 beta, 3 y. Params via push constant.
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+#extension GL_EXT_control_flow_attributes : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PC {
     uint C, HW;
     float eps;
     uint act;
+    uint outOff, _p0, _p1, _p2;
 } p;
 
 layout(std430, binding = 0) readonly buffer X     { float x[]; };
@@ -16,24 +24,49 @@ layout(std430, binding = 1) readonly buffer Gamma { float gamma[]; };
 layout(std430, binding = 2) readonly buffer Beta  { float beta[]; };
 layout(std430, binding = 3)          buffer Y     { float y[]; };
 
-void main() {
-    uint pos = gl_GlobalInvocationID.x;
-    if (pos >= p.HW) return;
+const uint POS = 32u, GROUPS = 8u, MAXV = 64u;// MAXV * GROUPS = 512 channels
+shared float partial[GROUPS * POS];
+shared float stat[POS];
 
-    float sum = 0.0;
-    for (uint c = 0u; c < p.C; c++) sum += x[c * p.HW + pos];
-    float mean = sum / float(p.C);
-
-    float sq = 0.0;
-    for (uint c = 0u; c < p.C; c++) {
-        float d = x[c * p.HW + pos] - mean;
-        sq += d * d;
+// The position's total of v over its 8 invocations, for every one of them.
+float posSum(float v, uint lp, uint g) {
+    partial[g * POS + lp] = v;
+    barrier();
+    if (g == 0u) {
+        float t = 0.0;
+        for (uint j = 0u; j < GROUPS; ++j) t += partial[j * POS + lp];
+        stat[lp] = t;
     }
-    float inv = inversesqrt(sq / float(p.C) + p.eps);
+    barrier();
+    return stat[lp];
+}
 
-    for (uint c = 0u; c < p.C; c++) {
-        float v = (x[c * p.HW + pos] - mean) * inv * gamma[c] + beta[c];
-        if (p.act == 2u) v = v / (1.0 + exp(-v));// SiLU
-        y[c * p.HW + pos] = v;
+void main() {
+    const uint lp = gl_LocalInvocationID.x % POS, g = gl_LocalInvocationID.x / POS;
+    const uint pos = gl_WorkGroupID.x * POS + lp;
+    const uint pc = min(pos, p.HW - 1u);// positions past HW compute and are dropped
+
+    float v[MAXV];
+    float s = 0.0;
+    [[unroll]] for (uint i = 0u; i < MAXV; ++i) {
+        const uint c = g + i * GROUPS;
+        v[i] = c < p.C ? x[c * p.HW + pc] : 0.0;
+        s += v[i];
+    }
+    const float mean = posSum(s, lp, g) / float(p.C);
+    float q = 0.0;
+    [[unroll]] for (uint i = 0u; i < MAXV; ++i) {
+        const float d = v[i] - mean;
+        q += g + i * GROUPS < p.C ? d * d : 0.0;
+    }
+    barrier();// stat[] is reused
+    const float inv = inversesqrt(posSum(q, lp, g) / float(p.C) + p.eps);
+    if (pos >= p.HW) return;
+    [[unroll]] for (uint i = 0u; i < MAXV; ++i) {
+        const uint c = g + i * GROUPS;
+        if (c >= p.C) break;
+        float o = (v[i] - mean) * inv * gamma[c] + beta[c];
+        if (p.act == 2u) o = o / (1.0 + exp(-o));// SiLU
+        y[(p.outOff + c) * p.HW + pos] = o;
     }
 }

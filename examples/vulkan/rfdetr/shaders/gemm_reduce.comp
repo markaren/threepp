@@ -1,0 +1,48 @@
+#version 450
+// Split-K reduction for gemm.comp: sums the splitK partial planes [splitK, M, N]
+// it wrote with the PARTIAL flag and applies the epilogue gemm.comp would have
+// applied (same flags, same GELU), one invocation per output.
+// Bindings: 0 partials, 1 bias, 2 Y, 3 res, 4 gamma.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, splitK, flags;
+    uint ldc, ldr, cOff, rOff;
+    uint biasOff, _p0, _p1, _p2;
+} p;
+
+const uint F_BIAS = 1u, F_RES = 2u, F_GAMMA = 4u, F_BIASROW = 16u;// act = (flags >> 8) & 15: 1 GELU, 2 ReLU
+
+layout(std430, binding = 0) readonly buffer P { float part[]; };
+layout(std430, binding = 1) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 2) writeonly buffer Y { float y[]; };
+layout(std430, binding = 3) readonly buffer R { float res[]; };
+layout(std430, binding = 4) readonly buffer G { float gam[]; };
+
+float erf_approx(float z) {
+    float s = z < 0.0 ? -1.0 : 1.0;
+    float a = abs(z);
+    float t = 1.0 / (1.0 + 0.3275911 * a);
+    float poly = (((( 1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+                    - 0.284496736) * t + 0.254829592) * t;
+    return s * (1.0 - poly * exp(-a * a));
+}
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = p.M * p.N;
+    if (gid >= total) return;
+    uint m = gid / p.N, n = gid - m * p.N;
+
+    float x = 0.0;
+    for (uint z = 0u; z < p.splitK; z++) x += part[z * total + gid];
+
+    const uint act = (p.flags >> 8u) & 15u;
+    if ((p.flags & F_BIAS) != 0u) x += bias[p.biasOff + n];
+    else if ((p.flags & F_BIASROW) != 0u) x += bias[p.biasOff + m];
+    if (act == 1u) x = 0.5 * x * (1.0 + erf_approx(x * 0.7071067811865475));
+    else if (act == 2u) x = max(x, 0.0);
+    if ((p.flags & F_RES) != 0u)
+        x = res[p.rOff + m * p.ldr + n] + ((p.flags & F_GAMMA) != 0u ? gam[n] : 1.0) * x;
+    y[p.cOff + m * p.ldc + n] = x;
+}

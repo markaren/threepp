@@ -10,33 +10,27 @@
 #include <numeric>
 #include <stdexcept>
 
-#include "threepp/renderers/vulkan/shaders/conv2d.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/conv1x1.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/conv3x3.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/im2col.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/linear.comp.rfdetr.spv.h"
+// gemm.comp's builds: B layout (nn.Linear weight, 1x1 conv input, implicit im2col) x tile.
+#include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_nk128x64.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_nk64x64.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_kn128x64.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_kn64x64.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_conv128x64.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm.comp.rfdetr_conv64x64.spv.h"
+#include "threepp/renderers/vulkan/shaders/gemm_reduce.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/layernorm.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/softmax.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/gelu.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/layerscale.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/attn_scores.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/attn_apply.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/add.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/concat.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/build_embeddings.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/attn_vit_scores.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/attn_vit_apply.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/unwindow.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/layernorm_chw.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/chcopy.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/transpose_chw2tokens.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/qkv_splice.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/relu.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/offset_preprocess.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/msdeformattn.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/scale_add.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/linear_splitk.comp.rfdetr.spv.h"
-#include "threepp/renderers/vulkan/shaders/reduce_splitk.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/preprocess.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/proposals.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/topk_rank.comp.rfdetr.spv.h"
@@ -51,29 +45,30 @@ using threepp::VulkanRenderer;
 namespace rfdetr {
 
 namespace {
-    struct ConvParams {
-        uint32_t in_c, out_c, in_h, in_w;
-        uint32_t out_h, out_w, k_h, k_w;
-        uint32_t stride_h, stride_w, pad_h, pad_w;
-        uint32_t has_bias, activation, _p0, _p1;
+    struct GemmParams {
+        uint32_t M, N, K, kChunk;
+        uint32_t lda, ldb, ldc, ldr;
+        uint32_t aOff, bOff, cOff, rOff;
+        uint32_t biasOff, flags, _p0, _p1;
+        uint32_t inH, inW, outW, kh;
+        uint32_t kw, stride, pad, _p2;
     };
-    struct LinearParams    { uint32_t M, N, K, hasBias, act, _p0, _p1, _p2; };
-    struct SplitKParams    { uint32_t M, N, K, splitK, kChunk, _p0, _p1, _p2; };
-    struct ReduceParams    { uint32_t M, N, splitK, hasBias, act, _p0, _p1, _p2; };
+    struct GemmReduceParams {
+        uint32_t M, N, splitK, flags;
+        uint32_t ldc, ldr, cOff, rOff;
+        uint32_t biasOff, _p0, _p1, _p2;
+    };
+    // gemm.comp / gemm_reduce.comp flags; the activation sits in bits 8..11.
+    constexpr uint32_t kGemmBias = 1u, kGemmRes = 2u, kGemmGamma = 4u, kGemmPartial = 8u, kGemmBiasRow = 16u;
     struct LNParams        { uint32_t M, D; float eps, _pad; };
     struct SoftmaxParams   { uint32_t M, N, _p0, _p1; };
-    struct GeluParams      { uint32_t n, _p0, _p1, _p2; };
-    struct LayerScaleParams{ uint32_t M, C, _p0, _p1; };
     struct AttnParams      { uint32_t M, H, d, stride; float scale; uint32_t _p0, _p1, _p2; };
     struct AttnVitParams   { uint32_t T, H, d, B; float scale; uint32_t _p0, _p1, _p2; };
     struct AddParams       { uint32_t n, _p0, _p1, _p2; };
-    struct ConcatParams    { uint32_t c_a, c_b, h, w; };
     struct EmbedParams     { uint32_t C, grid, winSide, numWin; };
-    struct LnChwParams     { uint32_t C, HW; float eps; uint32_t act; };
+    struct LnChwParams     { uint32_t C, HW; float eps; uint32_t act, outOff, _p0, _p1, _p2; };
     struct UnwindowParams  { uint32_t C, grid, winSide, numWin, chOffset, _p0, _p1, _p2; };
-    struct ChCopyParams    { uint32_t Cn, HW, srcOff, dstOff; };
     struct TransposeParams { uint32_t C, H, W, _p; };
-    struct QkvSpliceParams { uint32_t M, D, _p0, _p1; };
     struct OffPreParams    { uint32_t Nq, numHeads, numLevels, numPoints; };
     struct MsDeformParams  { uint32_t Nq, H, d, L, P, _p0, _p1, _p2; };
     struct PreprocessParams{ uint32_t W, H, R, _p0; };
@@ -119,33 +114,27 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
           r.graphicsQueueFamily()),
       cfg_(RfDetrConfig::forVariant(variant)) {
 
-    convPipe_       = vk_.createPipe(kRfConv2dSpv,    sizeof(kRfConv2dSpv),    4, sizeof(ConvParams), "conv2d");
-    conv1x1Pipe_    = vk_.createPipe(kRfConv1x1Spv,   sizeof(kRfConv1x1Spv),   4, sizeof(ConvParams), "conv1x1");
-    conv3x3Pipe_    = vk_.createPipe(kRfConv3x3Spv,   sizeof(kRfConv3x3Spv),   4, sizeof(ConvParams), "conv3x3");
-    im2colPipe_     = vk_.createPipe(kRfIm2colSpv,    sizeof(kRfIm2colSpv),    2, sizeof(ConvParams), "im2col");
-    linearPipe_     = vk_.createPipe(kRfLinearSpv,    sizeof(kRfLinearSpv),    4, sizeof(LinearParams), "linear");
+    // gemm.comp: [B layout][tile] (kTiles in gemm_()).
+    gemmPipe_[0][0] = vk_.createPipe(kRfGemmNK128x64Spv, sizeof(kRfGemmNK128x64Spv), 6, sizeof(GemmParams), "gemm_nk_128x64");
+    gemmPipe_[0][1] = vk_.createPipe(kRfGemmNK64x64Spv, sizeof(kRfGemmNK64x64Spv), 6, sizeof(GemmParams), "gemm_nk_64x64");
+    gemmPipe_[1][0] = vk_.createPipe(kRfGemmKN128x64Spv, sizeof(kRfGemmKN128x64Spv), 6, sizeof(GemmParams), "gemm_kn_128x64");
+    gemmPipe_[1][1] = vk_.createPipe(kRfGemmKN64x64Spv, sizeof(kRfGemmKN64x64Spv), 6, sizeof(GemmParams), "gemm_kn_64x64");
+    gemmPipe_[2][0] = vk_.createPipe(kRfGemmCONV128x64Spv, sizeof(kRfGemmCONV128x64Spv), 6, sizeof(GemmParams), "gemm_conv_128x64");
+    gemmPipe_[2][1] = vk_.createPipe(kRfGemmCONV64x64Spv, sizeof(kRfGemmCONV64x64Spv), 6, sizeof(GemmParams), "gemm_conv_64x64");
+    gemmReducePipe_ = vk_.createPipe(kRfGemmReduceSpv, sizeof(kRfGemmReduceSpv), 5, sizeof(GemmReduceParams), "gemm_reduce");
     layerNormPipe_  = vk_.createPipe(kRfLayerNormSpv, sizeof(kRfLayerNormSpv), 4, sizeof(LNParams), "layernorm");
     softmaxPipe_    = vk_.createPipe(kRfSoftmaxSpv,   sizeof(kRfSoftmaxSpv),   2, sizeof(SoftmaxParams), "softmax");
-    geluPipe_       = vk_.createPipe(kRfGeluSpv,      sizeof(kRfGeluSpv),      2, sizeof(GeluParams), "gelu");
-    layerScalePipe_ = vk_.createPipe(kRfLayerScaleSpv, sizeof(kRfLayerScaleSpv), 3, sizeof(LayerScaleParams), "layerscale");
     attnScoresPipe_ = vk_.createPipe(kRfAttnScoresSpv, sizeof(kRfAttnScoresSpv), 2, sizeof(AttnParams), "attn_scores");
     attnApplyPipe_  = vk_.createPipe(kRfAttnApplySpv, sizeof(kRfAttnApplySpv), 3, sizeof(AttnParams), "attn_apply");
     addPipe_        = vk_.createPipe(kRfAddSpv,       sizeof(kRfAddSpv),       3, sizeof(AddParams), "add");
-    concatPipe_     = vk_.createPipe(kRfConcatSpv,    sizeof(kRfConcatSpv),    3, sizeof(ConcatParams), "concat");
     buildEmbeddingsPipe_ = vk_.createPipe(kRfBuildEmbedSpv, sizeof(kRfBuildEmbedSpv), 4, sizeof(EmbedParams), "build_embeddings");
     attnVitScoresPipe_ = vk_.createPipe(kRfAttnVitScoresSpv, sizeof(kRfAttnVitScoresSpv), 2, sizeof(AttnVitParams), "attn_vit_scores");
     attnVitApplyPipe_  = vk_.createPipe(kRfAttnVitApplySpv,  sizeof(kRfAttnVitApplySpv),  3, sizeof(AttnVitParams), "attn_vit_apply");
     unwindowPipe_ = vk_.createPipe(kRfUnwindowSpv, sizeof(kRfUnwindowSpv), 2, sizeof(UnwindowParams), "unwindow");
     lnChwPipe_    = vk_.createPipe(kRfLnChwSpv,    sizeof(kRfLnChwSpv),    4, sizeof(LnChwParams), "layernorm_chw");
-    chCopyPipe_   = vk_.createPipe(kRfChCopySpv,   sizeof(kRfChCopySpv),   2, sizeof(ChCopyParams), "chcopy");
     transposeT2tPipe_     = vk_.createPipe(kRfT2tSpv,       sizeof(kRfT2tSpv),       2, sizeof(TransposeParams), "transpose_chw2tokens");
-    qkvSplicePipe_        = vk_.createPipe(kRfQkvSpliceSpv, sizeof(kRfQkvSpliceSpv), 3, sizeof(QkvSpliceParams), "qkv_splice");
-    reluPipe_             = vk_.createPipe(kRfReluSpv,      sizeof(kRfReluSpv),      2, sizeof(GeluParams), "relu");
     offsetPreprocessPipe_ = vk_.createPipe(kRfOffPreSpv,   sizeof(kRfOffPreSpv),    3, sizeof(OffPreParams), "offset_preprocess");
     msDeformAttnPipe_     = vk_.createPipe(kRfMsDeformSpv,  sizeof(kRfMsDeformSpv),  7, sizeof(MsDeformParams), "msdeformattn");
-    scaleAddPipe_         = vk_.createPipe(kRfScaleAddSpv,  sizeof(kRfScaleAddSpv),  4, sizeof(LayerScaleParams), "scale_add");
-    linearSplitKPipe_     = vk_.createPipe(kRfLinearSplitKSpv, sizeof(kRfLinearSplitKSpv), 3, sizeof(SplitKParams), "linear_splitk");
-    reduceSplitKPipe_     = vk_.createPipe(kRfReduceSplitKSpv, sizeof(kRfReduceSplitKSpv), 3, sizeof(ReduceParams), "reduce_splitk");
     preprocessPipe_       = vk_.createPipe(kRfPreprocessSpv, sizeof(kRfPreprocessSpv), 2, sizeof(PreprocessParams), "preprocess");
     proposalsPipe_        = vk_.createPipe(kRfProposalsSpv,  sizeof(kRfProposalsSpv),  4, sizeof(ProposalParams), "proposals");
     topkRankPipe_         = vk_.createPipe(kRfTopkRankSpv,   sizeof(kRfTopkRankSpv),   2, sizeof(TopKParams), "topk_rank");
@@ -153,7 +142,7 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
     if (cfg_.numKeypoints > 0) {
         repeatRowsPipe_   = vk_.createPipe(kRfRepeatRowsSpv,  sizeof(kRfRepeatRowsSpv),  2, sizeof(RepeatParams), "repeat_rows");
         groupPackPipe_    = vk_.createPipe(kRfGroupPackSpv,   sizeof(kRfGroupPackSpv),   5, sizeof(GroupParams), "group_pack");
-        groupUnpackPipe_  = vk_.createPipe(kRfGroupUnpackSpv, sizeof(kRfGroupUnpackSpv), 3, sizeof(GroupParams), "group_unpack");
+        groupUnpackPipe_  = vk_.createPipe(kRfGroupUnpackSpv, sizeof(kRfGroupUnpackSpv), 6, sizeof(GroupParams), "group_unpack");
     }
 
     // Fused attention when the device has clustered subgroup adds and the head dim
@@ -163,9 +152,9 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
         attnFlashPipe_ = vk_.createPipe(kRfAttnFlashSpv, sizeof(kRfAttnFlashSpv), 2, sizeof(AttnVitParams), "attn_vit_flash");
     std::cout << "RfDetrVk: ViT attention " << (useFlashAttn_ ? "fused" : "in three passes") << "\n";
 
-    // Partial-sum scratch sized for the largest split-K linear we route: splitK=4
-    // planes of [maxTokens, N<=512]. Scales with the variant's token count (Nano
-    // ~580, Medium ~1300). One buffer reused across calls; barriers serialize access.
+    // Partial-sum scratch for split-K GEMMs: room for 4 planes of [maxTokens, 512]
+    // (gemm_() picks no split that would not fit). One buffer reused by every split
+    // GEMM; the per-dispatch barriers serialize access.
     splitKPartialFloats_ = uint64_t(4) * uint64_t(cfg_.maxTokens()) * 512ull;
     splitKPartials_ = vk_.createOwnedRaw(VkDeviceSize(splitKPartialFloats_) * sizeof(float));
 
@@ -187,34 +176,23 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
 }
 
 RfDetrVk::~RfDetrVk() {
+    for (auto& row : gemmPipe_)
+        for (auto& pipe : row) vk_.destroyPipe(pipe);
+    vk_.destroyPipe(gemmReducePipe_);
     vk_.destroyPipe(attnFlashPipe_);
-    vk_.destroyPipe(convPipe_);
-    vk_.destroyPipe(conv1x1Pipe_);
-    vk_.destroyPipe(conv3x3Pipe_);
-    vk_.destroyPipe(im2colPipe_);
-    vk_.destroyPipe(linearPipe_);
     vk_.destroyPipe(layerNormPipe_);
     vk_.destroyPipe(softmaxPipe_);
-    vk_.destroyPipe(geluPipe_);
-    vk_.destroyPipe(layerScalePipe_);
     vk_.destroyPipe(attnScoresPipe_);
     vk_.destroyPipe(attnApplyPipe_);
     vk_.destroyPipe(addPipe_);
-    vk_.destroyPipe(concatPipe_);
     vk_.destroyPipe(buildEmbeddingsPipe_);
     vk_.destroyPipe(attnVitScoresPipe_);
     vk_.destroyPipe(attnVitApplyPipe_);
     vk_.destroyPipe(unwindowPipe_);
     vk_.destroyPipe(lnChwPipe_);
-    vk_.destroyPipe(chCopyPipe_);
     vk_.destroyPipe(transposeT2tPipe_);
-    vk_.destroyPipe(qkvSplicePipe_);
-    vk_.destroyPipe(reluPipe_);
     vk_.destroyPipe(offsetPreprocessPipe_);
     vk_.destroyPipe(msDeformAttnPipe_);
-    vk_.destroyPipe(scaleAddPipe_);
-    vk_.destroyPipe(linearSplitKPipe_);
-    vk_.destroyPipe(reduceSplitKPipe_);
     vk_.destroyPipe(preprocessPipe_);
     vk_.destroyPipe(proposalsPipe_);
     vk_.destroyPipe(topkRankPipe_);
@@ -303,7 +281,7 @@ void RfDetrVk::loadWeights(const std::string& path) {
         }
         if (kpClass_ < 0) throw std::runtime_error("RfDetrVk: the keypoint schema has no keypoints");
 
-        // instance_kp_layer_scale is one scalar per layer; scaleAdd_ takes a gamma per channel.
+        // instance_kp_layer_scale is one scalar per layer; group_unpack takes a gamma per channel.
         for (int L = 0; L < cfg_.decLayers; ++L) {
             const std::string name = "transformer.decoder.layers." + std::to_string(L) + ".instance_kp_layer_scale";
             need(name, {1u});
@@ -352,23 +330,107 @@ void RfDetrVk::loadWeights(const std::string& path) {
     std::cout << "RfDetrVk::loadWeights: " << weights_.size() << " GPU tensors (fp32)\n";
 }
 
-// Generic conv (used by patch embed: 3->384, k16 s16). f32 weights [out_c,in_c,kH,kW].
+// Records g with the tile and K split whose estimated time is least, among those
+// that give every SM at least ~2 workgroups to switch between (few resident
+// workgroups leave the SM waiting on memory: an unsplit 2308x384x1536 runs at half
+// the rate of the same GEMM split in two). The estimate is the busiest SM's whole
+// workgroups at the tile's rate, a launch, and for a split the reduction's traffic;
+// the rates and costs were timed on an RTX 5080 (PORTING_NOTES §10).
+void RfDetrVk::gemm_(const Gemm& g) {
+    if (((g.K | g.lda | g.aOff) & 3u) || (g.layout != GemmB::Conv && ((g.ldb | g.bOff) & 3u)) ||
+        (g.layout == GemmB::KN && (g.N & 3u)))
+        throw std::runtime_error("RfDetrVk::gemm_: an operand is not float4-aligned");
+
+    // 128x64: 8x8 per invocation, 32 k per tile, no register prefetch (the most FMAs
+    // per shared read); 64x64: 4x4, 16 k, prefetch (small footprint, many per SM).
+    struct TileCfg { uint32_t bm, bn, bk; float fmaPerNs; };
+    static constexpr TileCfg kTiles[2] = {{128u, 64u, 32u, 215.f}, {64u, 64u, 16u, 170.f}};
+    const float sms = float(vk_.smCount());
+    int tile = 0;
+    uint32_t splits = 1, chunk = g.K;
+    float best = std::numeric_limits<float>::max(), mostGroups = 0.f;
+    bool enough = false;// some candidate reaches the workgroup floor
+    for (int t = 0; t < 2; ++t) {
+        const TileCfg& tc = kTiles[t];
+        for (uint32_t s : {1u, 2u, 4u, 8u}) {
+            const uint32_t c = divCeil(divCeil(g.K, s), tc.bk) * tc.bk;// k per split, whole k-tiles
+            const uint32_t n = divCeil(g.K, c);
+            if (n != s || (n > 1 && uint64_t(n) * g.M * g.N > splitKPartialFloats_)) continue;
+            const float groups = float(divCeil(g.M, tc.bm) * divCeil(g.N, tc.bn) * n);
+            float ns = std::ceil(groups / sms) * float(tc.bm * tc.bn) * float(c + 64u) / tc.fmaPerNs + 1000.f;
+            if (n > 1) ns += 1000.f + float(n + 1) * float(g.M) * float(g.N) * 4.f / 1.5f;// ~1.5 B/ns
+            const bool ok = groups >= 1.7f * sms;
+            // Past the floor the estimate decides; below it (tiny GEMMs) the most workgroups.
+            if (ok ? (!enough || ns < best) : (!enough && groups > mostGroups)) {
+                best = ok ? ns : best;
+                mostGroups = groups;
+                enough = enough || ok;
+                tile = t;
+                splits = n;
+                chunk = c;
+            }
+        }
+    }
+
+    const uint32_t epi = (g.bias ? (g.biasPerRow ? kGemmBiasRow : kGemmBias) : 0u) | (g.res ? kGemmRes : 0u) |
+                         (g.gamma ? kGemmGamma : 0u) | (g.act << 8u);
+    const VkBuffer none = vk_.dummy();
+    const VkBuffer bias = g.bias ? g.bias : none, res = g.res ? g.res : none, gamma = g.gamma ? g.gamma : none;
+    GemmParams gp{g.M, g.N, g.K, chunk,
+                  g.lda, g.ldb, g.ldc, g.ldr,
+                  g.aOff, g.bOff, g.cOff, g.rOff,
+                  g.biasOff, splits > 1 ? kGemmPartial : epi, 0u, 0u,
+                  g.inH, g.inW, g.outW, g.kh,
+                  g.kw, g.stride, g.pad, 0u};
+    const TileCfg& tc = kTiles[tile];
+    vk_.dispatch(gemmPipe_[int(g.layout)][tile], {g.a, g.b, bias, splits > 1 ? splitKPartials_.buffer : g.y, res, gamma},
+                 &gp, sizeof(gp), divCeil(g.N, tc.bn), divCeil(g.M, tc.bm), splits);
+    if (splits > 1) {
+        GemmReduceParams rp{g.M, g.N, splits, epi, g.ldc, g.ldr, g.cOff, g.rOff, g.biasOff, 0u, 0u, 0u};
+        vk_.dispatch(gemmReducePipe_, {splitKPartials_.buffer, bias, g.y, res, gamma}, &rp, sizeof(rp),
+                     divCeil(g.M * g.N, 256u), 1, 1);
+    }
+}
+
+// conv (no groups) as one GEMM: Y[oc, pos] = W[oc, :] · im2col(x)[:, pos], reading
+// x's channels from inOff on. A 1x1 stride-1 conv reads x as it is ([C, HW] is
+// the B operand); any other is gathered in the GEMM's B fetch.
 Tensor RfDetrVk::conv_(const Tensor& x, const std::string& wKey, const std::string& bKey,
-                       int strideH, int strideW, int padH, int padW) {
-    auto& wt = weights_.at(wKey);
-    uint32_t out_c = wt.shape[0], in_c = wt.shape[1], k_h = wt.shape[2], k_w = wt.shape[3];
-    uint32_t in_h = x.H(), in_w = x.W();
-    uint32_t out_h = (in_h + 2 * uint32_t(padH) - k_h) / uint32_t(strideH) + 1;
-    uint32_t out_w = (in_w + 2 * uint32_t(padW) - k_w) / uint32_t(strideW) + 1;
-    bool hasBias = !bKey.empty() && weights_.count(bKey);
-    ConvParams cp{in_c, out_c, in_h, in_w, out_h, out_w, k_h, k_w,
-                  uint32_t(strideH), uint32_t(strideW), uint32_t(padH), uint32_t(padW),
-                  hasBias ? 1u : 0u, 0u, 0u, 0u};
-    Tensor out = vk_.createTensor({out_c, out_h, out_w});
-    VkBuffer biasBuf = hasBias ? weights_.at(bKey).buffer : vk_.dummy();
-    std::vector<VkBuffer> ssbos = {x.buffer, wt.buffer, biasBuf, out.buffer};
-    uint32_t totalPos = out_h * out_w;
-    vk_.dispatch(convPipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 16), divCeil(out_c, 16), 1);
+                       int stride, int pad, uint32_t inOff) {
+    const auto& wt = weights_.at(wKey);
+    const uint32_t outC = wt.shape[0], inC = wt.shape[1], kh = wt.shape[2], kw = wt.shape[3];
+    const uint32_t inH = x.H(), inW = x.W();
+    const uint32_t outH = (inH + 2u * uint32_t(pad) - kh) / uint32_t(stride) + 1u;
+    const uint32_t outW = (inW + 2u * uint32_t(pad) - kw) / uint32_t(stride) + 1u;
+    Tensor out = vk_.createTensorV({outC, outH, outW});
+    Gemm g;
+    g.a = wt.buffer;
+    g.b = x.buffer;
+    g.y = out.buffer;
+    g.M = outC;
+    g.N = outH * outW;
+    g.K = inC * kh * kw;
+    g.lda = g.K;
+    g.ldc = g.N;
+    g.bOff = inOff * inH * inW;
+    if (!bKey.empty() && weights_.count(bKey)) {
+        g.bias = weights_.at(bKey).buffer;
+        g.biasPerRow = true;// one per output channel
+    }
+    if (kh == 1 && kw == 1 && stride == 1 && pad == 0) {
+        g.layout = GemmB::KN;
+        g.ldb = inH * inW;
+    } else {
+        g.layout = GemmB::Conv;
+        g.inH = inH;
+        g.inW = inW;
+        g.outW = outW;
+        g.kh = kh;
+        g.kw = kw;
+        g.stride = uint32_t(stride);
+        g.pad = uint32_t(pad);
+    }
+    gemm_(g);
     return out;
 }
 
@@ -376,7 +438,7 @@ Tensor RfDetrVk::patchEmbed_(const Tensor& x) {
     return conv_(x,
                  "backbone.0.encoder.encoder.embeddings.patch_embeddings.projection.weight",
                  "backbone.0.encoder.encoder.embeddings.patch_embeddings.projection.bias",
-                 cfg_.patch, cfg_.patch, 0, 0);
+                 cfg_.patch, 0);
 }
 
 // patch_embed [C,G,G] -> windowed tokens [W*W, 1+winSide^2, C] with CLS + pos.
@@ -394,63 +456,63 @@ Tensor RfDetrVk::buildEmbeddings_(const Tensor& patchEmbed) {
     return out;
 }
 
-// Y[M,N] = X[M,K] · W[N,K]^T + b[N]. W is nn.Linear weight [out=N, in=K] row-major.
-Tensor RfDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t act) {
-    auto& wt = weights_.at(wKey);
-    uint32_t N = wt.shape[0], K = wt.shape[1];
-    uint32_t M = x.numel() / K;
-    bool hasBias = !bKey.empty() && weights_.count(bKey);
+// act(x·Wᵀ + b), and with res the residual res + gamma ⊙ that, in one GEMM. W is the
+// nn.Linear weight [out=N, in=K] row-major.
+Tensor RfDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t act,
+                         const Tensor* res, const std::string& gammaKey) {
+    const auto& wt = weights_.at(wKey);
+    const uint32_t N = wt.shape[0], K = wt.shape[1];
+    const uint32_t M = x.numel() / K;
     Tensor out = vk_.createTensorV({M, N});
-    VkBuffer biasBuf = hasBias ? weights_.at(bKey).buffer : vk_.dummy();
-
-    // Split-K for low-N GEMMs (fc2, attention out-proj, ...). The monolithic GEMM
-    // makes ceil(M/64)*ceil(N/64) workgroups; at N<=512 that's too few to fill the
-    // GPU, so the op is occupancy-bound (fc2 runs far slower than fc1 despite equal
-    // MACs — only the workgroup count differs). Partition K into `splitK` planes to
-    // multiply the workgroup count, then reduce. Guarded so the partials fit scratch.
-    const uint32_t splitK = 4u;
-    const uint32_t kChunk = divCeil(K, splitK);
-    if (N <= 512u && K >= 256u && M >= 256u &&
-        static_cast<uint64_t>(splitK) * M * N <= splitKPartialFloats_) {
-        SplitKParams sp{M, N, K, splitK, kChunk, 0u, 0u, 0u};
-        std::vector<VkBuffer> pssbos = {x.buffer, wt.buffer, splitKPartials_.buffer};
-        vk_.dispatch(linearSplitKPipe_, pssbos, &sp, sizeof(sp), divCeil(N, 64), divCeil(M, 64), splitK);
-        ReduceParams rp{M, N, splitK, hasBias ? 1u : 0u, act, 0u, 0u, 0u};
-        std::vector<VkBuffer> rssbos = {splitKPartials_.buffer, biasBuf, out.buffer};
-        vk_.dispatch(reduceSplitKPipe_, rssbos, &rp, sizeof(rp), divCeil(M * N, 256u), 1, 1);
-        return out;
+    Gemm g;
+    g.a = x.buffer;
+    g.b = wt.buffer;
+    g.y = out.buffer;
+    g.M = M;
+    g.N = N;
+    g.K = K;
+    g.lda = K;
+    g.ldb = K;
+    g.ldc = N;
+    if (!bKey.empty() && weights_.count(bKey)) g.bias = weights_.at(bKey).buffer;
+    g.act = act;
+    if (res) {
+        g.res = res->buffer;
+        g.ldr = N;
+        if (!gammaKey.empty()) g.gamma = weights_.at(gammaKey).buffer;
     }
-
-    LinearParams lp{M, N, K, hasBias ? 1u : 0u, act, 0u, 0u, 0u};
-    std::vector<VkBuffer> ssbos = {x.buffer, wt.buffer, biasBuf, out.buffer};
-    vk_.dispatch(linearPipe_, ssbos, &lp, sizeof(lp), divCeil(N, 64), divCeil(M, 64), 1);// BN=64, BM=64
+    gemm_(g);
     return out;
 }
 
+void RfDetrVk::linearRowsInto_(const Tensor& a, const std::string& wKey, const std::string& bKey,
+                               uint32_t n0, uint32_t n, const Tensor& y, uint32_t cOff) {
+    const auto& wt = weights_.at(wKey);
+    const uint32_t K = wt.shape[1];
+    Gemm g;
+    g.a = a.buffer;
+    g.b = wt.buffer;
+    g.y = y.buffer;
+    g.M = a.numel() / K;
+    g.N = n;
+    g.K = K;
+    g.lda = K;
+    g.ldb = K;
+    g.ldc = y.shape.back();
+    g.bOff = n0 * K;
+    g.cOff = cOff;
+    g.bias = weights_.at(bKey).buffer;
+    g.biasOff = n0;
+    gemm_(g);
+}
+
 Tensor RfDetrVk::layerNorm_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t D) {
+    if (D > 512u) throw std::runtime_error("RfDetrVk::layerNorm_: rows wider than 512");
     uint32_t M = x.numel() / D;
     LNParams lp{M, D, 1e-6f, 0.f};
     Tensor out = vk_.createTensorV(x.shape);
     std::vector<VkBuffer> ssbos = {x.buffer, weights_.at(wKey).buffer, weights_.at(bKey).buffer, out.buffer};
-    vk_.dispatch(layerNormPipe_, ssbos, &lp, sizeof(lp), divCeil(M, 64), 1, 1);
-    return out;
-}
-
-Tensor RfDetrVk::gelu_(const Tensor& x) {
-    uint32_t n = x.numel();
-    GeluParams gp{n, 0u, 0u, 0u};
-    Tensor out = vk_.createTensorV(x.shape);
-    std::vector<VkBuffer> ssbos = {x.buffer, out.buffer};
-    vk_.dispatch(geluPipe_, ssbos, &gp, sizeof(gp), divCeil(n, 64), 1, 1);
-    return out;
-}
-
-Tensor RfDetrVk::layerScale_(const Tensor& x, const std::string& gammaKey, uint32_t C) {
-    uint32_t M = x.numel() / C;
-    LayerScaleParams lp{M, C, 0u, 0u};
-    Tensor out = vk_.createTensorV(x.shape);
-    std::vector<VkBuffer> ssbos = {x.buffer, weights_.at(gammaKey).buffer, out.buffer};
-    vk_.dispatch(layerScalePipe_, ssbos, &lp, sizeof(lp), divCeil(x.numel(), 64), 1, 1);
+    vk_.dispatch(layerNormPipe_, ssbos, &lp, sizeof(lp), divCeil(M, 4), 1, 1);// four rows per workgroup
     return out;
 }
 
@@ -460,15 +522,6 @@ Tensor RfDetrVk::add_(const Tensor& a, const Tensor& b) {
     Tensor out = vk_.createTensorV(a.shape);
     std::vector<VkBuffer> ssbos = {a.buffer, b.buffer, out.buffer};
     vk_.dispatch(addPipe_, ssbos, &ap, sizeof(ap), divCeil(n, 64), 1, 1);
-    return out;
-}
-
-Tensor RfDetrVk::scaleAdd_(const Tensor& residual, const Tensor& branch, const std::string& gammaKey, uint32_t C) {
-    uint32_t M = residual.numel() / C;
-    LayerScaleParams lp{M, C, 0u, 0u};
-    Tensor out = vk_.createTensorV(residual.shape);
-    std::vector<VkBuffer> ssbos = {residual.buffer, branch.buffer, weights_.at(gammaKey).buffer, out.buffer};
-    vk_.dispatch(scaleAddPipe_, ssbos, &lp, sizeof(lp), divCeil(residual.numel(), 64), 1, 1);
     return out;
 }
 
@@ -500,8 +553,8 @@ Tensor RfDetrVk::attnVitFlash_(const Tensor& qkv, uint32_t T, uint32_t B) {
     const uint32_t H = cfg_.numHeads, d = cfg_.embedDim / cfg_.numHeads;
     AttnVitParams ap{T, H, d, B, 1.0f / std::sqrt(float(d)), 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({B * T, H * d});
-    // 32 queries per workgroup (four invocations each), one head and one group per y/z.
-    vk_.dispatch(attnFlashPipe_, {qkv.buffer, out.buffer}, &ap, sizeof(ap), divCeil(T, 32), H, B);
+    // 64 queries per workgroup, one head and one group per y/z.
+    vk_.dispatch(attnFlashPipe_, {qkv.buffer, out.buffer}, &ap, sizeof(ap), divCeil(T, 64), H, B);
     return out;
 }
 
@@ -530,77 +583,53 @@ Tensor RfDetrVk::vitLayer_(const Tensor& x, int layerIdx, bool global) {
         Tensor probs  = softmaxRows_(scores, B * H * T, T);
         ctx = attnVitApply_(probs, qkv, T, B, H, d);
     }
-    Tensor ao = linear_(ctx, pfx + "attention.output.dense.weight", pfx + "attention.output.dense.bias");
-    Tensor x1 = scaleAdd_(x, ao, pfx + "layer_scale1.lambda1", C);// x + ao*lambda1
+    // The residuals (x + lambda ⊙ branch, LayerScale) are the GEMMs' epilogues.
+    Tensor x1 = linear_(ctx, pfx + "attention.output.dense.weight", pfx + "attention.output.dense.bias", 0u,
+                        &x, pfx + "layer_scale1.lambda1");
 
     Tensor n2 = layerNorm_(x1, pfx + "norm2.weight", pfx + "norm2.bias", C);
     Tensor h1 = linear_(n2, pfx + "mlp.fc1.weight", pfx + "mlp.fc1.bias", /*act=GELU*/ 1u);
-    Tensor h2 = linear_(h1, pfx + "mlp.fc2.weight", pfx + "mlp.fc2.bias");
-    return scaleAdd_(x1, h2, pfx + "layer_scale2.lambda1", C);// x1 + h2*lambda2
+    return linear_(h1, pfx + "mlp.fc2.weight", pfx + "mlp.fc2.bias", 0u, &x1, pfx + "layer_scale2.lambda1");
 }
 
 // ── projector primitives (CHW feature maps stored [C, HW]) ──
 
 Tensor RfDetrVk::layerNormChw_(const Tensor& x, const std::string& gKey, const std::string& bKey,
-                               uint32_t C, uint32_t HW, uint32_t act) {
-    LnChwParams lp{C, HW, 1e-6f, act};
-    Tensor out = vk_.createTensorV(x.shape);
-    std::vector<VkBuffer> ssbos = {x.buffer, weights_.at(gKey).buffer, weights_.at(bKey).buffer, out.buffer};
-    vk_.dispatch(lnChwPipe_, ssbos, &lp, sizeof(lp), divCeil(HW, 64), 1, 1);
-    return out;
+                               uint32_t C, uint32_t HW, uint32_t act, const Tensor* out, uint32_t outOff) {
+    if (C > 512u) throw std::runtime_error("RfDetrVk::layerNormChw_: more than 512 channels");
+    LnChwParams lp{C, HW, 1e-6f, act, outOff, 0u, 0u, 0u};
+    Tensor y = out ? *out : vk_.createTensorV(x.shape);
+    vk_.dispatch(lnChwPipe_, {x.buffer, weights_.at(gKey).buffer, weights_.at(bKey).buffer, y.buffer},
+                 &lp, sizeof(lp), divCeil(HW, 32), 1, 1);// 32 positions per workgroup
+    return y;
 }
 
-Tensor RfDetrVk::unwindow_(const Tensor& lnHidden, uint32_t outC, uint32_t grid) {
-    UnwindowParams up{outC, grid, grid / uint32_t(cfg_.numWindows), uint32_t(cfg_.numWindows), 0u, 0u, 0u, 0u};
-    Tensor out = vk_.createTensorV({outC, grid, grid});
-    std::vector<VkBuffer> ssbos = {lnHidden.buffer, out.buffer};
-    vk_.dispatch(unwindowPipe_, ssbos, &up, sizeof(up), divCeil(outC * grid * grid, 64), 1, 1);
-    return out;
-}
-
-Tensor RfDetrVk::sliceCh_(const Tensor& src, uint32_t srcOff, uint32_t Cn, uint32_t HW) {
-    ChCopyParams cp{Cn, HW, srcOff, 0u};
-    // Keep the [C,H,W] spatial layout so downstream 3x3 convs infer H,W correctly
-    // (a flat {Cn,HW} shape would be read as H=HW,W=1 and break neighbour sampling).
-    Tensor out = vk_.createTensorV({Cn, src.H(), src.W()});
-    std::vector<VkBuffer> ssbos = {src.buffer, out.buffer};
-    vk_.dispatch(chCopyPipe_, ssbos, &cp, sizeof(cp), divCeil(Cn * HW, 64), 1, 1);
-    return out;
-}
-
-void RfDetrVk::placeCh_(const Tensor& src, const Tensor& dst, uint32_t Cn, uint32_t HW, uint32_t dstOff) {
-    ChCopyParams cp{Cn, HW, 0u, dstOff};
-    std::vector<VkBuffer> ssbos = {src.buffer, dst.buffer};
-    vk_.dispatch(chCopyPipe_, ssbos, &cp, sizeof(cp), divCeil(Cn * HW, 64), 1, 1);
+void RfDetrVk::unwindowInto_(const Tensor& lnHidden, const Tensor& dst, uint32_t chOffset) {
+    const uint32_t C = cfg_.embedDim, grid = cfg_.grid();
+    UnwindowParams up{C, grid, grid / uint32_t(cfg_.numWindows), uint32_t(cfg_.numWindows), chOffset, 0u, 0u, 0u};
+    vk_.dispatch(unwindowPipe_, {lnHidden.buffer, dst.buffer}, &up, sizeof(up), divCeil(C * grid * grid, 64), 1, 1);
 }
 
 // conv(no bias, pad=k/2) -> channel-wise LayerNorm (+optional SiLU).
-Tensor RfDetrVk::convX_(const Tensor& x, const std::string& pfx, int k, uint32_t HW, bool silu) {
-    int pad = k / 2;
-    Tensor c = conv_(x, pfx + ".conv.weight", "", 1, 1, pad, pad);
-    uint32_t outC = c.C();
-    return layerNormChw_(c, pfx + ".bn.weight", pfx + ".bn.bias", outC, HW, silu ? 2u : 0u);
-}
-
-Tensor RfDetrVk::bottleneck_(const Tensor& x, const std::string& pfx, uint32_t HW) {
-    Tensor h = convX_(x, pfx + ".cv1", 3, HW, true);
-    return convX_(h, pfx + ".cv2", 3, HW, true);// shortcut=False for the projector
+Tensor RfDetrVk::convX_(const Tensor& x, const std::string& pfx, int k, uint32_t HW, bool silu,
+                        uint32_t inOff, const Tensor* out, uint32_t outOff) {
+    Tensor c = conv_(x, pfx + ".conv.weight", "", 1, k / 2, inOff);
+    return layerNormChw_(c, pfx + ".bn.weight", pfx + ".bn.bias", c.C(), HW, silu ? 2u : 0u, out, outOff);
 }
 
 // C2f(c1, 256, n=3): cv1 1x1 -> split(128,128) -> 3 bottlenecks chained -> cat(5x128) -> cv2 1x1.
+// cv1's output [y0|y1] and each bottleneck's land in their channels of the concat
+// buffer, which is where the next bottleneck reads its input.
 Tensor RfDetrVk::c2f_(const Tensor& x, const std::string& pfx, uint32_t HW) {
     const uint32_t c = 128;// hidden = out_channels(256) * e(0.5)
-    Tensor cv1 = convX_(x, pfx + ".cv1", 1, HW, true);// [256, HW] = [y0|y1]
-    Tensor y1 = sliceCh_(cv1, c, c, HW);              // channels 128..255
-    Tensor y2 = bottleneck_(y1, pfx + ".m.0", HW);
-    Tensor y3 = bottleneck_(y2, pfx + ".m.1", HW);
-    Tensor y4 = bottleneck_(y3, pfx + ".m.2", HW);
-    Tensor cat = vk_.createTensorV({5u * c, cv1.H(), cv1.W()});// [640, H, W]
-    placeCh_(cv1, cat, 2u * c, HW, 0u);               // y0,y1 -> 0..255
-    placeCh_(y2,  cat, c, HW, 2u * c);                // y2 -> 256..383
-    placeCh_(y3,  cat, c, HW, 3u * c);                // y3 -> 384..511
-    placeCh_(y4,  cat, c, HW, 4u * c);                // y4 -> 512..639
-    return convX_(cat, pfx + ".cv2", 1, HW, true);    // [256, HW]
+    Tensor cat = vk_.createTensorV({5u * c, x.H(), x.W()});// [y0 y1 y2 y3 y4], 640 channels
+    convX_(x, pfx + ".cv1", 1, HW, true, 0u, &cat, 0u);
+    for (uint32_t i = 0; i < 3; ++i) {// bottleneck i (shortcut=False): y(i+1) -> y(i+2)
+        const std::string m = pfx + ".m." + std::to_string(i);
+        Tensor h = convX_(cat, m + ".cv1", 3, HW, true, (i + 1u) * c);
+        convX_(h, m + ".cv2", 3, HW, true, 0u, &cat, (i + 2u) * c);
+    }
+    return convX_(cat, pfx + ".cv2", 1, HW, true);// [256, HW]
 }
 
 Tensor RfDetrVk::projector_(const Tensor& tapsCat, const std::string& pfx) {
@@ -610,15 +639,6 @@ Tensor RfDetrVk::projector_(const Tensor& tapsCat, const std::string& pfx) {
 }
 
 // ── decoder primitives ──
-
-Tensor RfDetrVk::relu_(const Tensor& x) {
-    uint32_t n = x.numel();
-    GeluParams gp{n, 0u, 0u, 0u};
-    Tensor out = vk_.createTensorV(x.shape);
-    std::vector<VkBuffer> ssbos = {x.buffer, out.buffer};
-    vk_.dispatch(reluPipe_, ssbos, &gp, sizeof(gp), divCeil(n, 64), 1, 1);
-    return out;
-}
 
 Tensor RfDetrVk::transposeChw2Tokens_(const Tensor& x) {
     uint32_t C = x.C(), H = x.H(), W = x.W();
@@ -630,8 +650,8 @@ Tensor RfDetrVk::transposeChw2Tokens_(const Tensor& x) {
 }
 
 Tensor RfDetrVk::bboxMLP_(const Tensor& x, const std::string& pfx) {
-    Tensor h = relu_(linear_(x, pfx + ".layers.0.weight", pfx + ".layers.0.bias"));
-    h = relu_(linear_(h, pfx + ".layers.1.weight", pfx + ".layers.1.bias"));
+    Tensor h = linear_(x, pfx + ".layers.0.weight", pfx + ".layers.0.bias", /*act=ReLU*/ 2u);
+    h = linear_(h, pfx + ".layers.1.weight", pfx + ".layers.1.bias", 2u);
     return linear_(h, pfx + ".layers.2.weight", pfx + ".layers.2.bias");
 }
 
@@ -699,25 +719,28 @@ void RfDetrVk::keypointLayer_(int layer, Tensor& tgt, Tensor& kp, const Tensor& 
       vk_.dispatch(groupPackPipe_, {tgt.buffer, kp.buffer, weights_.at("transformer.decoder.keypoint_pos_embed").buffer,
                                     feat.buffer, featPos.buffer},
                    &gp, sizeof(gp), divCeil(Nq * G * D, 256), 1, 1); }
-    Tensor yqk = linear_(featPos, p + ".kp_inst_self_attn.in_proj_weight", p + ".kp_inst_self_attn.in_proj_bias");
-    Tensor yt  = linear_(feat, p + ".kp_inst_self_attn.in_proj_weight", p + ".kp_inst_self_attn.in_proj_bias");
+    // in_proj: q and k from feature + position, v from the feature, each GEMM
+    // only the rows its input needs, written straight into the fused qkv layout.
     Tensor qkv = vk_.createTensorV({Nq * G, 3u * D});
-    { QkvSpliceParams sp{Nq * G, D, 0u, 0u};
-      vk_.dispatch(qkvSplicePipe_, {yqk.buffer, yt.buffer, qkv.buffer}, &sp, sizeof(sp),
-                   divCeil(Nq * G * 3u * D, 64), 1, 1); }
+    linearRowsInto_(featPos, p + ".kp_inst_self_attn.in_proj_weight", p + ".kp_inst_self_attn.in_proj_bias",
+                    0u, 2u * D, qkv, 0u);
+    linearRowsInto_(feat, p + ".kp_inst_self_attn.in_proj_weight", p + ".kp_inst_self_attn.in_proj_bias",
+                    2u * D, D, qkv, 2u * D);
     const uint32_t H = cfg_.saHeads, d = D / H;
     Tensor probs = softmaxRows_(attnVitScores_(qkv, G, Nq, H, d), Nq * H * G, G);
     Tensor ctx = attnVitApply_(probs, qkv, G, Nq, H, d);
     Tensor groupOut = linear_(ctx, p + ".kp_inst_self_attn.out_proj.weight", p + ".kp_inst_self_attn.out_proj.bias");
-    Tensor tgt2 = vk_.createTensorV({Nq, D});
-    Tensor kp2 = vk_.createTensorV({Nq * K, D});
+    // Back to instance and keypoint rows with the residuals; the instance takes the
+    // group's answer through a learned (tiny) layer scale.
+    Tensor tgtSum = vk_.createTensorV({Nq, D});
+    Tensor kpSum = vk_.createTensorV({Nq * K, D});
     { GroupParams gp{Nq, K, D, 0u};
-      vk_.dispatch(groupUnpackPipe_, {groupOut.buffer, tgt2.buffer, kp2.buffer}, &gp, sizeof(gp),
-                   divCeil(Nq * G * D, 256), 1, 1); }
-    // The instance takes the group's answer through a learned (tiny) layer scale.
-    tgt = layerNorm_(scaleAdd_(tgt, tgt2, p + ".instance_kp_layer_scale.vec", D),
-                     p + ".kp_inst_norm.weight", p + ".kp_inst_norm.bias", D);
-    kp = layerNorm_(add_(kp, kp2), p + ".kp_norm.weight", p + ".kp_norm.bias", D);
+      vk_.dispatch(groupUnpackPipe_, {groupOut.buffer, tgt.buffer, kp.buffer,
+                                      weights_.at(p + ".instance_kp_layer_scale.vec").buffer,
+                                      tgtSum.buffer, kpSum.buffer},
+                   &gp, sizeof(gp), divCeil(Nq * G * D, 256), 1, 1); }
+    tgt = layerNorm_(tgtSum, p + ".kp_inst_norm.weight", p + ".kp_inst_norm.bias", D);
+    kp = layerNorm_(kpSum, p + ".kp_norm.weight", p + ".kp_norm.bias", D);
 
     // b. Keypoint deformable cross-attention into the keypoint memory, sampled around
     //    the instance's reference box; the query is the keypoint state plus its
@@ -734,13 +757,14 @@ void RfDetrVk::keypointLayer_(int layer, Tensor& tgt, Tensor& kp, const Tensor& 
       vk_.dispatch(offsetPreprocessPipe_, {refK.buffer, msShapeBuf_.buffer, rawOff.buffer}, &opp, sizeof(opp),
                    divCeil(NK * Hc * P * 2u, 64), 1, 1); }
     Tensor crossOut = msDeformAttn_(value, grid, grid, refXyK, rawOff, awSm, Hc);
-    Tensor crossProj = linear_(crossOut, p + ".kp_cross_attn.output_proj.weight", p + ".kp_cross_attn.output_proj.bias");
-    kp = layerNorm_(add_(kp, crossProj), p + ".kp_cross_attn_norm.weight", p + ".kp_cross_attn_norm.bias", D);
+    kp = layerNorm_(linear_(crossOut, p + ".kp_cross_attn.output_proj.weight", p + ".kp_cross_attn.output_proj.bias",
+                            0u, &kp),
+                    p + ".kp_cross_attn_norm.weight", p + ".kp_cross_attn_norm.bias", D);
 
     // c. Keypoint FFN.
-    Tensor ff = relu_(linear_(kp, p + ".kp_linear1.weight", p + ".kp_linear1.bias"));
-    ff = linear_(ff, p + ".kp_linear3.weight", p + ".kp_linear3.bias");
-    kp = layerNorm_(add_(kp, ff), p + ".kp_norm5.weight", p + ".kp_norm5.bias", D);
+    Tensor ff = linear_(kp, p + ".kp_linear1.weight", p + ".kp_linear1.bias", /*act=ReLU*/ 2u);
+    kp = layerNorm_(linear_(ff, p + ".kp_linear3.weight", p + ".kp_linear3.bias", 0u, &kp),
+                    p + ".kp_norm5.weight", p + ".kp_norm5.bias", D);
 }
 
 // Two-stage deformable decoder + heads, recorded into the open frame: nothing
@@ -781,8 +805,8 @@ RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const BackboneTensors& bb) {
 
     // query_pos + the decoder layers (refs fixed) + heads.
     Tensor tgtInit{weights_.at("query_feat.weight").buffer, {Nq, D}};// first Nq rows
-    Tensor qp = relu_(linear_(qsineT, "transformer.decoder.ref_point_head.layers.0.weight",
-                                      "transformer.decoder.ref_point_head.layers.0.bias"));
+    Tensor qp = linear_(qsineT, "transformer.decoder.ref_point_head.layers.0.weight",
+                        "transformer.decoder.ref_point_head.layers.0.bias", /*act=ReLU*/ 2u);
     qp = linear_(qp, "transformer.decoder.ref_point_head.layers.1.weight",
                      "transformer.decoder.ref_point_head.layers.1.bias");
 
@@ -800,17 +824,16 @@ RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const BackboneTensors& bb) {
     Tensor tgt = tgtInit;
     for (int layer = 0; layer < cfg_.decLayers; ++layer) {
         std::string p = "transformer.decoder.layers." + std::to_string(layer);
-        // self-attention (combined QKV; q=k=tgt+query_pos, v=tgt)
-        Tensor yqk = linear_(add_(tgt, qp), p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias");
-        Tensor yt  = linear_(tgt, p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias");
+        // self-attention (q = k = tgt + query_pos, v = tgt): the q/k and the v rows of
+        // in_proj, each into its part of the fused qkv
         Tensor qkv = vk_.createTensorV({Nq, 3u * D});
-        QkvSpliceParams sp{Nq, D, 0u, 0u};
-        { std::vector<VkBuffer> s = {yqk.buffer, yt.buffer, qkv.buffer};
-          vk_.dispatch(qkvSplicePipe_, s, &sp, sizeof(sp), divCeil(Nq * 3u * D, 64), 1, 1); }
+        linearRowsInto_(add_(tgt, qp), p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias",
+                        0u, 2u * D, qkv, 0u);
+        linearRowsInto_(tgt, p + ".self_attn.in_proj_weight", p + ".self_attn.in_proj_bias", 2u * D, D, qkv, 2u * D);
         Tensor sSm   = softmaxRows_(attnScores_(qkv, Nq, cfg_.saHeads), cfg_.saHeads * Nq, Nq);
         Tensor heads = attnApply_(qkv, sSm, Nq, cfg_.saHeads);
-        Tensor attnOut = linear_(heads, p + ".self_attn.out_proj.weight", p + ".self_attn.out_proj.bias");
-        Tensor n1 = layerNorm_(add_(tgt, attnOut), p + ".norm1.weight", p + ".norm1.bias", D);
+        Tensor n1 = layerNorm_(linear_(heads, p + ".self_attn.out_proj.weight", p + ".self_attn.out_proj.bias", 0u, &tgt),
+                               p + ".norm1.weight", p + ".norm1.bias", D);
 
         // cross-attention (deformable, single level)
         Tensor cq = add_(n1, qp);
@@ -825,13 +848,14 @@ RfDetrVk::HeadTensors RfDetrVk::recordDecoder_(const BackboneTensors& bb) {
           std::vector<VkBuffer> s = {refT.buffer, msShapeBuf_.buffer, rawOff.buffer};
           vk_.dispatch(offsetPreprocessPipe_, s, &opp, sizeof(opp), divCeil(Nq * stride, 64), 1, 1); }
         Tensor crossOut  = msDeformAttn_(value, grid, grid, refXyT, rawOff, awSm, cfg_.caHeads);
-        Tensor crossProj = linear_(crossOut, p + ".cross_attn.output_proj.weight", p + ".cross_attn.output_proj.bias");
-        Tensor n2 = layerNorm_(add_(n1, crossProj), p + ".norm2.weight", p + ".norm2.bias", D);
+        Tensor n2 = layerNorm_(linear_(crossOut, p + ".cross_attn.output_proj.weight", p + ".cross_attn.output_proj.bias",
+                                       0u, &n1),
+                               p + ".norm2.weight", p + ".norm2.bias", D);
 
-        // FFN
-        Tensor ff = relu_(linear_(n2, p + ".linear1.weight", p + ".linear1.bias"));
-        ff = linear_(ff, p + ".linear2.weight", p + ".linear2.bias");
-        tgt = layerNorm_(add_(n2, ff), p + ".norm3.weight", p + ".norm3.bias", D);
+        // FFN (the residuals are the GEMMs' epilogues)
+        Tensor ff = linear_(n2, p + ".linear1.weight", p + ".linear1.bias", /*act=ReLU*/ 2u);
+        tgt = layerNorm_(linear_(ff, p + ".linear2.weight", p + ".linear2.bias", 0u, &n2),
+                         p + ".norm3.weight", p + ".norm3.bias", D);
 
         if (K > 0) keypointLayer_(layer, tgt, kp, qpK, refK, refXyK, bb.kpMemory);
     }
@@ -878,39 +902,44 @@ void RfDetrVk::recordBackbone_(const Tensor& input, BackboneTensors& keep) {
         vk_.markTimestamp(kVitLbl[i]);
     }
 
-    // Each tap: final ViT LayerNorm (per-token over C), then de-window to [C,G,G].
-    for (int t = 0; t < 4; ++t) {
+    // Each tap: final ViT LayerNorm (per-token over C), then de-windowed into its
+    // channels of the concatenated taps [4C, grid, grid] the projectors read.
+    const uint32_t grid = cfg_.grid();
+    keep.tapsCat = vk_.createTensorV({4u * C, grid, grid});
+    for (uint32_t t = 0; t < 4; ++t) {
         Tensor ln = layerNorm_(tapHidden[t], "backbone.0.encoder.encoder.layernorm.weight",
                                "backbone.0.encoder.encoder.layernorm.bias", C);
-        keep.taps[t] = unwindow_(ln, C, cfg_.grid());
+        unwindowInto_(ln, keep.tapsCat, t * C);
     }
     vk_.markTimestamp("taps");
-    const uint32_t grid = cfg_.grid(), HW = grid * grid;
-    Tensor tapsCat = vk_.createTensorV({4u * C, grid, grid});// [1536, grid, grid]
-    for (uint32_t j = 0; j < 4; ++j) placeCh_(keep.taps[j], tapsCat, C, HW, j * C);
-    keep.proj0 = projector_(tapsCat, "backbone.0.projector");
+    keep.proj0 = projector_(keep.tapsCat, "backbone.0.projector");
     vk_.markTimestamp("proj");
     // proj0 [256,G,G] -> memory tokens [G*G,256]. It can stay in the arena: the
     // decoder is recorded into the same frame, before the arena is rewound.
     keep.memory = transposeChw2Tokens_(keep.proj0);
     if (cfg_.numKeypoints > 0) {
         // The keypoint cross-attention reads its own projection of the same taps.
-        keep.projKp0 = projector_(tapsCat, "backbone.0.cross_attn_projector");
+        keep.projKp0 = projector_(keep.tapsCat, "backbone.0.cross_attn_projector");
         keep.kpMemory = transposeChw2Tokens_(keep.projKp0);
         vk_.markTimestamp("projkp");
     }
 }
 
-RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureIntermediates) {
-    BackboneTensors bb;
-    recordBackbone_(input, bb);
-    HeadTensors heads = recordDecoder_(bb);
-    const VkDeviceSize offLogits = vk_.recordReadback(heads.logits.buffer, heads.logits.bytes());
-    const VkDeviceSize offDelta  = vk_.recordReadback(heads.bboxDelta.buffer, heads.bboxDelta.bytes());
-    const VkDeviceSize offRef    = vk_.recordReadback(heads.ref.buffer, heads.ref.bytes());
-    const VkDeviceSize offKp     = heads.kpOut.valid() ? vk_.recordReadback(heads.kpOut.buffer, heads.kpOut.bytes()) : 0;
-    vk_.endFrame();// the inference's one submit and wait
+RfDetrVk::Recorded RfDetrVk::recordForward_(const Tensor& input) {
+    Recorded r;
+    recordBackbone_(input, r.bb);
+    r.heads = recordDecoder_(r.bb);
+    const HeadTensors& heads = r.heads;
+    r.offLogits = vk_.recordReadback(heads.logits.buffer, heads.logits.bytes());
+    r.offDelta  = vk_.recordReadback(heads.bboxDelta.buffer, heads.bboxDelta.bytes());
+    r.offRef    = vk_.recordReadback(heads.ref.buffer, heads.ref.bytes());
+    r.offKp     = heads.kpOut.valid() ? vk_.recordReadback(heads.kpOut.buffer, heads.kpOut.bytes()) : 0;
+    return r;
+}
 
+RfDetrVk::ForwardOut RfDetrVk::readHeads_(const Recorded& r) const {
+    const HeadTensors& heads = r.heads;
+    const VkDeviceSize offLogits = r.offLogits, offDelta = r.offDelta, offRef = r.offRef, offKp = r.offKp;
     ForwardOut out;
     out.predLogits.resize(heads.logits.numel());
     std::memcpy(out.predLogits.data(), vk_.frameReadback(offLogits), heads.logits.bytes());
@@ -949,7 +978,15 @@ RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureI
         }
         out.decRef.assign(ref, ref + size_t(Nq) * 4);
     }
+    return out;
+}
 
+RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureIntermediates) {
+    const Recorded r = recordForward_(input);
+    vk_.endFrame();// the inference's one submit and wait
+    ForwardOut out = readHeads_(r);
+    const BackboneTensors& bb = r.bb;
+    const HeadTensors& heads = r.heads;
     if (captureIntermediates) {// validation only — the detect path skips these readbacks
         auto grab = [&](const Tensor& t, std::vector<float>& dst) {
             dst.resize(t.numel());
@@ -962,8 +999,14 @@ RfDetrVk::ForwardOut RfDetrVk::finishForward_(const Tensor& input, bool captureI
         grab(bb.vit0, out.vit0);
         grab(bb.vit3, out.vit3);
         out.vitDim = {bb.embed.C(), bb.embed.H(), bb.embed.W()};// [4,145,384]
-        for (int t = 0; t < 4; ++t) grab(bb.taps[t], out.taps[t]);
-        out.tapDim = {bb.taps[0].C(), bb.taps[0].H(), bb.taps[0].W()};// [384,24,24]
+        const uint32_t C = cfg_.embedDim, grid = cfg_.grid();
+        const size_t tapFloats = size_t(C) * grid * grid;
+        for (uint32_t t = 0; t < 4; ++t) {
+            out.taps[t].resize(tapFloats);
+            vk_.readback(bb.tapsCat.buffer, out.taps[t].data(), tapFloats * sizeof(float),
+                         VkDeviceSize(t) * tapFloats * sizeof(float));
+        }
+        out.tapDim = {C, grid, grid};
         grab(bb.proj0, out.proj0);
         out.proj0Dim = {bb.proj0.C(), bb.proj0.H(), bb.proj0.W()};// [256,24,24]
         if (cfg_.numKeypoints > 0) {
@@ -1001,14 +1044,26 @@ std::vector<Detection> RfDetrVk::infer(const unsigned char* rgba, int width, int
         vk_.resetDescriptorCache();
     }
     vk_.reserveFrameIO(rgbaBytes, headReadbackBytes_());
-    vk_.beginFrame();
-    vk_.recordUpload(rgbaInput_.buffer, rgba, rgbaBytes);
-    Tensor input = vk_.createTensorV({3u, R, R});
-    { PreprocessParams pp{uint32_t(width), uint32_t(height), R, 0u};
-      vk_.dispatch(preprocessPipe_, {rgbaInput_.buffer, input.buffer}, &pp, sizeof(pp),
-                   divCeil(R, 16), divCeil(R, 16), 1); }
-    vk_.markTimestamp("preprocess");
-    return postprocess(finishForward_(input, /*captureIntermediates=*/false), width, height, scoreThresh);
+    // The frame is the same for every image of this size: record it once, then only
+    // refill the image's staging and submit it again.
+    const uint64_t key = (1ull << 63) | (uint64_t(uint32_t(width)) << 32) | uint64_t(uint32_t(height));
+    if (vk_.replayable(key)) {
+        std::memcpy(vk_.frameUploadData(inferUploadOff_), rgba, size_t(rgbaBytes));
+        vk_.replayFrame();
+    } else {
+        vk_.beginFrame(key);
+        inferUploadOff_ = vk_.recordUpload(rgbaInput_.buffer, rgba, rgbaBytes);
+        Tensor input = vk_.createTensorV({3u, R, R});
+        { PreprocessParams pp{uint32_t(width), uint32_t(height), R, 0u};
+          vk_.dispatch(preprocessPipe_, {rgbaInput_.buffer, input.buffer}, &pp, sizeof(pp),
+                       divCeil(R, 16), divCeil(R, 16), 1); }
+        vk_.markTimestamp("preprocess");
+        inferRec_ = recordForward_(input);
+        vk_.endFrame();
+    }
+    const ForwardOut out = readHeads_(inferRec_);
+    vk_.resetArena();
+    return postprocess(out, width, height, scoreThresh);
 }
 
 std::vector<Detection> RfDetrVk::postprocess(const ForwardOut& fw, int width, int height, float scoreThresh) const {

@@ -97,8 +97,9 @@ namespace rfdetr {
 
         // End-to-end detection on an RGBA image: ImageNet preprocess (square resize
         // to the variant's resolution, /255, normalize), forward pass and heads run
-        // on the GPU as one submit; the host then applies sigmoid + score-threshold
-        // + box de-normalization to the original image pixels. classId is the COCO id.
+        // on the GPU as one submit (recorded once per image size, then submitted
+        // again); the host then applies sigmoid + score-threshold + box
+        // de-normalization to the original image pixels. classId is the COCO id.
         // The Keypoint variant postprocesses like rfdetr's PostProcess: the top
         // num-queries (query, class) pairs, each score fused with the keypoints'
         // predicted localisation uncertainty, then the threshold. DETR has no NMS:
@@ -116,15 +117,16 @@ namespace rfdetr {
     private:
         VkInfer vk_;
         RfDetrConfig cfg_;
-        VkPipe convPipe_, conv1x1Pipe_, conv3x3Pipe_, im2colPipe_;
-        VkPipe linearPipe_, layerNormPipe_, softmaxPipe_, geluPipe_, layerScalePipe_;
-        VkPipe attnScoresPipe_, attnApplyPipe_, addPipe_, concatPipe_;
+        // gemm.comp's builds, [B layout (GemmB)][tile: 128x64, 64x64], and its split-K
+        // reduction.
+        std::array<std::array<VkPipe, 2>, 3> gemmPipe_{};
+        VkPipe gemmReducePipe_;
+        VkPipe layerNormPipe_, softmaxPipe_;
+        VkPipe attnScoresPipe_, attnApplyPipe_, addPipe_;
         VkPipe buildEmbeddingsPipe_;
         VkPipe attnVitScoresPipe_, attnVitApplyPipe_;
-        VkPipe unwindowPipe_, lnChwPipe_, chCopyPipe_;
-        VkPipe transposeT2tPipe_, qkvSplicePipe_, reluPipe_, offsetPreprocessPipe_, msDeformAttnPipe_;
-        VkPipe scaleAddPipe_;
-        VkPipe linearSplitKPipe_, reduceSplitKPipe_;
+        VkPipe unwindowPipe_, lnChwPipe_;
+        VkPipe transposeT2tPipe_, offsetPreprocessPipe_, msDeformAttnPipe_;
         VkPipe preprocessPipe_, proposalsPipe_, topkRankPipe_, queryRefsPipe_;
         VkPipe repeatRowsPipe_, groupPackPipe_, groupUnpackPipe_;// keypoint decoder
         // Fused ViT attention (created when VkInfer::subgroupClustered() and head dim 64;
@@ -139,8 +141,8 @@ namespace rfdetr {
         int kpClass_ = -1;
         int kpSchemaClasses_ = 0;
 
-        // Scratch for split-K partial sums [splitK, M, N], reused across all
-        // split-K linears (serialized by VkInfer's per-dispatch barriers).
+        // Scratch for split-K partial sums [splitK, M, N], reused by every split
+        // GEMM (serialized by VkInfer's per-dispatch barriers).
         VkTensor splitKPartials_;
         uint64_t splitKPartialFloats_ = 0;// capacity of splitKPartials_ in floats
 
@@ -155,21 +157,49 @@ namespace rfdetr {
 
         std::unordered_map<std::string, VkTensor> weights_;
 
+        // ── GEMM ──
+        // gemm.comp's B operand: an nn.Linear weight [N,K], a 1x1 conv's CHW input
+        // [K,N], or a kxk conv's implicit im2col.
+        enum class GemmB { NK = 0, KN = 1, Conv = 2 };
+        // Y = epi(A·B): A [M,K] row-major; epi = act(· + bias), then res + gamma ⊙ that
+        // when res is set (gamma optional). Strides and offsets are in floats.
+        struct Gemm {
+            GemmB layout = GemmB::NK;
+            VkBuffer a = VK_NULL_HANDLE, b = VK_NULL_HANDLE, y = VK_NULL_HANDLE;
+            uint32_t M = 0, N = 0, K = 0;
+            uint32_t lda = 0, ldb = 0, ldc = 0;
+            uint32_t aOff = 0, bOff = 0, cOff = 0;
+            VkBuffer bias = VK_NULL_HANDLE;
+            uint32_t biasOff = 0;
+            bool biasPerRow = false;// bias[m] (a conv's output channel) instead of bias[n]
+            uint32_t act = 0;// 1 = GELU, 2 = ReLU
+            VkBuffer res = VK_NULL_HANDLE, gamma = VK_NULL_HANDLE;
+            uint32_t ldr = 0, rOff = 0;
+            uint32_t inH = 0, inW = 0, outW = 0, kh = 1, kw = 1, stride = 1, pad = 0;// GemmB::Conv
+        };
+        // Records g, choosing the tile and the K split for its shape.
+        void gemm_(const Gemm& g);
+
         // ── ops ──
+        // conv (bias optional, no groups) as one GEMM over x's channels from inOff
+        // (the weight gives how many); a fresh [out_c, out_h, out_w] output.
         Tensor conv_(const Tensor& x, const std::string& wKey, const std::string& bKey,
-                     int strideH, int strideW, int padH, int padW);
+                     int stride, int pad, uint32_t inOff = 0);
         Tensor patchEmbed_(const Tensor& x);
         Tensor buildEmbeddings_(const Tensor& patchEmbed);
 
         // ── ViT primitives (token buffer is flat [M, D] window-major) ──
-        // act: 0 = none, 1 = GELU fused on the GEMM output (saves a round-trip).
-        Tensor linear_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t act = 0);
+        // act(x·Wᵀ + b) for act 0 = none, 1 = GELU, 2 = ReLU; with res, the residual
+        // res + gamma ⊙ that (gamma a LayerScale key, or none), all in the GEMM's epilogue.
+        Tensor linear_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t act = 0,
+                       const Tensor* res = nullptr, const std::string& gammaKey = "");
+        // a·Wᵀ + b for weight (and bias) rows [n0, n0+n) only, into columns
+        // [cOff, cOff+n) of y [M, ldc] (ldc = y.shape.back()): the parts of a fused
+        // in_proj that one input needs, written straight into the qkv layout.
+        void linearRowsInto_(const Tensor& a, const std::string& wKey, const std::string& bKey,
+                             uint32_t n0, uint32_t n, const Tensor& y, uint32_t cOff);
         Tensor layerNorm_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t D);
-        Tensor gelu_(const Tensor& x);
-        Tensor layerScale_(const Tensor& x, const std::string& gammaKey, uint32_t C);
         Tensor add_(const Tensor& a, const Tensor& b);
-        // Fused residual: out = residual + branch * gamma (LayerScale folded in).
-        Tensor scaleAdd_(const Tensor& residual, const Tensor& branch, const std::string& gammaKey, uint32_t C);
         Tensor softmaxRows_(const Tensor& x, uint32_t rows, uint32_t n);
         // B independent attentions of T tokens, H heads of dim d, from a fused qkv
         // [B*T, 3*H*d] (the ViT's windows, the keypoint decoder's groups): scores [B,H,T,T].
@@ -183,17 +213,19 @@ namespace rfdetr {
 
         // ── projector primitives (CHW feature maps [C, HW]) ──
         // Channel-wise (ConvNeXt) LayerNorm; act 0=none, 2=SiLU fused on output.
+        // Writes channels [outOff, outOff+C) of out (a fresh [C,H,W] when out is null).
         Tensor layerNormChw_(const Tensor& x, const std::string& gKey, const std::string& bKey,
-                             uint32_t C, uint32_t HW, uint32_t act);
-        // De-window an LN'd hidden [numWin²,tokens,C] into a [C,grid,grid] feature map.
-        Tensor unwindow_(const Tensor& lnHidden, uint32_t outC, uint32_t grid);
-        // Copy Cn channels of src (from srcOff) into a fresh [Cn,HW] buffer.
-        Tensor sliceCh_(const Tensor& src, uint32_t srcOff, uint32_t Cn, uint32_t HW);
-        // Place Cn channels of src into dst starting at channel dstOff (concat).
-        void placeCh_(const Tensor& src, const Tensor& dst, uint32_t Cn, uint32_t HW, uint32_t dstOff);
-        // ConvX = conv(bias-free) -> channel LayerNorm (+optional SiLU). kernel k (1 or 3).
-        Tensor convX_(const Tensor& x, const std::string& pfx, int k, uint32_t HW, bool silu);
-        Tensor bottleneck_(const Tensor& x, const std::string& pfx, uint32_t HW);
+                             uint32_t C, uint32_t HW, uint32_t act,
+                             const Tensor* out = nullptr, uint32_t outOff = 0);
+        // De-window an LN'd hidden [numWin²,tokens,C] into channels [chOffset, chOffset+C)
+        // of the [*,grid,grid] feature map dst.
+        void unwindowInto_(const Tensor& lnHidden, const Tensor& dst, uint32_t chOffset);
+        // ConvX = conv(bias-free) on x's channels from inOff -> channel LayerNorm
+        // (+optional SiLU) into channels [outOff, ...) of out (fresh when null).
+        Tensor convX_(const Tensor& x, const std::string& pfx, int k, uint32_t HW, bool silu,
+                      uint32_t inOff = 0, const Tensor* out = nullptr, uint32_t outOff = 0);
+        // C2f: cv1 -> 3 chained bottlenecks -> cv2, with every branch written in place
+        // into the concat buffer cv2 reads.
         Tensor c2f_(const Tensor& x, const std::string& pfx, uint32_t HW);
         // Projector `pfx` (backbone.0.projector, or the Keypoint variant's
         // backbone.0.cross_attn_projector) on the concatenated taps [4C,grid,grid]:
@@ -201,7 +233,6 @@ namespace rfdetr {
         Tensor projector_(const Tensor& tapsCat, const std::string& pfx);
 
         // ── decoder primitives ──
-        Tensor relu_(const Tensor& x);
         Tensor transposeChw2Tokens_(const Tensor& x);// [C,H,W] -> [H*W,C]
         Tensor bboxMLP_(const Tensor& x, const std::string& pfx);// 3-layer MLP, relu between
         // Combined-QKV self-attention scores [H,M,M] and apply [M,D] (qkv is [M,3D]).
@@ -228,7 +259,7 @@ namespace rfdetr {
         // memory tokens [G*G,256] (kpMemory: the Keypoint variant's second projector).
         struct BackboneTensors {
             Tensor patch, embed, vit0, vit3, proj0, projKp0;
-            std::array<Tensor, 4> taps;
+            Tensor tapsCat;// the four taps [4C,grid,grid], tap t at channel t*C
             Tensor memory, kpMemory;
         };
         // What the host needs after the frame: class logits [Nq,NC], the box head's
@@ -246,9 +277,24 @@ namespace rfdetr {
         // first-stage heads over every memory token, top-Nq proposals, the fixed
         // reference + its sine embedding, the decoder layers, the final heads.
         HeadTensors recordDecoder_(const BackboneTensors& bb);
-        // Records backbone + decoder behind `input` (already in the open frame),
-        // ends the frame and assembles ForwardOut from the readbacks.
+        // What a recorded forward pass leaves for the host: its tensors and where the
+        // frame's readbacks of the heads land.
+        struct Recorded {
+            BackboneTensors bb;
+            HeadTensors heads;
+            VkDeviceSize offLogits = 0, offDelta = 0, offRef = 0, offKp = 0;
+        };
+        // Records backbone + decoder behind `input` (already in the open frame) and
+        // the head readbacks.
+        Recorded recordForward_(const Tensor& input);
+        // ForwardOut's heads from a finished frame's readbacks.
+        [[nodiscard]] ForwardOut readHeads_(const Recorded& r) const;
+        // recordForward_, end the frame, readHeads_ (+ the validation readbacks).
         ForwardOut finishForward_(const Tensor& input, bool captureIntermediates);
+        // infer()'s frame, replayed while the image size and every buffer it was
+        // recorded against stay the same (VkInfer::replayable).
+        Recorded inferRec_;
+        VkDeviceSize inferUploadOff_ = 0;
     };
 
 }// namespace rfdetr

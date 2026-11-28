@@ -7,7 +7,7 @@
 // handles a VulkanRenderer already exposes (VkDevice / VkPhysicalDevice /
 // graphics-capable VkQueue / queue family), so no core renderer change is
 // needed. Buffers use raw VkDeviceMemory; every op's parameters travel as push
-// constants (all param structs are <= 64 bytes) so descriptor sets carry
+// constants (all param structs are <= 96 bytes) so descriptor sets carry
 // storage buffers only.
 //
 // Execution model: a whole inference is recorded into ONE command buffer
@@ -24,6 +24,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -115,8 +116,12 @@ namespace rfdetr {
         VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily);
         ~VkInfer();
 
-        // Clustered subgroup operations in compute shaders (GL_KHR_shader_subgroup_clustered).
+        // Clustered subgroup operations in compute shaders (GL_KHR_shader_subgroup_clustered),
+        // subgroups of at least 8.
         [[nodiscard]] bool subgroupClustered() const { return subgroupClustered_; }
+        // Streaming multiprocessors (NVIDIA) / compute units (AMD), for sizing GEMM
+        // grids; 32 where the device does not say.
+        [[nodiscard]] uint32_t smCount() const { return smCount_; }
 
         VkInfer(const VkInfer&) = delete;
         VkInfer& operator=(const VkInfer&) = delete;
@@ -136,7 +141,7 @@ namespace rfdetr {
         // N host->device copies in a single submit+wait (one staging pack, one round-trip)
         // — collapses what would be N separate upload() drains into one.
         void uploadMany(const std::vector<UploadItem>& items);
-        void readback(VkBuffer src, void* dst, VkDeviceSize bytes);
+        void readback(VkBuffer src, void* dst, VkDeviceSize bytes, VkDeviceSize srcOffset = 0);
         // Two device->host copies in a single submit (one GPU round-trip).
         void readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
                        VkBuffer srcB, void* dstB, VkDeviceSize bytesB);
@@ -148,7 +153,11 @@ namespace rfdetr {
         // slack are added for that).
         void reserveFrameIO(VkDeviceSize uploadBytes, VkDeviceSize readbackBytes);
         // Host data -> dst: staged now, copied at this point of the command buffer.
-        void recordUpload(VkBuffer dst, const void* data, VkDeviceSize bytes);
+        // Returns its offset in the frame staging (for frameUploadData()).
+        VkDeviceSize recordUpload(VkBuffer dst, const void* data, VkDeviceSize bytes);
+        // The staging a recordUpload() of the recorded frame copies from, to refill
+        // before replayFrame().
+        [[nodiscard]] void* frameUploadData(VkDeviceSize offset);
         // src -> host, copied after the work recorded so far. Returns the offset
         // to pass to frameReadback() once endFrame() has returned.
         VkDeviceSize recordReadback(VkBuffer src, VkDeviceSize bytes);
@@ -167,7 +176,15 @@ namespace rfdetr {
         void resetDescriptorCache();
 
         // ── batched dispatch ───────────────────────────────────────────────
-        void beginFrame();// rewind the arena + frame I/O, start the command buffer
+        // Rewind the arena + frame I/O, start the command buffer. With a replayKey the
+        // frame can be submitted again by replayFrame() while replayable(replayKey)
+        // holds: nothing it was recorded against (arena slots, frame staging,
+        // descriptor sets) has been replaced since, and no other frame was recorded.
+        void beginFrame(uint64_t replayKey = 0);
+        [[nodiscard]] bool replayable(uint64_t key) const {
+            return key != 0 && key == replayKey_ && layoutGen_ == replayGen_;
+        }
+        void replayFrame();// the recorded frame again: submit + fence wait
         void recordFill(VkBuffer dst, VkDeviceSize bytes);// zero-fill recorded into the frame
         // Device→device copy recorded into the frame (no submit/wait); leading
         // barrier makes prior compute writes to src visible. Lets a value stay
@@ -181,7 +198,10 @@ namespace rfdetr {
         // GPU timestamp between dispatches (no-op unless RFDETR_PROFILE is set).
         // endFrame() prints per-mark GPU deltas, isolating GPU time from CPU
         // command-recording overhead, and the GPU time of every dispatch summed
-        // by kernel (each dispatch is timestamped too while profiling).
+        // by kernel (each dispatch is timestamped too while profiling), and the host
+        // time from beginFrame() to the submit. On NVIDIA under Windows a dispatch's
+        // timestamp can bill its time to a neighbour (other processes' GPU work
+        // time-slices in), so trust frame totals and marks over single kernels.
         void markTimestamp(const char* label);
 
         [[nodiscard]] VkDevice device() const { return device_; }
@@ -235,6 +255,7 @@ namespace rfdetr {
         VkFence frameFence_ = VK_NULL_HANDLE;
 
         bool subgroupClustered_ = false;
+        uint32_t smCount_ = 32;
 
         // Profiling timestamps (enabled by RFDETR_PROFILE): marks and, after
         // every dispatch, one per dispatch labelled with its kernel.
@@ -242,6 +263,11 @@ namespace rfdetr {
         VkQueryPool tsPool_ = VK_NULL_HANDLE;
         float tsPeriodNs_ = 1.0f;
         bool tsEnabled_ = false;
+        // Bumped whenever a buffer or descriptor set a recorded frame may use is replaced.
+        uint64_t layoutGen_ = 1;
+        uint64_t recordKey_ = 0, replayKey_ = 0, replayGen_ = 0;
+        void submitAndWait_();// the frame command buffer, then the profile printout
+        std::chrono::steady_clock::time_point hostBegin_;// beginFrame(), for the host-side split
         uint32_t tsCount_ = 0;
         std::vector<const char*> tsLabels_;
         std::vector<bool> tsIsDispatch_;

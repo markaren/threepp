@@ -79,13 +79,19 @@ so the forward is GPU-underutilized and cuBLAS's advantage shows.
   COCO people with 17 keypoints): a second projector and 17 keypoint queries per person in
   the decoder, validated against PyTorch on bus.jpg down to the postprocessed keypoints.
   42 ms end-to-end on the RTX 5080 (patch 12: 2304 patches). `rfdetr/PORTING_NOTES.md` §9.
+- One GEMM kernel for every linear layer and conv (fused epilogues, a per-shape tile and
+  K split), register-blocked attention, row-parallel LayerNorm and a replayed command
+  buffer since 2026-11-28: Keypoint 36.4 → 10.9 ms, Nano 10.5 → 3.75 ms, Medium 18.0 →
+  6.5 ms end-to-end on the RTX 5080, same detections. `rfdetr/PORTING_NOTES.md` §10.
 
 ---
 
 ## Shared optimization & benchmarking lessons (both)
 
-- **Profile before optimizing.** Small models underutilize the GPU; the bottleneck
-  is structural (small-N GEMM occupancy), not fixable by op fusion.
+- **Profile before optimizing.** Small models underutilize the GPU. Small-N GEMM
+  occupancy looked structural until RF-DETR's GEMM kernel and tile choice were redone
+  (2026-11-28), and per-dispatch GPU timestamps on NVIDIA/Windows can misattribute
+  time between neighbouring dispatches: trust frame totals.
 - **fp16 / tensor cores help CNNs, not these transformers** (memory-bound) — a
   consistent, citable cross-architecture finding. The Vulkan fp16 and
   VK_KHR_cooperative_matrix GEMM tries were made on the RT-DETR-L port (no speedup:

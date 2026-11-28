@@ -76,6 +76,51 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_yolov8_inference "${_yolo_sh}/detect_fused.comp" kDetectFusedSpv)
     endif ()
 
+    # The RF-DETR port's kernels, for each target that builds rfdetr/RfDetrVk.cpp.
+    # VARIANT_SUFFIX rfdetr keeps the generated headers from colliding with the
+    # YOLO kernels that share a basename (add/preprocess). gemm.comp is built once
+    # per B layout (nn.Linear weight, 1x1-conv input, implicit im2col) and tile.
+    function(rfdetr_shaders target)
+        set(_rf_sh "${CMAKE_CURRENT_SOURCE_DIR}/rfdetr/shaders")
+        # gemm.comp's tiles: 128x64 (8x8 per invocation, BK 32, no register prefetch)
+        # and 64x64 (4x4, BK 16, prefetch); RfDetrVk::gemm_ picks one per GEMM.
+        foreach (_layout NK KN CONV)
+            string(TOLOWER ${_layout} _l)
+            compile_vulkan_shader(${target} "${_rf_sh}/gemm.comp" kRfGemm${_layout}128x64Spv
+                    VARIANT_SUFFIX rfdetr_${_l}128x64 DEFINES B_${_layout} BM=128 BN=64 BKD=32 NOPREFETCH)
+            compile_vulkan_shader(${target} "${_rf_sh}/gemm.comp" kRfGemm${_layout}64x64Spv
+                    VARIANT_SUFFIX rfdetr_${_l}64x64 DEFINES B_${_layout} BM=64 BN=64 TM=4 TN=4)
+        endforeach ()
+        compile_vulkan_shader(${target} "${_rf_sh}/gemm_reduce.comp"         kRfGemmReduceSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/layernorm.comp"           kRfLayerNormSpv     VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/softmax.comp"             kRfSoftmaxSpv       VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/attn_scores.comp"         kRfAttnScoresSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/attn_apply.comp"          kRfAttnApplySpv     VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/add.comp"                 kRfAddSpv           VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/build_embeddings.comp"    kRfBuildEmbedSpv    VARIANT_SUFFIX rfdetr)
+        # ViT attention: scores + softmax + apply, or fused (online softmax) where the
+        # device has clustered subgroup ops.
+        compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_scores.comp"     kRfAttnVitScoresSpv VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_apply.comp"      kRfAttnVitApplySpv  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/attn_vit_flash.comp"      kRfAttnFlashSpv     VARIANT_SUFFIX rfdetr)
+        # C2f projector: de-window taps, channel-wise LayerNorm (+SiLU).
+        compile_vulkan_shader(${target} "${_rf_sh}/unwindow.comp"            kRfUnwindowSpv      VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/layernorm_chw.comp"       kRfLnChwSpv         VARIANT_SUFFIX rfdetr)
+        # Two-stage deformable decoder.
+        compile_vulkan_shader(${target} "${_rf_sh}/transpose_chw2tokens.comp" kRfT2tSpv          VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/offset_preprocess.comp"   kRfOffPreSpv        VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/msdeformattn.comp"        kRfMsDeformSpv      VARIANT_SUFFIX rfdetr)
+        # GPU preprocess and two-stage query selection: one submit per inference.
+        compile_vulkan_shader(${target} "${_rf_sh}/preprocess.comp"          kRfPreprocessSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/proposals.comp"           kRfProposalsSpv     VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/topk_rank.comp"           kRfTopkRankSpv      VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/query_refs.comp"          kRfQueryRefsSpv     VARIANT_SUFFIX rfdetr)
+        # The Keypoint variant's group self-attention.
+        compile_vulkan_shader(${target} "${_rf_sh}/repeat_rows.comp"         kRfRepeatRowsSpv    VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/group_pack.comp"          kRfGroupPackSpv     VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(${target} "${_rf_sh}/group_unpack.comp"        kRfGroupUnpackSpv   VARIANT_SUFFIX rfdetr)
+    endfunction ()
+
     # Synthetic perception loop: render an animated scene with the deferred
     # path, detect in the rendered frames with the Vulkan RF-DETR-Nano port,
     # overlay the detections live. No image files involved.
@@ -89,42 +134,7 @@ if (THREEPP_WITH_INFERENCE)
         target_include_directories(vulkan_synthetic_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
         target_link_libraries(vulkan_synthetic_inference PRIVATE Vulkan::Vulkan)
 
-        set(_rf_sh "${CMAKE_CURRENT_SOURCE_DIR}/rfdetr/shaders")
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/conv2d.comp"     kRfConv2dSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/conv1x1.comp"    kRfConv1x1Spv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/conv3x3.comp"    kRfConv3x3Spv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/im2col.comp"     kRfIm2colSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/linear.comp"     kRfLinearSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/layernorm.comp"  kRfLayerNormSpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/softmax.comp"    kRfSoftmaxSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/gelu.comp"       kRfGeluSpv       VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/layerscale.comp" kRfLayerScaleSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_scores.comp" kRfAttnScoresSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_apply.comp" kRfAttnApplySpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/add.comp"        kRfAddSpv        VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/concat.comp"     kRfConcatSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/build_embeddings.comp" kRfBuildEmbedSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_vit_scores.comp" kRfAttnVitScoresSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_vit_apply.comp"  kRfAttnVitApplySpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/unwindow.comp"      kRfUnwindowSpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/layernorm_chw.comp" kRfLnChwSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/chcopy.comp"        kRfChCopySpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/transpose_chw2tokens.comp" kRfT2tSpv       VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/qkv_splice.comp"           kRfQkvSpliceSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/relu.comp"                 kRfReluSpv      VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/offset_preprocess.comp"    kRfOffPreSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/msdeformattn.comp"         kRfMsDeformSpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/scale_add.comp"            kRfScaleAddSpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/linear_splitk.comp"        kRfLinearSplitKSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/reduce_splitk.comp"        kRfReduceSplitKSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/preprocess.comp"           kRfPreprocessSpv   VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/proposals.comp"            kRfProposalsSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/topk_rank.comp"            kRfTopkRankSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/query_refs.comp"           kRfQueryRefsSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_vit_flash.comp"       kRfAttnFlashSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/repeat_rows.comp"          kRfRepeatRowsSpv   VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/group_pack.comp"           kRfGroupPackSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/group_unpack.comp"         kRfGroupUnpackSpv  VARIANT_SUFFIX rfdetr)
+        rfdetr_shaders(vulkan_synthetic_inference)
     endif ()
 
     add_example(NAME "vulkan_rfdetr_inference"
@@ -137,50 +147,6 @@ if (THREEPP_WITH_INFERENCE)
         target_include_directories(vulkan_rfdetr_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
         target_link_libraries(vulkan_rfdetr_inference PRIVATE Vulkan::Vulkan)
 
-        # VARIANT_SUFFIX=rfdetr keeps the generated headers from colliding with
-        # the YOLO kernels that share a basename (conv2d/conv1x1/add/concat).
-        set(_rf_sh "${CMAKE_CURRENT_SOURCE_DIR}/rfdetr/shaders")
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv2d.comp"     kRfConv2dSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv1x1.comp"    kRfConv1x1Spv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv3x3.comp"    kRfConv3x3Spv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/im2col.comp"     kRfIm2colSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/linear.comp"     kRfLinearSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/layernorm.comp"  kRfLayerNormSpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/softmax.comp"    kRfSoftmaxSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/gelu.comp"       kRfGeluSpv       VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/layerscale.comp" kRfLayerScaleSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_scores.comp" kRfAttnScoresSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_apply.comp" kRfAttnApplySpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/add.comp"        kRfAddSpv        VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/concat.comp"     kRfConcatSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/build_embeddings.comp" kRfBuildEmbedSpv VARIANT_SUFFIX rfdetr)
-        # Batched separate-Q/K/V ViT attention (DINOv2 backbone).
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_vit_scores.comp" kRfAttnVitScoresSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_vit_apply.comp"  kRfAttnVitApplySpv  VARIANT_SUFFIX rfdetr)
-        # C2f projector: de-window taps, channel-wise LayerNorm (+SiLU), channel slice/concat.
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/unwindow.comp"      kRfUnwindowSpv  VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/layernorm_chw.comp" kRfLnChwSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/chcopy.comp"        kRfChCopySpv    VARIANT_SUFFIX rfdetr)
-        # Two-stage deformable decoder.
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/transpose_chw2tokens.comp" kRfT2tSpv       VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/qkv_splice.comp"           kRfQkvSpliceSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/relu.comp"                 kRfReluSpv      VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/offset_preprocess.comp"    kRfOffPreSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/msdeformattn.comp"         kRfMsDeformSpv  VARIANT_SUFFIX rfdetr)
-        # Fused DINOv2 residual (LayerScale + add).
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/scale_add.comp"            kRfScaleAddSpv  VARIANT_SUFFIX rfdetr)
-        # Split-K GEMM (partial accumulation + reduction) for low-N occupancy-bound linears.
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/linear_splitk.comp"        kRfLinearSplitKSpv VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/reduce_splitk.comp"        kRfReduceSplitKSpv VARIANT_SUFFIX rfdetr)
-        # GPU preprocess and two-stage query selection: one submit per inference.
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/preprocess.comp"           kRfPreprocessSpv   VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/proposals.comp"            kRfProposalsSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/topk_rank.comp"            kRfTopkRankSpv     VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/query_refs.comp"           kRfQueryRefsSpv    VARIANT_SUFFIX rfdetr)
-        # Fused ViT attention (online softmax), used when the device has clustered subgroup ops.
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_vit_flash.comp"       kRfAttnFlashSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/repeat_rows.comp"          kRfRepeatRowsSpv   VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/group_pack.comp"           kRfGroupPackSpv    VARIANT_SUFFIX rfdetr)
-        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/group_unpack.comp"         kRfGroupUnpackSpv  VARIANT_SUFFIX rfdetr)
+        rfdetr_shaders(vulkan_rfdetr_inference)
     endif ()
 endif ()

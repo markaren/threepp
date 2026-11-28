@@ -1,0 +1,336 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+// Tiled fp32 GEMM with a fused epilogue, for every linear layer and conv:
+//   Y[m, n] = epi( sum_k A[m, k] * B(k, n) )
+//   epi(v)  = act(v + bias[n]), then optionally res[m, n] + gamma[n] * that
+//             (BIASROW: bias[m], a conv's per-output-channel bias)
+// A is row-major [M, K] (stride lda): a linear layer's activations, or a conv's
+// weights [out_c, in_c*kh*kw]. B(k, n) comes in one of three layouts, fixed at
+// build time:
+//   B_NK   B is [N, K] row-major (stride ldb): an nn.Linear weight (the default).
+//   B_KN   B is [K, N] row-major: a 1x1 conv's CHW input (N = H*W).
+//   B_CONV B is the implicit im2col of a CHW input [inC, inH, inW] for a kh x kw
+//          conv, k = (ic, ky, kx), n = (oy, ox); nothing is materialised.
+// BM x BN outputs per workgroup and a TM x TN micro-tile per invocation (the build
+// sets them, RfDetrVk::gemm_ picks the build per GEMM; TM, TN 4 or 8: an 8 is two
+// 4-blocks half a tile apart, so the smem reads are float4s without bank
+// conflicts), BK k per tile. While a k-tile is
+// multiplied the next one is fetched into registers, then stored into the other
+// half of the double-buffered smem: one barrier per k-tile (NOPREFETCH: one
+// buffer, fetch then multiply, two barriers).
+// Split-K: workgroup z covers k in [z*kChunk, min(K, (z+1)*kChunk)); with the
+// PARTIAL flag it writes raw sums into plane z of Y ([splitK, M, N]) and
+// gemm_reduce.comp sums the planes and applies the epilogue.
+// The host guarantees float4 alignment: K, lda, aOff (and ldb, bOff for
+// B_NK / B_KN, N for B_KN) are multiples of 4.
+// Bindings: 0 A, 1 B, 2 bias, 3 Y, 4 res, 5 gamma.
+
+#ifndef BM
+#define BM 128
+#endif
+#ifndef BN
+#define BN 128
+#endif
+#ifndef TM
+#define TM 8
+#endif
+#ifndef TN
+#define TN 8
+#endif
+#ifndef BKD
+#define BKD 16
+#endif
+#if !defined(B_KN) && !defined(B_CONV)
+#define B_NK
+#endif
+
+#define NTX (BN / TN)
+#define NTY (BM / TM)
+#define NT (NTX * NTY)
+layout(local_size_x = NT, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, K, kChunk;
+    uint lda, ldb, ldc, ldr;
+    uint aOff, bOff, cOff, rOff;
+    uint biasOff, flags, _p0, _p1;
+    uint inH, inW, outW, kh;// B_CONV only
+    uint kw, cstride, pad, _p2;
+} p;
+
+const uint F_BIAS = 1u, F_RES = 2u, F_GAMMA = 4u, F_PARTIAL = 8u, F_BIASROW = 16u;// act = (flags >> 8) & 15: 1 GELU, 2 ReLU
+
+layout(std430, binding = 0) readonly buffer A4 { vec4 a4[]; };
+#ifdef B_CONV
+layout(std430, binding = 1) readonly buffer B1 { float b1[]; };
+#else
+layout(std430, binding = 1) readonly buffer B4 { vec4 b4[]; };
+#endif
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 2) readonly buffer Bias4 { vec4 bias4[]; };
+layout(std430, binding = 3) writeonly buffer Y4 { vec4 y4[]; };
+layout(std430, binding = 3) writeonly buffer Y1 { float y1[]; };
+layout(std430, binding = 4) readonly buffer R1 { float res[]; };
+layout(std430, binding = 4) readonly buffer R4 { vec4 res4[]; };
+layout(std430, binding = 5) readonly buffer G1 { float gam[]; };
+layout(std430, binding = 5) readonly buffer G4 { vec4 gam4[]; };
+
+const uint BK = BKD;
+const uint KQ = BK / 4u;    // float4s per tile row of A (and of a B_NK B)
+const uint SA4 = BM / 4 + 1;// smem row strides in float4s (BM + 4 floats)
+const uint SB4 = BN / 4 + 1;
+#ifdef NOPREFETCH
+const uint NBUF = 1u;
+#else
+const uint NBUF = 2u;
+#endif
+shared vec4 As[NBUF * BK * SA4];// As[buf][k][m]
+shared vec4 Bs[NBUF * BK * SB4];// Bs[buf][k][n]
+
+const uint A_LOADS = BM * BK / 4 / NT;// float4s per invocation per A tile
+#ifdef B_CONV
+const uint B_LOADS = BK * BN / NT;    // floats
+float rb[B_LOADS];
+uint cn;          // this invocation's tile column while loading B
+int cy0, cx0;     // its output position's top-left input sample
+bool cvalid;
+#else
+const uint B_LOADS = BN * BK / 4 / NT;// float4s
+vec4 rb[B_LOADS];
+#endif
+vec4 ra[A_LOADS];
+
+uint tid, tx, ty, bm0, bn0;
+float acc[TM][TN];
+
+vec4 erf_approx(vec4 z) {
+    vec4 s = mix(vec4(1.0), vec4(-1.0), lessThan(z, vec4(0.0)));
+    vec4 a = abs(z);
+    vec4 t = 1.0 / (1.0 + 0.3275911 * a);
+    vec4 poly = (((( 1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+                   - 0.284496736) * t + 0.254829592) * t;
+    return s * (1.0 - poly * exp(-a * a));
+}
+
+// Rows of A (and of a B_NK B) are fetched KQ invocations to a row, a float4 each.
+void loadA(uint k0, uint kEnd) {
+    [[unroll]] for (uint r = 0u; r < A_LOADS; ++r) {
+        uint lin = tid + r * NT;
+        uint row = lin / KQ, gk = k0 + (lin % KQ) * 4u;
+        uint gm = bm0 + row;
+        ra[r] = (gm < p.M && gk < kEnd) ? a4[(p.aOff + gm * p.lda + gk) >> 2u] : vec4(0.0);
+    }
+}
+
+void storeA(uint buf) {
+    [[unroll]] for (uint r = 0u; r < A_LOADS; ++r) {
+        uint lin = tid + r * NT;
+        uint row = lin / KQ;
+        uint base = (buf * BK + (lin % KQ) * 4u) * SA4 + (row >> 2u);
+        uint c = row & 3u;
+        As[base][c] = ra[r].x;
+        As[base + SA4][c] = ra[r].y;
+        As[base + 2u * SA4][c] = ra[r].z;
+        As[base + 3u * SA4][c] = ra[r].w;
+    }
+}
+
+#if defined(B_NK)
+void loadB(uint k0, uint kEnd) {
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        uint lin = tid + r * NT;
+        uint row = lin / KQ, gk = k0 + (lin % KQ) * 4u;
+        uint gn = bn0 + row;
+        rb[r] = (gn < p.N && gk < kEnd) ? b4[(p.bOff + gn * p.ldb + gk) >> 2u] : vec4(0.0);
+    }
+}
+
+void storeB(uint buf) {
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        uint lin = tid + r * NT;
+        uint row = lin / KQ;
+        uint base = (buf * BK + (lin % KQ) * 4u) * SB4 + (row >> 2u);
+        uint c = row & 3u;
+        Bs[base][c] = rb[r].x;
+        Bs[base + SB4][c] = rb[r].y;
+        Bs[base + 2u * SB4][c] = rb[r].z;
+        Bs[base + 3u * SB4][c] = rb[r].w;
+    }
+}
+#elif defined(B_KN)
+// Rows of B are k: a float4 of four consecutive n per invocation.
+void loadB(uint k0, uint kEnd) {
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        uint lin = tid + r * NT;
+        uint gk = k0 + lin / (BN / 4u), gn = bn0 + (lin % (BN / 4u)) * 4u;
+        rb[r] = (gk < kEnd && gn < p.N) ? b4[(p.bOff + gk * p.ldb + gn) >> 2u] : vec4(0.0);
+    }
+}
+
+void storeB(uint buf) {
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        uint lin = tid + r * NT;
+        Bs[(buf * BK + lin / (BN / 4u)) * SB4 + lin % (BN / 4u)] = rb[r];
+    }
+}
+#else
+// Each invocation gathers one tile column (one output position) for BK/(NT/BN)
+// values of k, zero outside the padded input.
+void loadB(uint k0, uint kEnd) {
+    const uint khw = p.kh * p.kw;
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        uint gk = k0 + tid / BN + r * (NT / BN);
+        float v = 0.0;
+        if (cvalid && gk < kEnd) {
+            uint ic = gk / khw;
+            uint rem = gk - ic * khw;
+            uint ky = rem / p.kw;
+            int iy = cy0 + int(ky), ix = cx0 + int(rem - ky * p.kw);
+            if (iy >= 0 && iy < int(p.inH) && ix >= 0 && ix < int(p.inW))
+                v = b1[p.bOff + (ic * p.inH + uint(iy)) * p.inW + uint(ix)];
+        }
+        rb[r] = v;
+    }
+}
+
+void storeB(uint buf) {
+    [[unroll]] for (uint r = 0u; r < B_LOADS; ++r) {
+        uint e = (buf * BK + tid / BN + r * (NT / BN)) * (SB4 * 4u) + cn;
+        Bs[e >> 2u][e & 3u] = rb[r];
+    }
+}
+#endif
+
+// Micro-tile row i of this invocation: rows ty*4 .. ty*4+3, and with TM = 8 the
+// same four half a tile further; columns likewise.
+uint rowOf(uint i) { return (i / 4u) * (BM / 2u) + ty * 4u + (i % 4u); }
+uint colOf(uint q) { return q * (BN / 2u) + tx * 4u; }// first column of float4 q
+
+void compute(uint buf) {
+    [[unroll]] for (uint k = 0u; k < BK; ++k) {
+        uint ar = (buf * BK + k) * SA4, br = (buf * BK + k) * SB4;
+        float a[TM], b[TN];
+        [[unroll]] for (uint q = 0u; q < TM / 4u; ++q) {
+            vec4 v = As[ar + q * (BM / 8u) + ty];
+            a[q * 4u] = v.x; a[q * 4u + 1u] = v.y; a[q * 4u + 2u] = v.z; a[q * 4u + 3u] = v.w;
+        }
+        [[unroll]] for (uint q = 0u; q < TN / 4u; ++q) {
+            vec4 v = Bs[br + q * (BN / 8u) + tx];
+            b[q * 4u] = v.x; b[q * 4u + 1u] = v.y; b[q * 4u + 2u] = v.z; b[q * 4u + 3u] = v.w;
+        }
+        [[unroll]] for (uint i = 0u; i < TM; ++i)
+            [[unroll]] for (uint j = 0u; j < TN; ++j)
+                acc[i][j] = fma(a[i], b[j], acc[i][j]);
+    }
+}
+
+// The epilogue works on float4s of four consecutive columns. Its loads (bias, gamma,
+// residual) are clamped in-bounds rather than branched around, so they can all be
+// in flight at once; only the stores are guarded.
+void epilogue() {
+    const uint act = (p.flags >> 8u) & 15u;
+    const bool partial = (p.flags & F_PARTIAL) != 0u;
+    const bool hasBias = (p.flags & F_BIAS) != 0u, biasRow = (p.flags & F_BIASROW) != 0u;
+    const bool hasRes = (p.flags & F_RES) != 0u, hasGamma = (p.flags & F_GAMMA) != 0u;
+    // float4 loads and stores need 4-aligned rows; otherwise (a 2-class head, say) per column.
+    const bool vec = partial ? (p.N & 3u) == 0u
+                             : ((p.N | p.ldc | p.cOff | p.biasOff) & 3u) == 0u &&
+                               (!hasRes || ((p.ldr | p.rOff) & 3u) == 0u);
+    [[unroll]] for (uint h = 0u; h < TN / 4u; ++h) {
+        const uint gn = bn0 + colOf(h);
+        if (gn >= p.N) continue;
+        vec4 bv = vec4(0.0), gv = vec4(1.0);
+        if (!partial) {
+            if (hasBias && !biasRow) {
+                if (vec) bv = bias4[(p.biasOff + gn) >> 2u];
+                else [[unroll]] for (uint c = 0u; c < 4u; ++c) bv[c] = bias[p.biasOff + min(gn + c, p.N - 1u)];
+            }
+            if (hasGamma) {
+                if (vec) gv = gam4[gn >> 2u];
+                else [[unroll]] for (uint c = 0u; c < 4u; ++c) gv[c] = gam[min(gn + c, p.N - 1u)];
+            }
+        }
+        [[unroll]] for (uint i = 0u; i < TM; ++i) {
+            const uint gm = bm0 + rowOf(i);
+            const uint gmc = min(gm, p.M - 1u);// loads stay in bounds; the store is skipped
+            vec4 v = vec4(acc[i][h * 4u], acc[i][h * 4u + 1u], acc[i][h * 4u + 2u], acc[i][h * 4u + 3u]);
+            uint o;
+            if (partial) {
+                o = (gl_WorkGroupID.z * p.M + gm) * p.N + gn;
+            } else {
+                if (biasRow) v += vec4(bias[p.biasOff + gmc]);
+                else if (hasBias) v += bv;
+                if (act == 1u) v = 0.5 * v * (1.0 + erf_approx(v * 0.7071067811865475));
+                else if (act == 2u) v = max(v, vec4(0.0));
+                if (hasRes) {
+                    vec4 r;
+                    if (vec) r = res4[(p.rOff + gmc * p.ldr + gn) >> 2u];
+                    else [[unroll]] for (uint c = 0u; c < 4u; ++c) r[c] = res[p.rOff + gmc * p.ldr + min(gn + c, p.N - 1u)];
+                    v = r + gv * v;
+                }
+                o = p.cOff + gm * p.ldc + gn;
+            }
+            if (gm >= p.M) continue;
+            if (vec) {
+                y4[o >> 2u] = v;
+            } else {
+                [[unroll]] for (uint c = 0u; c < 4u; ++c)
+                    if (gn + c < p.N) y1[o + c] = v[c];
+            }
+        }
+    }
+}
+
+void main() {
+    tid = gl_LocalInvocationID.x;
+    tx = tid % NTX;
+    ty = tid / NTX;
+    bm0 = gl_WorkGroupID.y * BM;
+    bn0 = gl_WorkGroupID.x * BN;
+    const uint kBeg = gl_WorkGroupID.z * p.kChunk;
+    const uint kEnd = min(p.K, kBeg + p.kChunk);
+    [[unroll]] for (uint i = 0u; i < TM; ++i)
+        [[unroll]] for (uint j = 0u; j < TN; ++j) acc[i][j] = 0.0;
+#ifdef B_CONV
+    cn = tid % BN;
+    uint gn = bn0 + cn;
+    cvalid = gn < p.N;
+    uint oy = gn / p.outW;
+    cy0 = int(oy * p.cstride) - int(p.pad);
+    cx0 = int((gn - oy * p.outW) * p.cstride) - int(p.pad);
+#endif
+
+    const uint nTiles = (kEnd - kBeg + BK - 1u) / BK;
+#ifdef NOPREFETCH
+    for (uint t = 0u; t < nTiles; ++t) {
+        loadA(kBeg + t * BK, kEnd);
+        loadB(kBeg + t * BK, kEnd);
+        storeA(0u);
+        storeB(0u);
+        barrier();
+        compute(0u);
+        barrier();
+    }
+#else
+    loadA(kBeg, kEnd);
+    loadB(kBeg, kEnd);
+    storeA(0u);
+    storeB(0u);
+    barrier();
+    for (uint t = 0u; t < nTiles; ++t) {
+        const uint cur = t & 1u;
+        const bool more = t + 1u < nTiles;
+        if (more) {
+            loadA(kBeg + (t + 1u) * BK, kEnd);
+            loadB(kBeg + (t + 1u) * BK, kEnd);
+        }
+        compute(cur);
+        if (more) {
+            storeA(cur ^ 1u);
+            storeB(cur ^ 1u);
+        }
+        barrier();
+    }
+#endif
+    epilogue();
+}

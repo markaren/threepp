@@ -2,16 +2,23 @@
 // Fused multi-head attention for the DINOv2 ViT (flash-style, one pass): for query
 // i of group b (a window, or all tokens on a global layer) and head h,
 //   out[b*T+i, h*64+e] = sum_j softmax_j(scale * q_i . k_j) * v_j[e],
-// with the softmax accumulated online, so the T x T scores never touch memory
-// (attn_vit_scores + softmax + attn_vit_apply write and re-read them).
-// Four invocations share a query; invocation `lane` owns head dims lane, lane+4,
-// ..., lane+60, so the four read four different shared-memory banks, and their
-// partial dot products are summed with a clustered subgroup add. K and V of the
-// head are staged through shared memory 64 keys at a time; the running maximum is
-// updated once per 16 keys. Head dim 64 only (the host checks).
+// with the softmax accumulated online, so the T x T scores never touch memory.
+// A workgroup takes 64 queries of one head and walks the keys 64 at a time; both
+// products are register-blocked like a GEMM: an invocation holds the scores of
+// 4 queries x 8 keys, then the outputs of the same 4 queries x 8 head dims, so
+// each float4 read from shared memory feeds 8 to 16 FMAs.
+//   rows:  query ty + 16r (r < 4), ty = the invocation's 8-lane cluster in the group
+//   keys:  tx + 8c (c < 8), tx = its lane in the cluster (consecutive rows: no bank
+//          conflicts on the padded K tile)
+//   dims:  tx*8 .. tx*8+7
+// The running maximum of a row is shared by its cluster (a clustered max per key
+// tile); the running sums stay per invocation and are added up at the end. P goes
+// through shared memory, over the K tile it was computed from. Head dim 64 only
+// (the host checks); needs clustered subgroup operations with clusters of 8.
 // Bindings: 0 qkv [B*T, 3D] laid out [Q | K | V] per token, 1 out [B*T, D].
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_clustered : require
+#extension GL_EXT_control_flow_attributes : require
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
@@ -21,84 +28,116 @@ layout(push_constant, std430) uniform PC {
     uint _p0, _p1, _p2;
 } p;
 
-layout(std430, binding = 0) readonly  buffer Qkv { float qkv[]; };
-layout(std430, binding = 1) writeonly buffer Out { float outp[]; };
+layout(std430, binding = 0) readonly buffer Qkv { vec4 qkv4[]; };
+layout(std430, binding = 1) writeonly buffer Out { vec4 out4[]; };
 
-const uint LANES = 4u;// invocations per query
-const uint DL = 16u;  // head dims per invocation
-const uint HD = 64u;  // head dim
-const uint BC = 64u;  // keys per shared tile
-const uint CH = 16u;  // keys per running-max update
+const uint BQ = 64u;  // queries per workgroup
+const uint BKT = 64u; // keys per tile
+const uint HD4 = 16u; // head dim in float4s
+const uint KS4 = 17u; // K / P tile row stride in float4s (68 floats: rows shift 4 banks)
 
-shared float sK[BC * HD];
-shared float sV[BC * HD];
+shared vec4 sKP[BKT * KS4];// K tile [key][dim], then P [query][key] over it
+shared vec4 sV[BKT * HD4]; // V tile [key][dim]
 
 void main() {
-    // Query slots from the subgroup layout, so the four lanes of a query are always
-    // one cluster of the clustered add, whatever the subgroup size.
-    const uint lane = gl_SubgroupInvocationID % LANES;
-    const uint slot = gl_SubgroupID * (gl_SubgroupSize / LANES) + gl_SubgroupInvocationID / LANES;
-    const uint qi = gl_WorkGroupID.x * (128u / LANES) + slot;
-    const uint h = gl_WorkGroupID.y, b = gl_WorkGroupID.z;
-    const uint D = p.H * HD, S = 3u * D;
     const uint tid = gl_LocalInvocationIndex;
+    // Clusters of 8 consecutive subgroup lanes, whatever the subgroup size (>= 8).
+    const uint tx = gl_SubgroupInvocationID % 8u;
+    const uint ty = gl_SubgroupID * (gl_SubgroupSize / 8u) + gl_SubgroupInvocationID / 8u;// 0..15
+    const uint h = gl_WorkGroupID.y, b = gl_WorkGroupID.z;
+    const uint q0 = gl_WorkGroupID.x * BQ;
+    const uint D4 = p.H * HD4, S4 = 3u * D4;// row strides of out and qkv in float4s
+    const uint rowBase = b * p.T;
 
-    float q[DL];
-    const uint qBase = (b * p.T + min(qi, p.T - 1u)) * S + h * HD + lane;
-    for (uint i = 0u; i < DL; ++i) q[i] = qkv[qBase + LANES * i] * p.scale;// scale = 1/8: exact
-    float o[DL];
-    for (uint i = 0u; i < DL; ++i) o[i] = 0.0;
-    float m = -3.4e38, l = 0.0;
+    float o[4][8], m[4], l[4];
+    [[unroll]] for (uint r = 0u; r < 4u; ++r) {
+        m[r] = -3.4e38;
+        l[r] = 0.0;
+        [[unroll]] for (uint e = 0u; e < 8u; ++e) o[r][e] = 0.0;
+    }
+    // This invocation's query rows (clamped: the rows past T compute and are dropped).
+    uint qrow[4];
+    [[unroll]] for (uint r = 0u; r < 4u; ++r) qrow[r] = (rowBase + min(q0 + ty + 16u * r, p.T - 1u)) * S4 + h * HD4;
 
-    for (uint j0 = 0u; j0 < p.T; j0 += BC) {
-        const uint nk = min(BC, p.T - j0);
-        for (uint e = tid; e < BC * HD; e += 128u) {
-            const uint r = e / HD, c = e % HD;
-            float kv = 0.0, vv = 0.0;
-            if (r < nk) {
-                const uint base = (b * p.T + j0 + r) * S + h * HD + c;
-                kv = qkv[base + D];
-                vv = qkv[base + 2u * D];
+    for (uint j0 = 0u; j0 < p.T; j0 += BKT) {
+        // K and V of keys j0 .. j0+63, zero past T.
+        [[unroll]] for (uint it = 0u; it < 8u; ++it) {
+            const uint lin = tid + it * 128u;
+            const uint j = lin / HD4, dq = lin % HD4;
+            vec4 kv = vec4(0.0), vv = vec4(0.0);
+            if (j0 + j < p.T) {
+                const uint src = (rowBase + j0 + j) * S4 + h * HD4 + dq;
+                kv = qkv4[src + D4];
+                vv = qkv4[src + 2u * D4];
             }
-            sK[e] = kv;
-            sV[e] = vv;
+            sKP[j * KS4 + dq] = kv;
+            sV[j * HD4 + dq] = vv;
         }
         barrier();
 
-        for (uint c0 = 0u; c0 < nk; c0 += CH) {
-            const uint nc = min(CH, nk - c0);
-            // Constant trip counts with guards: s[] stays in registers.
-            float s[CH];
-            float cmax = -3.4e38;
-            for (uint k = 0u; k < CH; ++k) {
-                float part = 0.0;
-                if (k < nc) {
-                    const uint kb = (c0 + k) * HD + lane;
-                    for (uint i = 0u; i < DL; ++i) part += q[i] * sK[kb + LANES * i];
-                }
-                s[k] = subgroupClusteredAdd(part, LANES);// all four lanes get the full dot
-                if (k < nc) cmax = max(cmax, s[k]);
+        // S = (scale q) . k for 4 queries x 8 keys.
+        float s[4][8];
+        [[unroll]] for (uint r = 0u; r < 4u; ++r)
+            [[unroll]] for (uint c = 0u; c < 8u; ++c) s[r][c] = 0.0;
+        for (uint dq = 0u; dq < HD4; ++dq) {
+            vec4 qv[4];
+            [[unroll]] for (uint r = 0u; r < 4u; ++r) qv[r] = qkv4[qrow[r] + dq];
+            [[unroll]] for (uint c = 0u; c < 8u; ++c) {
+                const vec4 kv = sKP[(tx + 8u * c) * KS4 + dq];
+                [[unroll]] for (uint r = 0u; r < 4u; ++r) s[r][c] += dot(qv[r], kv);
             }
-            const float mNew = max(m, cmax);
-            const float corr = exp(m - mNew);
-            l *= corr;
-            for (uint i = 0u; i < DL; ++i) o[i] *= corr;
-            for (uint k = 0u; k < CH; ++k) {
-                if (k < nc) {
-                    const float pk = exp(s[k] - mNew);
-                    l += pk;
-                    const uint vb = (c0 + k) * HD + lane;
-                    for (uint i = 0u; i < DL; ++i) o[i] += pk * sV[vb + LANES * i];
-                }
-            }
-            m = mNew;
         }
+
+        // Online softmax: the tile's row maxima over the cluster, rescale, exponentiate.
+        float pr[4][8];
+        [[unroll]] for (uint r = 0u; r < 4u; ++r) {
+            float tmax = -3.4e38;
+            [[unroll]] for (uint c = 0u; c < 8u; ++c) {
+                s[r][c] = j0 + tx + 8u * c < p.T ? s[r][c] * p.scale : -3.4e38;
+                tmax = max(tmax, s[r][c]);
+            }
+            const float mNew = max(m[r], subgroupClusteredMax(tmax, 8u));
+            const float corr = exp(m[r] - mNew);
+            m[r] = mNew;
+            l[r] *= corr;
+            [[unroll]] for (uint e = 0u; e < 8u; ++e) o[r][e] *= corr;
+            [[unroll]] for (uint c = 0u; c < 8u; ++c) {
+                pr[r][c] = exp(s[r][c] - mNew);
+                l[r] += pr[r][c];
+            }
+        }
+        barrier();// every invocation is done with the K tile
+        [[unroll]] for (uint r = 0u; r < 4u; ++r)
+            [[unroll]] for (uint c = 0u; c < 8u; ++c) {
+                const uint e = (ty + 16u * r) * (KS4 * 4u) + tx + 8u * c;
+                sKP[e >> 2u][e & 3u] = pr[r][c];
+            }
         barrier();
+
+        // O += P V for 4 queries x 8 dims.
+        for (uint jq = 0u; jq < BKT / 4u; ++jq) {
+            vec4 pv[4];
+            [[unroll]] for (uint r = 0u; r < 4u; ++r) pv[r] = sKP[(ty + 16u * r) * KS4 + jq];
+            [[unroll]] for (uint jj = 0u; jj < 4u; ++jj) {
+                const uint vr = (jq * 4u + jj) * HD4 + tx * 2u;
+                const vec4 v0 = sV[vr], v1 = sV[vr + 1u];
+                [[unroll]] for (uint r = 0u; r < 4u; ++r) {
+                    const float pj = pv[r][jj];
+                    o[r][0] += pj * v0.x; o[r][1] += pj * v0.y; o[r][2] += pj * v0.z; o[r][3] += pj * v0.w;
+                    o[r][4] += pj * v1.x; o[r][5] += pj * v1.y; o[r][6] += pj * v1.z; o[r][7] += pj * v1.w;
+                }
+            }
+        }
+        barrier();// before the next tile overwrites K / P and V
     }
 
-    if (qi < p.T) {
-        const float inv = 1.0 / l;
-        const uint oBase = (b * p.T + qi) * D + h * HD + lane;
-        for (uint i = 0u; i < DL; ++i) outp[oBase + LANES * i] = o[i] * inv;
+    [[unroll]] for (uint r = 0u; r < 4u; ++r) {
+        const float inv = 1.0 / subgroupClusteredAdd(l[r], 8u);
+        const uint qi = q0 + ty + 16u * r;
+        if (qi < p.T) {
+            const uint dst = (rowBase + qi) * D4 + h * HD4 + tx * 2u;
+            out4[dst] = vec4(o[r][0], o[r][1], o[r][2], o[r][3]) * inv;
+            out4[dst + 1u] = vec4(o[r][4], o[r][5], o[r][6], o[r][7]) * inv;
+        }
     }
 }

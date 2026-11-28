@@ -1,6 +1,7 @@
 #include "VkInfer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -33,7 +34,37 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
         vkGetPhysicalDeviceProperties2(phys_, &p2);
         subgroupClustered_ = (sg.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
                              (sg.supportedOperations & VK_SUBGROUP_FEATURE_CLUSTERED_BIT) != 0 &&
-                             sg.subgroupSize >= 4;
+                             sg.subgroupSize >= 8;// the fused attention reduces over clusters of 8
+    }
+    {
+        // The SM / CU count, from the vendor extension that reports it (queried, not enabled).
+        uint32_t n = 0;
+        vkEnumerateDeviceExtensionProperties(phys_, nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> exts(n);
+        vkEnumerateDeviceExtensionProperties(phys_, nullptr, &n, exts.data());
+        auto has = [&](const char* name) {
+            return std::any_of(exts.begin(), exts.end(),
+                               [&](const VkExtensionProperties& e) { return std::strcmp(e.extensionName, name) == 0; });
+        };
+        uint32_t sms = 0;
+        if (has(VK_NV_SHADER_SM_BUILTINS_EXTENSION_NAME)) {
+            VkPhysicalDeviceShaderSMBuiltinsPropertiesNV sm{};
+            sm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SM_BUILTINS_PROPERTIES_NV;
+            VkPhysicalDeviceProperties2 p2{};
+            p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            p2.pNext = &sm;
+            vkGetPhysicalDeviceProperties2(phys_, &p2);
+            sms = sm.shaderSMCount;
+        } else if (has(VK_AMD_SHADER_CORE_PROPERTIES_EXTENSION_NAME)) {
+            VkPhysicalDeviceShaderCorePropertiesAMD cp{};
+            cp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_PROPERTIES_AMD;
+            VkPhysicalDeviceProperties2 p2{};
+            p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            p2.pNext = &cp;
+            vkGetPhysicalDeviceProperties2(phys_, &p2);
+            sms = cp.shaderEngineCount * cp.shaderArraysPerEngineCount * cp.computeUnitsPerShaderArray;
+        }
+        if (sms > 0) smCount_ = sms;
     }
 
     VkCommandPoolCreateInfo cpci{};
@@ -165,9 +196,11 @@ VkBuffer VkInfer::acquireArena(VkDeviceSize bytes) {
     if (arenaCursor_ >= arenaSlots_.size()) {
         // First time this slot is needed: allocate it (once, ever).
         arenaSlots_.push_back(allocBuffer(bytes, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+        ++layoutGen_;
     } else if (arenaSlots_[arenaCursor_].capacity < bytes) {
         // Slot exists but is too small (only happens if a shape grows): regrow.
         arenaSlots_[arenaCursor_] = allocBuffer(bytes, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        ++layoutGen_;
     }
     return arenaSlots_[arenaCursor_++].buffer;
 }
@@ -277,7 +310,7 @@ void VkInfer::ensureReadbackStaging(VkDeviceSize bytes) {
     }
 }
 
-void VkInfer::readback(VkBuffer src, void* dst, VkDeviceSize bytes) {
+void VkInfer::readback(VkBuffer src, void* dst, VkDeviceSize bytes, VkDeviceSize srcOffset) {
     ensureReadbackStaging(bytes);
     oneShot([&](VkCommandBuffer cb) {
         // Make the producing compute writes available to the copy.
@@ -288,6 +321,7 @@ void VkInfer::readback(VkBuffer src, void* dst, VkDeviceSize bytes) {
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 1, &mb, 0, nullptr, 0, nullptr);
         VkBufferCopy region{};
+        region.srcOffset = srcOffset;
         region.size = bytes;
         vkCmdCopyBuffer(cb, src, readbackStaging_.buffer, 1, &region);
     });
@@ -329,12 +363,14 @@ void VkInfer::reserveFrameIO(VkDeviceSize uploadBytes, VkDeviceSize readbackByte
     uploadBytes += 256;
     readbackBytes += 256;
     if (frameUpload_.capacity < uploadBytes) {
+        ++layoutGen_;
         frameUpload_ = allocBuffer(uploadBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkCheck(vkMapMemory(device_, frameUpload_.memory, 0, VK_WHOLE_SIZE, 0, &frameUploadMapped_),
                 "map frame upload staging");
     }
     if (frameReadback_.capacity < readbackBytes) {
+        ++layoutGen_;
         // HOST_CACHED for the same reason as the one-shot readback staging.
         try {
             frameReadback_ = allocBuffer(readbackBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -349,7 +385,7 @@ void VkInfer::reserveFrameIO(VkDeviceSize uploadBytes, VkDeviceSize readbackByte
     }
 }
 
-void VkInfer::recordUpload(VkBuffer dst, const void* data, VkDeviceSize bytes) {
+VkDeviceSize VkInfer::recordUpload(VkBuffer dst, const void* data, VkDeviceSize bytes) {
     if (!recording_) throw std::runtime_error("VkInfer::recordUpload outside beginFrame()/endFrame()");
     const VkDeviceSize off = (frameUploadCursor_ + 15) & ~VkDeviceSize(15);
     if (off + bytes > frameUpload_.capacity)
@@ -370,6 +406,11 @@ void VkInfer::recordUpload(VkBuffer dst, const void* data, VkDeviceSize bytes) {
     region.size = bytes;
     vkCmdCopyBuffer(frameCb_, frameUpload_.buffer, dst, 1, &region);
     // The next dispatch's leading barrier makes the copy visible to its reads.
+    return off;
+}
+
+void* VkInfer::frameUploadData(VkDeviceSize offset) {
+    return static_cast<char*>(frameUploadMapped_) + offset;
 }
 
 VkDeviceSize VkInfer::recordReadback(VkBuffer src, VkDeviceSize bytes) {
@@ -486,11 +527,15 @@ void VkInfer::destroyPipe(VkPipe& p) {
 
 void VkInfer::resetDescriptorCache() {
     // Free all cached sets — their bound buffers are about to become stale.
+    ++layoutGen_;
     dsCache_.clear();
     vkResetDescriptorPool(device_, descPool_, 0);
 }
 
-void VkInfer::beginFrame() {
+void VkInfer::beginFrame(uint64_t replayKey) {
+    if (tsEnabled_) hostBegin_ = std::chrono::steady_clock::now();
+    replayKey_ = 0;// the frame command buffer is re-recorded
+    recordKey_ = replayKey;
     arenaCursor_ = 0;// rewind the activation pool for this inference
     frameUploadCursor_ = 0;
     frameReadbackCursor_ = 0;
@@ -508,7 +553,7 @@ void VkInfer::beginFrame() {
     vkCheck(vkResetCommandBuffer(frameCb_, 0), "reset frame cmd buffer");
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    bi.flags = replayKey ? 0u : VkCommandBufferUsageFlags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     vkCheck(vkBeginCommandBuffer(frameCb_, &bi), "begin frame cmd buffer");
     recording_ = true;
     if (tsEnabled_ && tsPool_) {
@@ -598,14 +643,37 @@ void VkInfer::endFrame() {
                              0, 1, &mb, 0, nullptr, 0, nullptr);
     }
     vkCheck(vkEndCommandBuffer(frameCb_), "end frame cmd buffer");
+    recording_ = false;
+    if (recordKey_) {
+        replayKey_ = recordKey_;
+        replayGen_ = layoutGen_;
+        recordKey_ = 0;
+    }
+    submitAndWait_();
+}
+
+void VkInfer::replayFrame() {
+    if (recording_ || !replayable(replayKey_)) throw std::runtime_error("VkInfer::replayFrame: no replayable frame");
+    if (tsEnabled_) hostBegin_ = std::chrono::steady_clock::now();
+    submitAndWait_();
+}
+
+void VkInfer::submitAndWait_() {
+    const bool prof = tsEnabled_ && tsPool_ && tsCount_ > 0;
     VkSubmitInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &frameCb_;
+    const auto hostSubmit = std::chrono::steady_clock::now();
     vkCheck(vkQueueSubmit(queue_, 1, &si, frameFence_), "submit frame");
     vkCheck(vkWaitForFences(device_, 1, &frameFence_, VK_TRUE, UINT64_MAX), "wait frame");
     vkCheck(vkResetFences(device_, 1, &frameFence_), "reset frame fence");
-    recording_ = false;
+    if (tsEnabled_) {
+        const auto hostDone = std::chrono::steady_clock::now();
+        using msd = std::chrono::duration<double, std::milli>;
+        std::cerr << "    [host] begin to submit " << msd(hostSubmit - hostBegin_).count() << " ms, submit to done "
+                  << msd(hostDone - hostSubmit).count() << " ms\n";
+    }
 
     if (prof) {
         std::vector<uint64_t> ts(tsCount_);
